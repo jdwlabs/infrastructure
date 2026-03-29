@@ -1,5 +1,8 @@
 # Infrastructure
 
+[![Bootstrap](https://github.com/jdwlabs/infrastructure/actions/workflows/bootstrap.yml/badge.svg?branch=main)](https://github.com/jdwlabs/infrastructure/actions/workflows/bootstrap.yml)
+[![Terraform](https://github.com/jdwlabs/infrastructure/actions/workflows/terraform.yml/badge.svg?branch=main)](https://github.com/jdwlabs/infrastructure/actions/workflows/terraform.yml)
+
 Talos Kubernetes cluster provisioning on Proxmox - Terraform for VMs, Go tool for bootstrap and lifecycle management.
 
 ## Structure
