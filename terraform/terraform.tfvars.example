@@ -1,0 +1,48 @@
+# Proxmox Connection
+proxmox_endpoint         = "https://192.168.1.100:8006/api2/json"
+proxmox_api_token_id     = "terraform@pve!token-name"
+proxmox_api_token_secret = "your-token-secret"
+
+# Infrastructure
+storage_pool = "local-lvm"
+talos_iso    = "local:iso/nocloud-amd64.iso"
+
+# Cluster Configuration (used by Go bootstrap tool)
+cluster_name           = "cluster"
+control_plane_endpoint = "cluster.example.com"
+haproxy_ip             = "192.168.1.10"
+kubernetes_version     = "v1.35.1"
+talos_version          = "v1.12.13"
+installer_image        = "ghcr.io/siderolabs/installer:v1.12.13"
+
+haproxy_login_user     = "root"
+haproxy_stats_user     = "admin"
+haproxy_stats_password = "your-password"
+
+proxmox_node_ips = {
+  "pve1" = "192.168.1.100"
+}
+
+# Control Plane Nodes
+talos_control_configuration = [
+  {
+    node_name = "pve1"
+    vm_name   = "talos-cp-1"
+    vmid      = 201
+    cpu_cores = 4
+    memory    = 4096
+    disk_size = 50
+  },
+]
+
+# Worker Nodes
+talos_worker_configuration = [
+  {
+    node_name = "pve1"
+    vm_name   = "talos-worker-1"
+    vmid      = 301
+    cpu_cores = 4
+    memory    = 8192
+    disk_size = 100
+  },
+]
