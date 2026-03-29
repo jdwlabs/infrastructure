@@ -1,0 +1,33 @@
+machine:
+  type: worker
+  install:
+    disk: /dev/{{ .DefaultDisk }}
+    extraKernelArgs:
+      - console=tty0
+      - console=ttyS0
+  network:
+    interfaces:
+      - interface: {{ .DefaultNetworkInterface }}
+        dhcp: true
+    extraHostEntries:
+      - ip: {{ .HAProxyIP }}
+        aliases:
+          - {{ .ControlPlaneEndpoint }}
+  sysctls:
+    vm.nr_hugepages: "1024"
+  kubelet:
+    extraArgs:
+      rotate-server-certificates: "true"
+    extraMounts:
+      - destination: /var/local
+        type: bind
+        source: /var/local
+        options:
+          - bind
+          - rshared
+          - rw
+  kernel:
+    modules:
+      - name: nvme_tcp
+      - name: vfio_pci
+      - name: zfs
