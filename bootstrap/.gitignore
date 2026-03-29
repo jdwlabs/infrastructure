@@ -1,0 +1,32 @@
+# Binaries
+build/
+talops
+talops.exe
+talos-bootrap
+talos-bootstrap.exe
+*.exe
+
+# Go
+*.log
+*.test
+*.out
+vendor/
+
+# Cluster state (sensitive)
+clusters/
+secrets/
+*.yaml
+!*.example
+# Source YAML files embedded in the binary are not generated configs
+!internal/talos/patches/*.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,43 @@
+machine:
+  type: controlplane
+  install:
+    disk: /dev/{{ .DefaultDisk }}
+    extraKernelArgs:
+      - console=tty0
+      - console=ttyS0
+  network:
+    interfaces:
+      - interface: {{ .DefaultNetworkInterface }}
+        dhcp: true
+    extraHostEntries:
+      - ip: {{ .HAProxyIP }}
+        aliases:
+          - {{ .ControlPlaneEndpoint }}
+  sysctls:
+    vm.nr_hugepages: "1024"
+  kubelet:
+    extraArgs:
+      rotate-server-certificates: "true"
+  kernel:
+    modules:
+      - name: nvme_tcp
+      - name: vfio_pci
+      - name: zfs
+cluster:
+  extraManifests:
+    - https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml
+    - https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+  allowSchedulingOnControlPlanes: false
+  apiServer:
+    certSANs:
+      - {{ .ControlPlaneEndpoint }}
+      - {{ .HAProxyIP }}
+      - 127.0.0.1
+    admissionControl:
+      - name: PodSecurity
+        configuration:
+          apiVersion: pod-security.admission.config.k8s.io/v1
+          kind: PodSecurityConfiguration
+          exemptions:
+            namespaces:
+              - longhorn-system

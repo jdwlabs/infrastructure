@@ -1,0 +1,28 @@
+name: Bootstrap
+
+on:
+  push:
+    branches: [main]
+    paths: ['bootstrap/**']
+  pull_request:
+    branches: [main]
+    paths: ['bootstrap/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bootstrap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bootstrap/go.mod
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: bootstrap
+      - run: go vet ./...
+      - run: go test -race -timeout 120s ./...
+      - run: go build -o /dev/null .
