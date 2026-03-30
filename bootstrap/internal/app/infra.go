@@ -111,7 +111,7 @@ func (app *App) RunInfraDeploy(ctx context.Context, tfDir string, skipPlan bool)
 	// Plan
 	app.Logger.Info("creating plan")
 	planFile := filepath.Join(tfDir, fmt.Sprintf("tfplan-%d", time.Now().Unix()))
-	defer os.Remove(planFile)
+	defer func() { _ = os.Remove(planFile) }()
 
 	varFileArg := fmt.Sprintf("-var-file=%s", tfvarsPath)
 	hasChanges, err := runner.Plan(ctx, planFile, varFileArg)
@@ -143,7 +143,7 @@ func (app *App) RunInfraDeploy(ctx context.Context, tfDir string, skipPlan bool)
 	// Confirm
 	if !app.Cfg.AutoApprove {
 		if !app.PromptConfirm("Proceed with deployment? [y/N]: ") {
-			os.Remove(planFile)
+			_ = os.Remove(planFile)
 			return nil
 		}
 	} else {
@@ -224,7 +224,7 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 	// Show resources
 	app.Logger.Info("resources to destroy", zap.Int("count", len(resources)))
 	for _, r := range resources {
-		fmt.Fprintf(app.Session.Console, "  - %s\n", r)
+		_, _ = fmt.Fprintf(app.Session.Console, "  - %s\n", r)
 	}
 
 	// Check for active cluster (unless force)
@@ -235,11 +235,11 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 		if fileExists(talosConfigPath) && fileExists(kubeconfigPath) {
 			app.Logger.Warn("active Kubernetes cluster detected",
 				zap.String("config_dir", talosConfigDir))
-			fmt.Fprintln(app.Session.Console, "\nPre-destruction checklist:")
-			fmt.Fprintln(app.Session.Console, "  1. kubectl drain <node> --ignore-daemonsets --delete-emptydir-data")
-			fmt.Fprintln(app.Session.Console, "  2. kubectl delete node <node>")
-			fmt.Fprintln(app.Session.Console, "  3. talosctl etcd snapshot backup.yaml")
-			fmt.Fprintln(app.Session.Console)
+			_, _ = fmt.Fprintln(app.Session.Console, "\nPre-destruction checklist:")
+			_, _ = fmt.Fprintln(app.Session.Console, "  1. kubectl drain <node> --ignore-daemonsets --delete-emptydir-data")
+			_, _ = fmt.Fprintln(app.Session.Console, "  2. kubectl delete node <node>")
+			_, _ = fmt.Fprintln(app.Session.Console, "  3. talosctl etcd snapshot backup.yaml")
+			_, _ = fmt.Fprintln(app.Session.Console)
 		}
 	}
 
@@ -251,7 +251,7 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 	// Create destroy plan
 	app.Logger.Info("creating destruction plan")
 	planFile := filepath.Join(tfDir, "tfdestroy-plan")
-	defer os.Remove(planFile)
+	defer func() { _ = os.Remove(planFile) }()
 
 	var tfOpts []string
 	if force {
@@ -275,11 +275,11 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 
 	// Confirmation
 	if !app.Cfg.AutoApprove && !force {
-		fmt.Fprintln(app.Session.Console, "\nFINAL WARNING - THIS CANNOT BE UNDONE")
-		fmt.Fprint(app.Session.Console, "Type \"DESTROY\" (all caps) to confirm: ")
+		_, _ = fmt.Fprintln(app.Session.Console, "\nFINAL WARNING - THIS CANNOT BE UNDONE")
+		_, _ = fmt.Fprint(app.Session.Console, "Type \"DESTROY\" (all caps) to confirm: ")
 		var confirmation string
-		fmt.Scanln(&confirmation)
-		fmt.Fprintln(app.Session.ConsoleFile, confirmation)
+		_, _ = fmt.Scanln(&confirmation)
+		_, _ = fmt.Fprintln(app.Session.ConsoleFile, confirmation)
 		if confirmation != "DESTROY" {
 			app.Logger.Info("cancelled by user")
 			return nil
@@ -320,9 +320,9 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 
 	// Remove state if empty
 	if resources, err := runner.StateList(ctx); err == nil && len(resources) == 0 {
-		os.Remove(tfstatePath)
+		_ = os.Remove(tfstatePath)
 		stateDir := filepath.Join(tfDir, ".tf-deploy-state")
-		os.Remove(filepath.Join(stateDir, "deploy-state.json"))
+		_ = os.Remove(filepath.Join(stateDir, "deploy-state.json"))
 		app.Logger.Info("all resources destroyed")
 	} else if err == nil {
 		app.Logger.Warn("some resources may remain", zap.Int("count", len(resources)))
@@ -372,7 +372,7 @@ func (app *App) RunInfraPlan(ctx context.Context, tfDir string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(planFile)
+	defer func() { _ = os.Remove(planFile) }()
 
 	if !hasChanges {
 		app.Logger.Info("no changes needed - infrastructure is up to date")
@@ -481,7 +481,7 @@ func (app *App) RunInfraCleanup(tfDir string, all bool) error {
 	return nil
 }
 
-func (app *App) shutdownVMs(ctx context.Context, tfDir string, runner *terraform.Runner, resources []string) {
+func (app *App) shutdownVMs(ctx context.Context, _ string, runner *terraform.Runner, resources []string) {
 	cfg := app.Cfg
 	stateMgr := state.NewManager(cfg, app.Logger)
 	if err := stateMgr.ResolveTFVarsPath(); err != nil {
@@ -751,7 +751,7 @@ func (app *App) checkProxmoxISO(ctx context.Context, tfDir string) {
 		app.Logger.Debug("ISO check failed (Proxmox unreachable)", zap.Error(err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

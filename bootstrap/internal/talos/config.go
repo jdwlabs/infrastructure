@@ -89,7 +89,7 @@ func (nc *NodeConfig) GenerateBaseConfigs() error {
 	if err != nil {
 		return fmt.Errorf("cannot create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	output, err := nc.execCommandAudited("talosctl", "gen", "config",
 		"--with-secrets", secretsFile,
@@ -249,7 +249,7 @@ func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, 
 	if err := os.WriteFile(patchFile, buf.Bytes(), 0600); err != nil {
 		return "", fmt.Errorf("write patch file: %w", err)
 	}
-	defer os.Remove(patchFile)
+	defer func() { _ = os.Remove(patchFile) }()
 
 	// Ensure output directory exists (restricted permissions - contains TLS material)
 	if err := os.MkdirAll(outputDir, 0700); err != nil {

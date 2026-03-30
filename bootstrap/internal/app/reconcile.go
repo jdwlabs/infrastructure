@@ -178,7 +178,7 @@ func (app *App) RunReconcile(ctx context.Context) error {
 				app.Logger.Warn("Talos API not reachable on VM (may not be booted yet)",
 					zap.Int("vmid", int(vmid)), zap.String("ip", node.IP.String()), zap.Error(err))
 			} else {
-				conn.Close()
+				_ = conn.Close()
 				app.Logger.Debug("Talos API reachable", zap.Int("vmid", int(vmid)), zap.String("ip", node.IP.String()))
 			}
 		}

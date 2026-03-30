@@ -319,10 +319,10 @@ func (app *App) RunPruneNodes(ctx context.Context) error {
 
 func (app *App) RunDown(ctx context.Context, skipDrain, force bool) error {
 	if !app.Cfg.AutoApprove {
-		fmt.Fprint(app.Session.Console, "This will DESTROY the cluster. Type \"yes\": ")
+		_, _ = fmt.Fprint(app.Session.Console, "This will DESTROY the cluster. Type \"yes\": ")
 		var resp string
-		fmt.Scanln(&resp)
-		fmt.Fprintln(app.Session.ConsoleFile, resp)
+		_, _ = fmt.Scanln(&resp)
+		_, _ = fmt.Fprintln(app.Session.ConsoleFile, resp)
 		if resp != "yes" {
 			app.Logger.Info("cancelled by user")
 			return nil
