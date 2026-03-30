@@ -286,9 +286,10 @@ func TestClient_DrainNode(t *testing.T) {
 				callCount++
 				assert.Equal(t, "kubectl", name)
 
-				if callCount == 1 {
+				switch callCount {
+				case 1:
 					assert.Contains(t, args, "cordon")
-				} else if callCount == 2 {
+				case 2:
 					assert.Contains(t, args, "drain")
 					assert.Contains(t, args, "--ignore-daemonsets")
 					assert.Contains(t, args, "--delete-emptydir-data")
@@ -621,12 +622,4 @@ func BenchmarkGetNodeNameByIP_Parsing(b *testing.B) {
 			}
 		}
 	}
-}
-
-func captureOutput(cmd *exec.Cmd) (string, error) {
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
 }

@@ -69,14 +69,14 @@ func NewRunSession(cfg *types.Config) (*RunSession, error) {
 
 	structuredFile, err := os.Create(filepath.Join(runDir, "structured.log"))
 	if err != nil {
-		consoleFile.Close()
+		_ = consoleFile.Close()
 		return nil, fmt.Errorf("create structured.log: %w", err)
 	}
 
 	auditFile, err := os.Create(filepath.Join(runDir, "audit.log"))
 	if err != nil {
-		consoleFile.Close()
-		structuredFile.Close()
+		_ = consoleFile.Close()
+		_ = structuredFile.Close()
 		return nil, fmt.Errorf("create audit.log: %w", err)
 	}
 
@@ -335,7 +335,7 @@ func parseZapLevel(s string) zapcore.Level {
 func (s *RunSession) registerRun() {
 	runsLogPath := filepath.Join(s.runsLogDir, "runs.log")
 	// Ensure parent dir exists
-	os.MkdirAll(filepath.Dir(runsLogPath), 0755)
+	_ = os.MkdirAll(filepath.Dir(runsLogPath), 0755)
 
 	entry := fmt.Sprintf("%s|%s|%s|pending\n",
 		s.StartTime.Format("2006-01-02 15:04:05"),
@@ -347,15 +347,15 @@ func (s *RunSession) registerRun() {
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	f.WriteString(entry)
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(entry)
 }
 
 // updateLatest writes the current run directory to latest.txt
 func (s *RunSession) updateLatest() {
 	latestPath := filepath.Join(s.runsLogDir, "latest.txt")
-	os.MkdirAll(filepath.Dir(latestPath), 0755)
-	os.WriteFile(latestPath, []byte(s.RunDir+"\n"), 0644)
+	_ = os.MkdirAll(filepath.Dir(latestPath), 0755)
+	_ = os.WriteFile(latestPath, []byte(s.RunDir+"\n"), 0644)
 }
 
 // writeHeader writes a session header to all log outputs
@@ -392,17 +392,17 @@ func (s *RunSession) Close(exitErr error) {
 		UpdatedConfigs:  s.UpdatedConfigs,
 		BootstrapNeeded: s.BootstrapNeeded,
 	}
-	WriteSummary(filepath.Join(s.RunDir, "SUMMARY.txt"), &summary)
+	_ = WriteSummary(filepath.Join(s.RunDir, "SUMMARY.txt"), &summary)
 
 	// Update runs.log: change last "pending" entry for this run to final status
 	s.updateRunsLogStatus(status)
 
 	// Flush zap
-	s.Logger.Sync()
+	_ = s.Logger.Sync()
 
 	// Close file handles
 	for _, c := range s.closers {
-		c.Close()
+		_ = c.Close()
 	}
 }
 
@@ -422,5 +422,5 @@ func (s *RunSession) updateRunsLogStatus(status string) {
 		}
 	}
 
-	os.WriteFile(runsLogPath, []byte(strings.Join(lines, "\n")), 0644)
+	_ = os.WriteFile(runsLogPath, []byte(strings.Join(lines, "\n")), 0644)
 }

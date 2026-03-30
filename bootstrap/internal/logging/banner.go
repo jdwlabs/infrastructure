@@ -79,7 +79,7 @@ func PrintBanner(w io.Writer, version string, noColor bool) {
 	if noColor {
 		cc, cb, cd, cr = "", "", "", ""
 	}
-	fmt.Fprintf(w, "%s%s%s\n%s%s ━━━ Kubernetes Bootstrap Tool %s ━━━%s\n",
+	_, _ = fmt.Fprintf(w, "%s%s%s\n%s%s ━━━ Kubernetes Bootstrap Tool %s ━━━%s\n",
 		cc, cb, talosASCIIArt, cr, cd, version, cr)
 }
 
@@ -112,7 +112,7 @@ func (b *Box) writeLine(content string) {
 
 	if visLen <= maxInner {
 		padding := maxInner - visLen
-		fmt.Fprintf(b.w, "%s%s%s%s%s%s%s%s\n",
+		_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s%s%s%s\n",
 			b.c(cDim), hV, b.c(cReset),
 			content,
 			strings.Repeat(" ", padding),
@@ -126,7 +126,7 @@ func (b *Box) writeLine(content string) {
 	// First line: render with original ANSI content, trimmed to wrapAt visible chars
 	first := truncateVisible(content, wrapAt)
 	padding := maxInner - wrapAt
-	fmt.Fprintf(b.w, "%s%s%s%s%s%s%s%s\n",
+	_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s%s%s%s\n",
 		b.c(cDim), hV, b.c(cReset),
 		first,
 		strings.Repeat(" ", padding),
@@ -149,7 +149,7 @@ func (b *Box) writeLine(content string) {
 		chunk := string(runes[pos:end])
 		line := strings.Repeat(" ", wrapIndent) + b.c(activeColor) + chunk + b.c(cReset)
 		padding := maxInner - utf8.RuneCountInString(strings.Repeat(" ", wrapIndent)+chunk)
-		fmt.Fprintf(b.w, "%s%s%s%s%s%s%s%s\n",
+		_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s%s%s%s\n",
 			b.c(cDim), hV, b.c(cReset),
 			line,
 			strings.Repeat(" ", padding),
@@ -228,27 +228,27 @@ func ansiStateAt(s string, n int) string {
 // Header writes the heavy top border and title.
 func (b *Box) Header(title string) {
 	top := strings.Repeat(hH, boxWidth-2)
-	fmt.Fprintf(b.w, "%s%s%s%s%s\n",
+	_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s\n",
 		b.c(cDim), hTL, top, hTR, b.c(cReset))
 
 	b.writeLine(fmt.Sprintf(" %s%s%s%s", b.c(cCyan), b.c(cBold), title, b.c(cReset)))
 
 	sep := strings.Repeat(hH, boxWidth-2)
-	fmt.Fprintf(b.w, "%s%s%s%s%s\n",
+	_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s\n",
 		b.c(cDim), hL, sep, hR, b.c(cReset))
 }
 
 // Footer writes the heavy bottom border.
 func (b *Box) Footer() {
 	bottom := strings.Repeat(hH, boxWidth-2)
-	fmt.Fprintf(b.w, "%s%s%s%s%s\n",
+	_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s\n",
 		b.c(cDim), hBL, bottom, hBR, b.c(cReset))
 }
 
 // Divider writes a light horizontal separator with proper heavy-to-light junctions.
 func (b *Box) Divider() {
 	inner := strings.Repeat(sH, boxWidth-2)
-	fmt.Fprintf(b.w, "%s%s%s%s%s\n",
+	_, _ = fmt.Fprintf(b.w, "%s%s%s%s%s\n",
 		b.c(cDim), mL, inner, mR, b.c(cReset))
 }
 

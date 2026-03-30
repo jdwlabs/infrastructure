@@ -86,7 +86,7 @@ func (km *KubeconfigManager) FetchAndMerge(ctx context.Context, endpoint net.IP,
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	tmpPath := filepath.Join(tmpDir, "kubeconfig")
 	if err := km.client.Kubeconfig(ctx, endpoint, tmpPath); err != nil {
@@ -318,7 +318,7 @@ func (km *KubeconfigManager) mergeKubeconfig(existingPath, newPath string) error
 	if err := os.WriteFile(cleanedExistingPath, cleanedData, 0600); err != nil {
 		return fmt.Errorf("write cleaned kubeconfig: %w", err)
 	}
-	defer os.Remove(cleanedExistingPath)
+	defer func() { _ = os.Remove(cleanedExistingPath) }()
 
 	// Use KUBECONFIG env var to merge using kubectl (new config first for precedence)
 	mergedPath := existingPath + ".merged"
@@ -375,7 +375,7 @@ func (km *KubeconfigManager) WaitForKubernetesAPI(ctx context.Context, ip net.IP
 	for attempt := 1; ; attempt++ {
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			km.logger.Info("Kubernetes API reachable", zap.String("addr", addr), zap.Int("attempt", attempt))
 			return nil
 		}
@@ -404,6 +404,6 @@ func (km *KubeconfigManager) verifyKubernetesAPI(ctx context.Context, ip net.IP)
 	if err != nil {
 		return fmt.Errorf("tcp dial %s: %w", addr, err)
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
