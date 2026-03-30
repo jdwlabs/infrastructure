@@ -230,7 +230,7 @@ func TestTickVerifying_PortOpen(t *testing.T) {
 	// Start a test server to have an open port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	addr := listener.Addr().(*net.TCPAddr)
 
@@ -280,7 +280,7 @@ func TestTickRebooting_OriginalIPReturns(t *testing.T) {
 	// Start a test server to simulate original IP coming back
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	addr := listener.Addr().(*net.TCPAddr)
 	initialIP := net.ParseIP("127.0.0.1")
@@ -349,7 +349,7 @@ func TestTickMonitoring_PortStillOpen(t *testing.T) {
 	// Start a test server to simulate node still being up
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	addr := listener.Addr().(*net.TCPAddr)
 	initialIP := net.ParseIP("127.0.0.1")

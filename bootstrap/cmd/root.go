@@ -71,6 +71,7 @@ func Execute() error {
 		upCmd(a),
 		downCmd(a),
 		pruneNodesCmd(a),
+		versionCmd(version),
 	)
 
 	runErr = rootCmd.Execute()
@@ -308,6 +309,16 @@ Use --dry-run to preview which nodes would be deleted.`,
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			return a.RunPruneNodes(ctx)
+		},
+	}
+}
+
+func versionCmd(version string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the talops version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println("talops " + version)
 		},
 	}
 }

@@ -217,7 +217,7 @@ func (c *Client) doUpdate(_ context.Context, config string) error {
 }
 
 // Validate checks if HAProxy is currently running and healthy
-func (c *Client) Validate(ctx context.Context) error {
+func (c *Client) Validate(_ context.Context) error {
 	return c.runner.runSSH("sudo systemctl is-active haproxy")
 }
 
@@ -233,13 +233,13 @@ func (c *Client) runSSH(cmd string) error {
 	if err != nil {
 		return fmt.Errorf("dial SSH: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	session, err := conn.NewSession()
 	if err != nil {
 		return fmt.Errorf("create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(cmd)
 	if err != nil {
@@ -321,7 +321,7 @@ func appendKnownHost(khPath string, remote net.Addr, key ssh.PublicKey) error {
 	if err != nil {
 		return fmt.Errorf("failed to add host key to known_hosts: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := fmt.Fprintln(f, line); err != nil {
 		return fmt.Errorf("failed to write host key to known_hosts: %w", err)
