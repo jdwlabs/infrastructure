@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -108,7 +107,7 @@ func TestBuildTeeCore(t *testing.T) {
 	// Create logger with the core
 	logger := zap.New(core)
 	logger.Info("test message")
-	logger.Sync()
+	_ = logger.Sync()
 
 	// Console output should be human-readable
 	consoleOutput := consoleBuf.String()
@@ -519,7 +518,7 @@ func TestKvEncoder_WithFieldsNoJSON(t *testing.T) {
 	// This is exactly what RebootMonitor does: logger.With(zap.Int("vmid", 200))
 	childLogger := logger.With(zap.Int("vmid", 200))
 	childLogger.Info("node is ready", zap.String("ip", "192.1681.1.156"))
-	logger.Sync()
+	_ = logger.Sync()
 
 	output := consoleBuf.String()
 
@@ -550,7 +549,7 @@ func TestBuildTeeCore_WithFieldsInJSON(t *testing.T) {
 
 	childLogger := logger.With(zap.Int("vmid", 200))
 	childLogger.Info("node is ready", zap.String("ip", "192.168.1.50"))
-	logger.Sync()
+	_ = logger.Sync()
 
 	jsonOutput := jsonBuf.String()
 
@@ -573,9 +572,4 @@ func TestBuildTeeCore_WithFieldsInJSON(t *testing.T) {
 	if !strings.Contains(consoleOuput, "vmid=200") {
 		t.Errorf("Expected 'vmid=200' in consoleOuput, got: %s", consoleOuput)
 	}
-}
-
-// Helper to check if running on Windows
-func isWindows() bool {
-	return runtime.GOOS == "windows"
 }

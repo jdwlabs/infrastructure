@@ -200,7 +200,7 @@ func TestWriteSummary_Overwrite(t *testing.T) {
 		Status:      "success",
 		ClusterName: "first",
 	}
-	WriteSummary(path, data1)
+	_ = WriteSummary(path, data1)
 
 	// Write second summary to same path
 	data2 := &SummaryData{

@@ -39,7 +39,7 @@ func TestHelperProcess(t *testing.T) {
 	errStr := os.Getenv("GO_HELPER_ERROR")
 
 	if output != "" {
-		fmt.Fprint(os.Stdout, output)
+		_, _ = fmt.Fprint(os.Stdout, output)
 	}
 
 	if errStr != "" && errStr != "<nil>" {
@@ -289,11 +289,11 @@ func TestHelperProcessPlan(t *testing.T) {
 	exitCodeStr := os.Getenv("GO_HELPER_EXIT_CODE")
 
 	if output != "" {
-		fmt.Fprint(os.Stdout, output)
+		_, _ = fmt.Fprint(os.Stdout, output)
 	}
 
 	var exitCode int
-	fmt.Sscanf(exitCodeStr, "%d", &exitCode)
+	_, _ = fmt.Sscanf(exitCodeStr, "%d", &exitCode)
 	os.Exit(exitCode)
 }
 

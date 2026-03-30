@@ -24,7 +24,7 @@ func NewAuditLogger(w io.Writer) *AuditLogger {
 // WriteEntry writes a tagged audit log entry.
 func (a *AuditLogger) WriteEntry(tag, message string) {
 	ts := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Fprintf(a.w, "[%s] [%s] %s\n", ts, tag, message)
+	_, _ = fmt.Fprintf(a.w, "[%s] [%s] %s\n", ts, tag, message)
 }
 
 // Command creates an AuditedCmd that wraps exec.Cmd with automatic audit logging.

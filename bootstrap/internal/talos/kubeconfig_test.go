@@ -77,17 +77,17 @@ func TestKubeconfigPath(t *testing.T) {
 		origHome := os.Getenv("HOME")
 		origUserProfile := os.Getenv("USERPROFILE")
 		defer func() {
-			os.Setenv("HOME", origHome)
-			os.Setenv("USERPROFILE", origUserProfile)
+			_ = os.Setenv("HOME", origHome)
+			_ = os.Setenv("USERPROFILE", origUserProfile)
 		}()
 
 		tmpDir := t.TempDir()
 		kubeDir := filepath.Join(tmpDir, ".kube")
-		os.MkdirAll(kubeDir, 0755)
+		_ = os.MkdirAll(kubeDir, 0755)
 
 		// Set both HOME and USERPROFILE for cross-platform compatibility
-		os.Setenv("HOME", tmpDir)
-		os.Setenv("USERPROFILE", tmpDir)
+		_ = os.Setenv("HOME", tmpDir)
+		_ = os.Setenv("USERPROFILE", tmpDir)
 
 		path := km.kubeconfigPath()
 		// Should contain .kube/config somewhere in the path
@@ -236,7 +236,7 @@ func TestMergeKubeconfig_ExistingFile(t *testing.T) {
 
 	content, _ := os.ReadFile(existingPath)
 	var result kubeConfig
-	yaml.Unmarshal(content, &result)
+	_ = yaml.Unmarshal(content, &result)
 
 	clusterNames := make([]string, len(result.Clusters))
 	for i, c := range result.Clusters {
@@ -292,7 +292,7 @@ func TestWriteDirectly(t *testing.T) {
 		tmpDir := t.TempDir()
 		testPath := filepath.Join(tmpDir, "config")
 
-		os.WriteFile(testPath, []byte("old data"), 0600)
+		_ = os.WriteFile(testPath, []byte("old data"), 0600)
 
 		newData := []byte("new data")
 		err := km.writeDirectly(testPath, newData)
@@ -416,7 +416,7 @@ func TestVerifyKubernetesAPI(t *testing.T) {
 	t.Run("successful connection", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
-		defer listener.Close()
+		defer func() { _ = listener.Close() }()
 
 		done := make(chan struct{})
 		go func() {
@@ -425,7 +425,7 @@ func TestVerifyKubernetesAPI(t *testing.T) {
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -434,14 +434,14 @@ func TestVerifyKubernetesAPI(t *testing.T) {
 		_ = ctx
 		_ = km
 
-		listener.Close()
+		_ = listener.Close()
 		<-done
 	})
 
 	t.Run("connection refused", func(t *testing.T) {
 		listener, _ := net.Listen("tcp", "127.0.0.1:0")
 		port := listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		_ = listener.Close()
 
 		_ = port
 	})
@@ -466,8 +466,8 @@ func BenchmarkKubeconfigPath(b *testing.B) {
 	logger := zap.NewNop()
 	km := NewKubeconfigManager(nil, logger)
 
-	os.Setenv("KUBECONFIG", "/tmp/test-config")
-	defer os.Unsetenv("KUBECONFIG")
+	_ = os.Setenv("KUBECONFIG", "/tmp/test-config")
+	defer func() { _ = os.Unsetenv("KUBECONFIG") }()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -484,6 +484,6 @@ func BenchmarkWriteDirectly(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		path := filepath.Join(tmpDir, "config", string(rune(i)))
-		km.writeDirectly(path, data)
+		_ = km.writeDirectly(path, data)
 	}
 }
