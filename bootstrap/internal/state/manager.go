@@ -53,7 +53,7 @@ func (m *Manager) NodeConfigPath(vmid types.VMID, role types.Role) string {
 
 // LoadDesiredState parses terraform.tfvars into NodeSpecs
 // This replaces your parse_terraform_array() function with proper HCL parsing
-func (m *Manager) LoadDesiredState(ctx context.Context) (map[types.VMID]*types.NodeSpec, error) {
+func (m *Manager) LoadDesiredState(_ context.Context) (map[types.VMID]*types.NodeSpec, error) {
 	raw, err := os.ReadFile(m.config.TerraformTFVars)
 	if err != nil {
 		return nil, fmt.Errorf("read terraform.tfvars: %w", err)
@@ -270,7 +270,7 @@ func (m *Manager) ComputeTerraformHash() (string, error) {
 }
 
 // LoadDeployedState reads bootstrap-state.json
-func (m *Manager) LoadDeployedState(ctx context.Context) (*types.ClusterState, error) {
+func (m *Manager) LoadDeployedState(_ context.Context) (*types.ClusterState, error) {
 	stateFile := filepath.Join(m.stateDir, "bootstrap-state.json")
 
 	data, err := os.ReadFile(stateFile)
@@ -318,7 +318,7 @@ func (m *Manager) LoadDeployedState(ctx context.Context) (*types.ClusterState, e
 // BuildReconcilePlan computes the diff between desired, deployed, and live
 // This replaces your build_reconcile_plan() with proper logic
 func (m *Manager) BuildReconcilePlan(
-	ctx context.Context,
+	_ context.Context,
 	desired map[types.VMID]*types.NodeSpec,
 	deployed *types.ClusterState,
 	live map[types.VMID]*types.LiveNode,
@@ -425,68 +425,66 @@ func (m *Manager) BuildReconcilePlan(
 	}
 
 	// Use live discovery data for IP synchronization and unreachable node warnings
-	if live != nil {
-		for vmid, liveNode := range live {
-			if liveNode.IP != nil && liveNode.Status == types.StatusDiscovered {
-				// Sync discovered IP into deployed state if it has changed
-				if cp, ok := deployedCPs[vmid]; ok {
-					if cp.IP == nil || !cp.IP.Equal(liveNode.IP) {
-						if m.logger != nil {
-							oldIP := "<nil>"
-							if cp.IP != nil {
-								oldIP = cp.IP.String()
-							}
-							m.logger.Info("IP changed for deployed CP (live sync)",
-								zap.Int("vmid", int(vmid)),
-								zap.String("old_ip", oldIP),
-								zap.String("new_ip", liveNode.IP.String()))
-						}
-						cp.IP = liveNode.IP
-						deployedCPs[vmid] = cp
-						// Update in actual deployed state
-						for i := range deployed.ControlPlanes {
-							if deployed.ControlPlanes[i].VMID == vmid {
-								deployed.ControlPlanes[i].IP = liveNode.IP
-								break
-							}
-						}
-					}
-				}
-				if w, ok := deployedWorkers[vmid]; ok {
-					if w.IP == nil || !w.IP.Equal(liveNode.IP) {
-						if m.logger != nil {
-							oldIP := "<nil>"
-							if w.IP != nil {
-								oldIP = w.IP.String()
-							}
-							m.logger.Info("IP changed for deployed worker (live sync)",
-								zap.Int("vmid", int(vmid)),
-								zap.String("old_ip", oldIP),
-								zap.String("new_ip", liveNode.IP.String()))
-						}
-						w.IP = liveNode.IP
-						deployedWorkers[vmid] = w
-						for i := range deployed.Workers {
-							if deployed.Workers[i].VMID == vmid {
-								deployed.Workers[i].IP = liveNode.IP
-								break
-							}
-						}
-					}
-				}
-			} else if liveNode.Status == types.StatusNotFound {
-				// Warn about deployed nodes that are unreachable
-				if _, ok := deployedCPs[vmid]; ok {
+	for vmid, liveNode := range live {
+		if liveNode.IP != nil && liveNode.Status == types.StatusDiscovered {
+			// Sync discovered IP into deployed state if it has changed
+			if cp, ok := deployedCPs[vmid]; ok {
+				if cp.IP == nil || !cp.IP.Equal(liveNode.IP) {
 					if m.logger != nil {
-						m.logger.Warn("deployed control plane not reachable in live discovery",
-							zap.Int("vmid", int(vmid)))
+						oldIP := "<nil>"
+						if cp.IP != nil {
+							oldIP = cp.IP.String()
+						}
+						m.logger.Info("IP changed for deployed CP (live sync)",
+							zap.Int("vmid", int(vmid)),
+							zap.String("old_ip", oldIP),
+							zap.String("new_ip", liveNode.IP.String()))
+					}
+					cp.IP = liveNode.IP
+					deployedCPs[vmid] = cp
+					// Update in actual deployed state
+					for i := range deployed.ControlPlanes {
+						if deployed.ControlPlanes[i].VMID == vmid {
+							deployed.ControlPlanes[i].IP = liveNode.IP
+							break
+						}
 					}
 				}
-				if _, ok := deployedWorkers[vmid]; ok {
+			}
+			if w, ok := deployedWorkers[vmid]; ok {
+				if w.IP == nil || !w.IP.Equal(liveNode.IP) {
 					if m.logger != nil {
-						m.logger.Warn("deployed worker not reachable in live discovery",
-							zap.Int("vmid", int(vmid)))
+						oldIP := "<nil>"
+						if w.IP != nil {
+							oldIP = w.IP.String()
+						}
+						m.logger.Info("IP changed for deployed worker (live sync)",
+							zap.Int("vmid", int(vmid)),
+							zap.String("old_ip", oldIP),
+							zap.String("new_ip", liveNode.IP.String()))
 					}
+					w.IP = liveNode.IP
+					deployedWorkers[vmid] = w
+					for i := range deployed.Workers {
+						if deployed.Workers[i].VMID == vmid {
+							deployed.Workers[i].IP = liveNode.IP
+							break
+						}
+					}
+				}
+			}
+		} else if liveNode.Status == types.StatusNotFound {
+			// Warn about deployed nodes that are unreachable
+			if _, ok := deployedCPs[vmid]; ok {
+				if m.logger != nil {
+					m.logger.Warn("deployed control plane not reachable in live discovery",
+						zap.Int("vmid", int(vmid)))
+				}
+			}
+			if _, ok := deployedWorkers[vmid]; ok {
+				if m.logger != nil {
+					m.logger.Warn("deployed worker not reachable in live discovery",
+						zap.Int("vmid", int(vmid)))
 				}
 			}
 		}
@@ -510,7 +508,7 @@ func (m *Manager) BuildReconcilePlan(
 }
 
 // Save persists state to disk atomically
-func (m *Manager) Save(ctx context.Context, state *types.ClusterState) error {
+func (m *Manager) Save(_ context.Context, state *types.ClusterState) error {
 	if err := os.MkdirAll(m.stateDir, 0700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
@@ -665,7 +663,7 @@ func (m *Manager) ResolveTFVarsPath() error {
 // LoadTerraformExtras parses additional fields from terraform.tfvars that aren't
 // part of the node configuration arrays. Only updates fields still at their
 // zero/empty values so CLI flags and envs take precedence.
-func (m *Manager) LoadTerraformExtras(ctx context.Context) error {
+func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 	data, err := os.ReadFile(m.config.TerraformTFVars)
 	if err != nil {
 		return fmt.Errorf("read terraform.tfvars: %w", err)

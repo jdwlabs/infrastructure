@@ -56,11 +56,11 @@ func (s *Scanner) getConn(ip net.IP) (*ssh.Client, error) {
 
 	if c, ok := s.connPool[addr]; ok {
 		// Probe with a lightweight no-op to confirm the connection is still alive
-		if _, _, err := c.Conn.SendRequest("keepalive@openssh.com", true, nil); err == nil {
+		if _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); err == nil {
 			return c, nil
 		}
 		// Stale connection - discard and re-dial below
-		c.Close()
+		_ = c.Close()
 		delete(s.connPool, addr)
 	}
 
@@ -77,7 +77,7 @@ func (s *Scanner) Close() {
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 	for addr, c := range s.connPool {
-		c.Close()
+		_ = c.Close()
 		delete(s.connPool, addr)
 	}
 }
@@ -195,7 +195,7 @@ func (s *Scanner) repopulateNode(_ context.Context, _ string, nodeIP net.IP) err
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Extract subnet from node IP
 	ipStr := nodeIP.String()
@@ -237,7 +237,7 @@ func (s *Scanner) findIPByMAC(ctx context.Context, mac string) (net.IP, error) {
 			if err != nil {
 				return
 			}
-			defer session.Close()
+			defer func() { _ = session.Close() }()
 
 			output, err := session.Output("cat /proc/net/arp")
 			if err != nil {
@@ -320,7 +320,7 @@ func (s *Scanner) checkVMOnNode(vmid types.VMID, nodeIP net.IP) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	if err := session.Run(fmt.Sprintf("qm status %d", vmid)); err != nil {
 		return false, err
@@ -344,7 +344,7 @@ func (s *Scanner) getVMMAC(_ context.Context, vmid types.VMID, node string) (str
 	if err != nil {
 		return "", err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	output, err := session.Output(fmt.Sprintf("qm config %d", vmid))
 	if err != nil {
@@ -359,49 +359,6 @@ func (s *Scanner) getVMMAC(_ context.Context, vmid types.VMID, node string) (str
 	}
 
 	return strings.ToUpper(matches[1]), nil
-}
-
-// DiscoverProxmoxNodes queries a known seed Proxmox node via SSH to get the full
-// cluster node list using `pvesh get /nodes --output-format json`. This replaces
-// the static node IP map hardcoded in types.DefaultConfig.
-//
-// seedIP is any Proxmox node in the cluster (already known). The returned map
-// maps node name -> management IP (from the `ip` field in pvesh output).
-func DiscoverProxmoxNodes(sshUser, keyPath string, seedIP net.IP, insecureSSH bool) (map[string]net.IP, error) {
-	key, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read key: %w", err)
-	}
-	signer, err := ssh.ParsePrivateKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("parse key: %w", err)
-	}
-
-	cfg := &ssh.ClientConfig{
-		User:            sshUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: knownHostsCallback(insecureSSH),
-		Timeout:         10 * time.Second,
-	}
-
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:22", seedIP), cfg)
-	if err != nil {
-		return nil, fmt.Errorf("ssh dial seed node: %w", err)
-	}
-	defer client.Close()
-
-	session, err := client.NewSession()
-	if err != nil {
-		return nil, fmt.Errorf("new session: %w", err)
-	}
-	defer session.Close()
-
-	out, err := session.Output("pvesh get /nodes --output-format json 2>/dev/null")
-	if err != nil {
-		return nil, fmt.Errorf("pvesh get nodes output: %w", err)
-	}
-
-	return parseProxmoxNodes(string(out))
 }
 
 // parseProxmoxNodes parses the JSON output of `pvesh get /nodes`.
@@ -439,7 +396,7 @@ func parseProxmoxNodes(jsonOut string) (map[string]net.IP, error) {
 // full cluster node list using `pvesh get /nodes --output-format json`, AND
 // updates s.nodeIPs with any newly discovered nodes. Ues the connection pool.
 // Falls back silently - if all nodes fail the existing static map is kept.
-func (s *Scanner) RefreshProxmoxNodes(ctx context.Context) {
+func (s *Scanner) RefreshProxmoxNodes(_ context.Context) {
 	for _, nodeIP := range s.nodeIPs {
 		client, err := s.getConn(nodeIP)
 		if err != nil {
@@ -452,7 +409,7 @@ func (s *Scanner) RefreshProxmoxNodes(ctx context.Context) {
 		}
 
 		out, err := session.Output("pvesh get /nodes --output-format json 2>/dev/null")
-		session.Close()
+		_ = session.Close()
 		if err != nil || len(out) == 0 {
 			continue
 		}
@@ -509,7 +466,7 @@ func knownHostsCallback(insecure bool) ssh.HostKeyCallback {
 }
 
 // StopVM sends a graceful shutdown command to a Proxmox VM via SSH.
-func (s *Scanner) StopVM(ctx context.Context, vmid int, nodeIP net.IP) error {
+func (s *Scanner) StopVM(_ context.Context, vmid int, nodeIP net.IP) error {
 	client, err := s.getConn(nodeIP)
 	if err != nil {
 		return fmt.Errorf("SSH connect to %s: %w", nodeIP, err)
@@ -519,7 +476,7 @@ func (s *Scanner) StopVM(ctx context.Context, vmid int, nodeIP net.IP) error {
 	if err != nil {
 		return fmt.Errorf("SSH session to %s: %w", nodeIP, err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	cmd := fmt.Sprintf("qm stop %d", vmid)
 	if err := session.Run(cmd); err != nil {
@@ -534,6 +491,6 @@ func TestPort(ip string, port int, timeout time.Duration) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }

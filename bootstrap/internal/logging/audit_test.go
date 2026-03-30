@@ -11,58 +11,6 @@ import (
 	"time"
 )
 
-// Helper to get a command that works on both Unix and Windows
-func helperCommand(t *testing.T, name string, args ...string) *exec.Cmd {
-	t.Helper()
-
-	// Use Go's test binary itself as a helper
-	if name == "echo" {
-		// For echo, we'll use a simple approach with printf on Unix, or skip on Windows
-		if runtime.GOOS == "windows" {
-			// On Windows, use cmd /c echo
-			return exec.Command("cmd", append([]string{"/c", "echo"}, args...)...)
-		}
-		return exec.Command("echo", args...)
-	}
-
-	if name == "exit" {
-		// For testing exit codes, use a small shell script
-		if runtime.GOOS == "windows" {
-			// Use PowerShell for exit codes on Windows
-			code := "0"
-			if len(args) > 0 {
-				code = args[0]
-			}
-			return exec.Command("powershell", "-Command", "exit", code)
-		}
-		return exec.Command("sh", "-c", "exit "+args[0])
-	}
-
-	if name == "pwd" {
-		if runtime.GOOS == "windows" {
-			return exec.Command("cmd", "/c", "cd")
-		}
-		return exec.Command("pwd")
-	}
-
-	if name == "sleep" {
-		if runtime.GOOS == "windows" {
-			// Use timeout on Windows (in seconds)
-			return exec.Command("timeout", "/t", args[0], "/nobreak")
-		}
-		return exec.Command("sleep", args...)
-	}
-
-	if name == "stdout_stderr" {
-		if runtime.GOOS == "windows" {
-			return exec.Command("powershell", "-Command", "Write-Output 'stdout'; Write-Error 'stderr' 2>&1")
-		}
-		return exec.Command("sh", "-c", "echo stdout && echo stderr >&2")
-	}
-
-	return exec.Command(name, args...)
-}
-
 func TestNewAuditLogger(t *testing.T) {
 	var buf bytes.Buffer
 	al := NewAuditLogger(&buf)

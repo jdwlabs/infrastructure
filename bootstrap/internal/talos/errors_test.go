@@ -412,7 +412,7 @@ func BenchmarkParseTalosError(b *testing.B) {
 	err := errors.New("connection refused: node may be rebooting")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ParseTalosError(err)
+		_ = ParseTalosError(err)
 	}
 }
 
@@ -420,7 +420,7 @@ func BenchmarkParseTalosError_Unknown(b *testing.B) {
 	err := errors.New("some random unknown error message")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ParseTalosError(err)
+		_ = ParseTalosError(err)
 	}
 }
 

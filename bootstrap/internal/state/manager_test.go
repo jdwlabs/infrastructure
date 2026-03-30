@@ -1177,7 +1177,7 @@ func TestResolveTFVarsPath(t *testing.T) {
 	t.Run("file exists at configured path", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		tfvarsPath := filepath.Join(tmpDir, "terraform.tfvars")
-		os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
+		_ = os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
 
 		cfg := types.TestConfig()
 		cfg.TerraformTFVars = tfvarsPath
@@ -1197,12 +1197,12 @@ func TestResolveTFVarsPath(t *testing.T) {
 
 		// Put tfvars in parent
 		tfvarsPath := filepath.Join(parentDir, "terraform.tfvars")
-		os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
+		_ = os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
 
 		// Run from child directory
 		origDir, _ := os.Getwd()
 		require.NoError(t, os.Chdir(childDir))
-		defer os.Chdir(origDir)
+		defer func() { _ = os.Chdir(origDir) }()
 
 		cfg := types.TestConfig()
 		cfg.TerraformTFVars = "terraform.tfvars"
@@ -1218,7 +1218,7 @@ func TestResolveTFVarsPath(t *testing.T) {
 		tmpDir := t.TempDir()
 		origDir, _ := os.Getwd()
 		require.NoError(t, os.Chdir(tmpDir))
-		defer os.Chdir(origDir)
+		defer func() { _ = os.Chdir(origDir) }()
 
 		cfg := types.TestConfig()
 		cfg.TerraformTFVars = "terraform.tfvars"

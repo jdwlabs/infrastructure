@@ -59,7 +59,7 @@ func (app *App) InitSession(cmd *cobra.Command) error {
 	return nil
 }
 
-func (app *App) InitConfig(cmd *cobra.Command) error {
+func (app *App) InitConfig(_ *cobra.Command) error {
 	cfg := app.Cfg
 	if v := os.Getenv("CLUSTER_NAME"); v != "" {
 		cfg.ClusterName = v
@@ -105,10 +105,10 @@ func (app *App) InitConfig(cmd *cobra.Command) error {
 // PromptConfirm writes a prompt to session.Console, reads a y/N response from
 // stdin, and logs the result. Returns true if the user confirmed.
 func (app *App) PromptConfirm(prompt string) bool {
-	fmt.Fprint(app.Session.Console, prompt)
+	_, _ = fmt.Fprint(app.Session.Console, prompt)
 	var response string
-	fmt.Scanln(&response)
-	fmt.Fprintln(app.Session.ConsoleFile, response)
+	_, _ = fmt.Scanln(&response)
+	_, _ = fmt.Fprintln(app.Session.ConsoleFile, response)
 	if response != "y" && response != "Y" {
 		app.Session.Logger.Warn("cancelled by user", zap.String("response", response))
 		return false
@@ -147,5 +147,5 @@ func EnsureClusterGitignore(clusterDir string) {
 		return
 	}
 	content := "/nodes/\n/secrets/\n/state/\n/*.log\n"
-	os.WriteFile(gitignorePath, []byte(content), 0644)
+	_ = os.WriteFile(gitignorePath, []byte(content), 0644)
 }

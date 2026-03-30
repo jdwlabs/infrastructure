@@ -40,7 +40,7 @@ func (c *Client) SetAuditLogger(audit *logging.AuditLogger) {
 	c.audit = audit
 }
 
-func (c *Client) Initialize(ctx context.Context) error {
+func (c *Client) Initialize(_ context.Context) error {
 	talosConfigPath := filepath.Join(c.config.SecretsDir, "talosconfig")
 
 	if _, err := os.Stat(talosConfigPath); os.IsNotExist(err) {
@@ -98,7 +98,7 @@ func (c *Client) ApplyConfig(ctx context.Context, ip net.IP, configPath string, 
 	if err != nil {
 		return fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	mode := machine.ApplyConfigurationRequest_AUTO
 	if insecure {
@@ -257,7 +257,7 @@ func (c *Client) checkReadyByIP(ctx context.Context, ip net.IP, role types.Role)
 			return false, err
 		}
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	return c.checkReady(ctx, tc, role)
 }
@@ -267,7 +267,7 @@ func (c *Client) BootstrapEtcd(ctx context.Context, ip net.IP) error {
 	if err != nil {
 		return fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	if err := tc.Bootstrap(ctx, &machine.BootstrapRequest{}); err != nil {
 		talosErr := ParseTalosError(err)
@@ -329,7 +329,7 @@ func (c *Client) WaitForAPI(ctx context.Context, ip net.IP) error {
 			}
 
 			_, err = tc.Version(ctx)
-			tc.Close()
+			_ = tc.Close()
 
 			if err == nil {
 				return nil
@@ -362,7 +362,7 @@ func (c *Client) WaitForReady(ctx context.Context, ip net.IP, role types.Role) e
 		select {
 		case <-ctx.Done():
 			if tc != nil {
-				tc.Close()
+				_ = tc.Close()
 			}
 			return fmt.Errorf("timeout waiting for node %s to be ready", ip)
 		case <-ticker.C:
@@ -380,7 +380,7 @@ func (c *Client) WaitForReady(ctx context.Context, ip net.IP, role types.Role) e
 
 			ready, err := c.checkReady(ctx, tc, role)
 			if err != nil {
-				tc.Close()
+				_ = tc.Close()
 				tc = nil
 
 				// If the insecure connection's checkReady fails, revert to secure
@@ -391,7 +391,7 @@ func (c *Client) WaitForReady(ctx context.Context, ip net.IP, role types.Role) e
 			}
 
 			if ready {
-				tc.Close()
+				_ = tc.Close()
 				return nil
 			}
 		}
@@ -452,7 +452,7 @@ func (c *Client) GetEtcdMembers(ctx context.Context, ip net.IP) ([]EtcdMember, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	resp, err := tc.EtcdMemberList(ctx, &machine.EtcdMemberListRequest{})
 	if err != nil {
@@ -567,7 +567,7 @@ func (c *Client) RemoveEtcdMember(ctx context.Context, endpoint net.IP, memberID
 	if err != nil {
 		return fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	// EtcdRemoveMemberByID returns only error, not (resp, error)
 	if err := tc.EtcdRemoveMemberByID(ctx, &machine.EtcdRemoveMemberByIDRequest{
@@ -586,7 +586,7 @@ func (c *Client) GetEtcdMemberIDByIP(ctx context.Context, endpoint net.IP, nodeI
 	if err != nil {
 		return 0, fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	resp, err := tc.EtcdMemberList(ctx, &machine.EtcdMemberListRequest{})
 	if err != nil {
@@ -619,7 +619,7 @@ func (c *Client) ResetNode(ctx context.Context, ip net.IP, graceful bool) error 
 	if err != nil {
 		return fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	// Reset signature: (ctx context.Context, graceful bool, reboot bool) error
 	// We want to reset without reboot (the node will be reconfigured after)
@@ -635,7 +635,7 @@ func (c *Client) Kubeconfig(ctx context.Context, endpoint net.IP, outputPath str
 	if err != nil {
 		return fmt.Errorf("failed to create talos client: %w", err)
 	}
-	defer tc.Close()
+	defer func() { _ = tc.Close() }()
 
 	// Kubeconfig returns ([]byte, error), not a stream
 	data, err := tc.Kubeconfig(ctx)
@@ -650,7 +650,7 @@ func (c *Client) Kubeconfig(ctx context.Context, endpoint net.IP, outputPath str
 	return nil
 }
 
-func (c *Client) GenerateNodeConfig(ctx context.Context, spec *types.NodeSpec, secretsDir string) (string, error) {
+func (c *Client) GenerateNodeConfig(_ context.Context, spec *types.NodeSpec, secretsDir string) (string, error) {
 	nc := NewNodeConfig(c.config)
 	if c.audit != nil {
 		nc.SetAuditLogger(c.audit)

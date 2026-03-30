@@ -71,7 +71,7 @@ func (s *mockSSHServer) serve(t *testing.T) {
 	}
 }
 
-func (s *mockSSHServer) handleConn(t *testing.T, netConn net.Conn) {
+func (s *mockSSHServer) handleConn(_ *testing.T, netConn net.Conn) {
 	config := &ssh.ServerConfig{
 		NoClientAuth: true,
 	}
@@ -86,7 +86,7 @@ func (s *mockSSHServer) handleConn(t *testing.T, netConn net.Conn) {
 
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
@@ -96,7 +96,7 @@ func (s *mockSSHServer) handleConn(t *testing.T, netConn net.Conn) {
 		}
 
 		go func() {
-			defer channel.Close()
+			defer func() { _ = channel.Close() }()
 
 			for req := range requests {
 				switch req.Type {
@@ -124,28 +124,28 @@ func (s *mockSSHServer) handleConn(t *testing.T, netConn net.Conn) {
 							s.failNext = nil
 							s.mu.Unlock()
 
-							req.Reply(true, nil)
+							_ = req.Reply(true, nil)
 
 							if failNow != nil {
-								channel.Write([]byte(failNow.Error() + "\n"))
-								channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+								_, _ = channel.Write([]byte(failNow.Error() + "\n"))
+								_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
 								return // Exit after handling exec
 							} else {
 								if exists {
-									channel.Write([]byte(response.output))
-									channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{response.exitStatus}))
+									_, _ = channel.Write([]byte(response.output))
+									_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{response.exitStatus}))
 								} else {
 									// Default success response
-									channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+									_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 								}
 								return // Exit after handling exec
 							}
 						}
 					}
 				case "subsystem":
-					req.Reply(false, nil)
+					_ = req.Reply(false, nil)
 				default:
-					req.Reply(req.WantReply, nil)
+					_ = req.Reply(req.WantReply, nil)
 				}
 			}
 		}()
@@ -168,7 +168,7 @@ func (s *mockSSHServer) Port() int {
 }
 
 func (s *mockSSHServer) Close() {
-	s.listener.Close()
+	_ = s.listener.Close()
 }
 
 func (s *mockSSHServer) SetResponse(cmd, response string, exitStatus uint32) {
@@ -205,7 +205,7 @@ func generateTestKey(t *testing.T) (string, ssh.Signer) {
 
 	tmpFile, err := os.CreateTemp("", "test_key_*")
 	require.NoError(t, err)
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	_, err = tmpFile.Write(privateKeyPEM)
 	require.NoError(t, err)
@@ -240,13 +240,13 @@ func (m *mockRunner) runSSH(cmd string) error {
 	if err != nil {
 		return fmt.Errorf("dial SSH: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	session, err := conn.NewSession()
 	if err != nil {
 		return fmt.Errorf("create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(cmd)
 	if err != nil {

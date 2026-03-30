@@ -145,7 +145,7 @@ func appendHostsFile(hostsFile string, data []byte) error {
 	f, err := os.OpenFile(hostsFile, os.O_APPEND|os.O_WRONLY, 0644)
 	if err == nil {
 		_, writeErr := f.Write(data)
-		f.Close()
+		_ = f.Close()
 		return writeErr
 	}
 	if runtime.GOOS == "windows" {
@@ -225,7 +225,7 @@ func (app *App) execTalosctlAudited(args []string, envExtra string) ([]byte, err
 func (app *App) SweepStaleNodes(
 	ctx context.Context,
 	k8sClient *kubectl.Client,
-	desired map[types.VMID]*types.NodeSpec,
+	_ map[types.VMID]*types.NodeSpec,
 	deployed *types.ClusterState,
 ) (int, error) {
 	nodes, err := k8sClient.GetParsedNodes(ctx)

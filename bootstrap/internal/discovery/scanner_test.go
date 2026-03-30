@@ -12,7 +12,6 @@ import (
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/ssh"
 )
 
 func TestNewScanner(t *testing.T) {
@@ -121,7 +120,7 @@ func TestTestPort(t *testing.T) {
 	// Start a test server
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	addr := listener.Addr().(*net.TCPAddr)
 
@@ -364,40 +363,10 @@ func TestIntegration_DiscoverProxmoxNodes(t *testing.T) {
 // MockSSHServer for integration-style tests
 type MockSSHServer struct {
 	listener net.Listener
-	config   *ssh.ServerConfig
-}
-
-func (m *MockSSHServer) Addr() string {
-	return m.listener.Addr().String()
 }
 
 func (m *MockSSHServer) Close() error {
 	return m.listener.Close()
-}
-
-// Helper to generate test SSH key
-func generateTestSSHKey(t *testing.T) (privateKeyPath string, signer ssh.Signer) {
-	tmpDir := t.TempDir()
-	keyPath := filepath.Join(tmpDir, "test_key")
-
-	// Generate a test key using ssh-keygen or use a hardcoded test key
-	// For unit tests, we'll use a hardcoded test key
-	testKey := `-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACB7S6V3L1V0cG1rY3Rmc3Rlc3R0ZXN0dGVzdHRlc3QAAAAce0uldS9VdHBta2
-N0ZnN0ZXN0dGVzdHRlc3Q=
------END OPENSSH PRIVATE KEY-----`
-
-	err := os.WriteFile(keyPath, []byte(testKey), 0600)
-	require.NoError(t, err)
-
-	signer, err = ssh.ParsePrivateKey([]byte(testKey))
-	if err != nil {
-		// If the hardcoded key fails, skip this helper
-		t.Skip("Failed to parse test key, skipping")
-	}
-
-	return keyPath, signer
 }
 
 // Platform-specific path testing
