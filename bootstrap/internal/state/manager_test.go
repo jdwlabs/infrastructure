@@ -1239,6 +1239,34 @@ func TestResolveTFVarsPath(t *testing.T) {
 		assert.Equal(t, filepath.Join("terraform", "terraform.tfvars"), cfg.TerraformTFVars)
 	})
 
+	t.Run("file found via resolved TerraformDir", func(t *testing.T) {
+		// Simulate: talops ran from a different directory but --terraform-dir or
+		// auto-detection set TerraformDir to a non-standard path
+		baseDir := t.TempDir()
+		customTFDir := filepath.Join(baseDir, "infra", "tf")
+		require.NoError(t, os.MkdirAll(customTFDir, 0755))
+
+		tfvarsPath := filepath.Join(customTFDir, "terraform.tfvars")
+		_ = os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
+
+		// Run from a directory where neither cwd nor terraform/ has the file
+		workDir := filepath.Join(baseDir, "workdir")
+		require.NoError(t, os.Mkdir(workDir, 0755))
+		origDir, _ := os.Getwd()
+		require.NoError(t, os.Chdir(workDir))
+		defer func() { _ = os.Chdir(origDir) }()
+
+		cfg := types.TestConfig()
+		cfg.TerraformTFVars = "terraform.tfvars"
+		cfg.TerraformDir = customTFDir
+		logger := zaptest.NewLogger(t)
+		mgr := NewManager(cfg, logger)
+
+		err := mgr.ResolveTFVarsPath()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(customTFDir, "terraform.tfvars"), cfg.TerraformTFVars)
+	})
+
 	t.Run("file not found anywhere", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		origDir, _ := os.Getwd()
