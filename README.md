@@ -43,3 +43,7 @@ talops infra plan            Preview infrastructure changes
 talops infra status          Show infrastructure state
 talops infra cleanup         Remove generated Terraform files
 ```
+
+## Demo
+
+https://github.com/user-attachments/assets/2cd27971-e04d-49a2-a943-11a4b5760b81
