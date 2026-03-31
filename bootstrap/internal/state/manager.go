@@ -633,12 +633,14 @@ func parseIP(s string) net.IP {
 
 // ResolveTFVarsPath locates the terraform.tfvars file. Searches:
 //  1. The configured path (relative to cwd)
-//  2. Parent directory (Go binary is in talos/cluster/go/, tfvars in talos/cluster/)
-//  3. Next to the binary itself
+//  2. Inside the terraform/ subdirectory (repo root invocation)
+//  3. Parent directory (Go binary is in talos/cluster/go/, tfvars in talos/cluster/)
+//  4. Next to the binary itself
 func (m *Manager) ResolveTFVarsPath() error {
 	base := filepath.Base(m.config.TerraformTFVars)
 	candidates := []string{
 		m.config.TerraformTFVars,
+		filepath.Join("terraform", base),
 		filepath.Join("..", base),
 	}
 	// Also try the directory containing the binary

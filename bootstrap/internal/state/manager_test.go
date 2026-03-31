@@ -1214,6 +1214,31 @@ func TestResolveTFVarsPath(t *testing.T) {
 		assert.Equal(t, filepath.Join("..", "terraform.tfvars"), cfg.TerraformTFVars)
 	})
 
+	t.Run("file exists in terraform subdirectory", func(t *testing.T) {
+		// Create a directory structure simulating repo root with terraform/ subdir
+		repoRoot := t.TempDir()
+		terraformDir := filepath.Join(repoRoot, "terraform")
+		require.NoError(t, os.Mkdir(terraformDir, 0755))
+
+		// Put tfvars inside terraform/
+		tfvarsPath := filepath.Join(terraformDir, "terraform.tfvars")
+		_ = os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
+
+		// Run from repo root
+		origDir, _ := os.Getwd()
+		require.NoError(t, os.Chdir(repoRoot))
+		defer func() { _ = os.Chdir(origDir) }()
+
+		cfg := types.TestConfig()
+		cfg.TerraformTFVars = "terraform.tfvars"
+		logger := zaptest.NewLogger(t)
+		mgr := NewManager(cfg, logger)
+
+		err := mgr.ResolveTFVarsPath()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join("terraform", "terraform.tfvars"), cfg.TerraformTFVars)
+	})
+
 	t.Run("file not found anywhere", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		origDir, _ := os.Getwd()
