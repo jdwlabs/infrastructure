@@ -23,16 +23,20 @@ import (
 
 // ResolveTerraformDir resolves the terraform directory using heuristic search.
 // Priority: --terraform-dir flag > TERRAFORM_DIR env > auto-detect.
+// The resolved path is persisted to cfg.TerraformDir so downstream consumers
+// (e.g. ResolveTFVarsPath) can locate files inside it.
 func (app *App) ResolveTerraformDir() (string, error) {
 	if app.Cfg.TerraformDir != "" {
 		return app.Cfg.TerraformDir, nil
 	}
 	if v := os.Getenv("TERRAFORM_DIR"); v != "" {
+		app.Cfg.TerraformDir = v
 		return v, nil
 	}
 	candidates := []string{".", "../terraform", "terraform", ".."}
 	for _, dir := range candidates {
 		if hasTerraformFiles(dir) {
+			app.Cfg.TerraformDir = dir
 			return dir, nil
 		}
 	}
