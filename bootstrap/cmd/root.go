@@ -36,8 +36,8 @@ func Execute() error {
 			if err := a.InitSession(cmd); err != nil {
 				return err
 			}
-			a.ResolveAllPath()
-			return a.InitSession(cmd)
+			a.ResolveAllPaths()
+			return nil
 		},
 	}
 
