@@ -1211,7 +1211,7 @@ func TestResolveTFVarsPath(t *testing.T) {
 
 		err := mgr.ResolveTFVarsPath()
 		require.NoError(t, err)
-		assert.Equal(t, filepath.Join("..", "terraform.tfvars"), cfg.TerraformTFVars)
+		assert.Equal(t, tfvarsPath, cfg.TerraformTFVars)
 	})
 
 	t.Run("file exists in terraform subdirectory", func(t *testing.T) {
@@ -1236,7 +1236,7 @@ func TestResolveTFVarsPath(t *testing.T) {
 
 		err := mgr.ResolveTFVarsPath()
 		require.NoError(t, err)
-		assert.Equal(t, filepath.Join("terraform", "terraform.tfvars"), cfg.TerraformTFVars)
+		assert.Equal(t, tfvarsPath, cfg.TerraformTFVars)
 	})
 
 	t.Run("file found via resolved TerraformDir", func(t *testing.T) {
@@ -1281,6 +1281,22 @@ func TestResolveTFVarsPath(t *testing.T) {
 		err := mgr.ResolveTFVarsPath()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "terraform.tfvars not found")
+	})
+
+	t.Run("already absolute path is idempotent", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		tfvarsPath := filepath.Join(tmpDir, "terraform.tfvars")
+		_ = os.WriteFile(tfvarsPath, []byte(`cluster_name = "test"`), 0644)
+
+		cfg := types.TestConfig()
+		cfg.TerraformTFVars = tfvarsPath
+		logger := zaptest.NewLogger(t)
+		mgr := NewManager(cfg, logger)
+
+		// Call twice - should be idempotent
+		require.NoError(t, mgr.ResolveTFVarsPath())
+		require.NoError(t, mgr.ResolveTFVarsPath())
+		assert.Equal(t, tfvarsPath, cfg.TerraformTFVars)
 	})
 }
 

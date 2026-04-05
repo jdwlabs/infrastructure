@@ -27,15 +27,26 @@ import (
 // (e.g. ResolveTFVarsPath) can locate files inside it.
 func (app *App) ResolveTerraformDir() (string, error) {
 	if app.Cfg.TerraformDir != "" {
+		if !filepath.IsAbs(app.Cfg.TerraformDir) {
+			if abs, err := filepath.Abs(app.Cfg.TerraformDir); err == nil {
+				app.Cfg.TerraformDir = abs
+			}
+		}
 		return app.Cfg.TerraformDir, nil
 	}
 	if v := os.Getenv("TERRAFORM_DIR"); v != "" {
+		if abs, err := filepath.Abs(v); err == nil {
+			v = abs
+		}
 		app.Cfg.TerraformDir = v
 		return v, nil
 	}
 	candidates := []string{".", "../terraform", "terraform", ".."}
 	for _, dir := range candidates {
 		if hasTerraformFiles(dir) {
+			if abs, err := filepath.Abs(dir); err == nil {
+				dir = abs
+			}
 			app.Cfg.TerraformDir = dir
 			return dir, nil
 		}
@@ -68,12 +79,8 @@ func (app *App) RunInfraDeploy(ctx context.Context, tfDir string, skipPlan bool)
 		return fmt.Errorf("terraform not found in PATH: %w", err)
 	}
 
-	// Preflight: terraform.tfvars exists
-	// Use the configured tfvars path (may be a scenario file via --tfvars flag)
+	// Preflight: terraform.tfvars exists (already resolved to absolute by ResolveAllPaths)
 	tfvarsPath := app.Cfg.TerraformTFVars
-	if !filepath.IsAbs(tfvarsPath) {
-		tfvarsPath = filepath.Join(tfDir, tfvarsPath)
-	}
 	if _, err := os.Stat(tfvarsPath); err != nil {
 		return fmt.Errorf("tfvars file not found: %s", tfvarsPath)
 	}
@@ -365,11 +372,8 @@ func (app *App) RunInfraPlan(ctx context.Context, tfDir string) error {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Plan - use configured tfvars path (may be a scenario file)
+	// Plan - use configured tfvars path (already resolved to absolute by ResolveAllPaths)
 	tfvarsPath := app.Cfg.TerraformTFVars
-	if !filepath.IsAbs(tfvarsPath) {
-		tfvarsPath = filepath.Join(tfDir, tfvarsPath)
-	}
 	planFile := filepath.Join(tfDir, "tfplan-view")
 	varFileArg := fmt.Sprintf("-var-file=%s", tfvarsPath)
 	hasChanges, err := runner.Plan(ctx, planFile, varFileArg)
@@ -717,8 +721,8 @@ func (app *App) checkProxmoxISO(ctx context.Context, tfDir string) {
 		return
 	}
 
-	// Read ISO name from tfvars
-	tfvarsData, err := os.ReadFile(filepath.Join(tfDir, "terraform.tfvars"))
+	// Read ISO name from tfvars (already resolved to absolute by ResolveAllPaths)
+	tfvarsData, err := os.ReadFile(cfg.TerraformTFVars)
 	if err != nil {
 		return
 	}
