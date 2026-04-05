@@ -19,6 +19,6 @@ vet:
 	cd $(MODULE) && go vet ./...
 
 clean:
-	rf -f $(BUILD)
+	rm -f $(BUILD)
 
 all: lint vet test build
