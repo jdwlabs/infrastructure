@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/logging"
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/state"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -115,6 +116,26 @@ func (app *App) PromptConfirm(prompt string) bool {
 	}
 	app.Session.Logger.Info("confirmed by user", zap.String("response", response))
 	return true
+}
+
+// ResolveAllPaths resolves TerraformDir and TerraformTFVars to absolute paths
+// once early in the command lifecycle. This prevents double-joining and
+// re-resolution bugs across the lifecycle.
+func (app *App) ResolveAllPaths() {
+	// Step 1: Resolve TerraformDir to absolute (needed as a candidate f or tfvars search).
+	if _, err := app.ResolveTerraformDir(); err != nil {
+		if app.Logger != nil {
+			app.Logger.Debug("terraform directory not found during path resolution", zap.Error(err))
+		}
+	}
+
+	// Step 2: Resolve TerraformTFVars to absolute.
+	stateMgr := state.NewManager(app.Cfg, app.Logger)
+	if err := stateMgr.ResolveTFVarsPath(); err != nil {
+		if app.Logger != nil {
+			app.Logger.Debug("terraform.tfvars not found during path resolution", zap.Error(err))
+		}
+	}
 }
 
 // CheckPrerequisites verifies required CLI tools are available

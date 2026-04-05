@@ -638,11 +638,19 @@ func parseIP(s string) net.IP {
 //  4. Parent directory (Go binary is in talos/cluster/go/, tfvars in talos/cluster/)
 //  5. Next to the binary itself
 func (m *Manager) ResolveTFVarsPath() error {
+	// Already resolved to an absolute path - verify it exists and return.
+	if filepath.IsAbs(m.config.TerraformTFVars) {
+		if _, err := os.Stat(m.config.TerraformTFVars); err != nil {
+			return fmt.Errorf("terraform.tfvars not found at configured path: %s", m.config.TerraformTFVars)
+		}
+		return nil
+	}
+
 	base := filepath.Base(m.config.TerraformTFVars)
 	candidates := []string{
 		m.config.TerraformTFVars,
 	}
-	// Check inside the resolved terraform directory if set and different from "terraform"
+	// Check inside the resolved terraform directory if set
 	if m.config.TerraformDir != "" {
 		candidates = append(candidates, filepath.Join(m.config.TerraformDir, base))
 	}
@@ -657,9 +665,13 @@ func (m *Manager) ResolveTFVarsPath() error {
 
 	for _, candidate := range candidates {
 		if _, err := os.Stat(candidate); err == nil {
-			if candidate != m.config.TerraformTFVars {
-				m.logger.Info("resolved tfvars", zap.String("path", candidate))
-				m.config.TerraformTFVars = candidate
+			absCandidate, absErr := filepath.Abs(candidate)
+			if absErr != nil {
+				absCandidate = candidate
+			}
+			if absCandidate != m.config.TerraformTFVars {
+				m.logger.Info("resolved tfvars", zap.String("path", absCandidate))
+				m.config.TerraformTFVars = absCandidate
 			}
 			return nil
 		}

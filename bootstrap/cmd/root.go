@@ -33,6 +33,10 @@ func Execute() error {
 			if err := a.InitConfig(cmd); err != nil {
 				return err
 			}
+			if err := a.InitSession(cmd); err != nil {
+				return err
+			}
+			a.ResolveAllPath()
 			return a.InitSession(cmd)
 		},
 	}
