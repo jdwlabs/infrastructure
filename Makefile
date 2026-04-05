@@ -1,7 +1,7 @@
 BINARY  := talops
 BUILD   := bootstrap/build/$(BINARY)
 MODULE  := ./bootstrap
-VERSION ?= dev
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X github.com/jdwlabs/infrastructure/bootstrap/cmd.version=$(VERSION)
 
 .PHONY: build lint test vet clean
