@@ -21,6 +21,7 @@ type Config struct {
 	StatsUser     string
 	StatsPassword string
 	ControlPlanes []Backend
+	IngressNodes  []Backend // All nodes running ingress-nginx (CPs + workers)
 }
 
 const haproxyTemplate = `# ======= GLOBAL =======
@@ -106,6 +107,44 @@ backend talos-controlplane
     timeout server 60s
 {{- range .ControlPlanes }}
     server talos-cp-{{ .VMID }} {{ .IP }}:50000 check
+{{- end }}
+{{- if .IngressNodes }}
+
+# ======= HTTP INGRESS =======
+frontend http-ingress
+    mode tcp
+    bind {{ .HAProxyIP }}:80
+    option tcplog
+    default_backend ingress-http
+
+backend ingress-http
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    tcp-check connect port 30080
+    default-server inter 5s fall 3 rise 2
+{{- range .IngressNodes }}
+    server ingress-{{ .VMID }} {{ .IP }}:30080 check send-proxy
+{{- end }}
+
+# ======= HTTPS INGRESS =======
+frontend https-ingress
+    mode tcp
+    bind {{ .HAProxyIP }}:443
+    option tcplog
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req_ssl_hello_type 1 }
+    default_backend ingress-https
+
+backend ingress-https
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    tcp-check connect port 30443 ssl
+    default-server inter 5s fall 3 rise 2
+{{- range .IngressNodes }}
+    server ingress-{{ .VMID }} {{ .IP }}:30443 check send-proxy
+{{- end }}
 {{- end }}
 `
 

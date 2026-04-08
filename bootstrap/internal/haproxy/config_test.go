@@ -56,6 +56,55 @@ func TestConfig_Generate(t *testing.T) {
 				if !strings.Contains(config, "stats auth admin:secret123") {
 					t.Error("config missing stats auth")
 				}
+				// No ingress sections without IngressNodes
+				if strings.Contains(config, "frontend http-ingress") {
+					t.Error("config should not have HTTP ingress without IngressNodes")
+				}
+			},
+		},
+		{
+			name: "valid config with ingress nodes",
+			config: Config{
+				HAProxyIP:     net.ParseIP("192.168.1.237"),
+				StatsUser:     "admin",
+				StatsPassword: "secret123",
+				ControlPlanes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressNodes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+					{VMID: 301, IP: net.ParseIP("192.168.1.211")},
+				},
+			},
+			wantErr: false,
+			checks: func(t *testing.T, config string) {
+				// Check HTTP ingress frontend
+				if !strings.Contains(config, "frontend http-ingress") {
+					t.Error("config missing HTTP ingress frontend")
+				}
+				if !strings.Contains(config, "bind 192.168.1.237:80") {
+					t.Error("config missing HTTP bind directive")
+				}
+				// Check HTTPS ingress frontend
+				if !strings.Contains(config, "frontend https-ingress") {
+					t.Error("config missing HTTPS ingress frontend")
+				}
+				if !strings.Contains(config, "bind 192.168.1.237:443") {
+					t.Error("config missing HTTPS bind directive")
+				}
+				// Check ingress backends with send-proxy
+				if !strings.Contains(config, "server ingress-201 192.168.1.201:30080 check send-proxy") {
+					t.Error("config missing HTTP ingress backend for CP node")
+				}
+				if !strings.Contains(config, "server ingress-301 192.168.1.211:30080 check send-proxy") {
+					t.Error("config missing HTTP ingress backend for worker node")
+				}
+				if !strings.Contains(config, "server ingress-201 192.168.1.201:30443 check send-proxy") {
+					t.Error("config missing HTTPS ingress backend for CP node")
+				}
+				if !strings.Contains(config, "server ingress-301 192.168.1.211:30443 check send-proxy") {
+					t.Error("config missing HTTPS ingress backend for worker node")
+				}
 			},
 		},
 		{
@@ -144,6 +193,11 @@ func TestConfig_Generate_ContainsExpectedSections(t *testing.T) {
 			{VMID: 201, IP: net.ParseIP("192.168.1.201")},
 			{VMID: 202, IP: net.ParseIP("192.168.1.202")},
 		},
+		IngressNodes: []Backend{
+			{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+			{VMID: 202, IP: net.ParseIP("192.168.1.202")},
+			{VMID: 301, IP: net.ParseIP("192.168.1.211")},
+		},
 	}
 
 	got, err := config.Generate()
@@ -160,6 +214,10 @@ func TestConfig_Generate_ContainsExpectedSections(t *testing.T) {
 		"backend k8s-controlplane",
 		"frontend talos-apiserver",
 		"backend talos-controlplane",
+		"frontend http-ingress",
+		"backend ingress-http",
+		"frontend https-ingress",
+		"backend ingress-https",
 	}
 
 	for _, section := range requiredSections {
@@ -218,7 +276,7 @@ func TestConfigFromClusterState(t *testing.T) {
 		Workers: []types.NodeState{
 			{
 				VMID: 301,
-				IP:   net.ParseIP("192.168.1.301"),
+				IP:   net.ParseIP("192.168.1.211"),
 			},
 		},
 	}
@@ -236,7 +294,7 @@ func TestConfigFromClusterState(t *testing.T) {
 		t.Errorf("StatsPassword = %v, want %v", got.StatsPassword, cfg.HAProxyStatsPassword)
 	}
 
-	// Verify only control planes are included (not workers)
+	// Verify only control planes are in ControlPlanes
 	if len(got.ControlPlanes) != 2 {
 		t.Errorf("ControlPlanes length = %v, want 2", len(got.ControlPlanes))
 	}
@@ -262,6 +320,33 @@ func TestConfigFromClusterState(t *testing.T) {
 	if len(expectedBackends) > 0 {
 		t.Errorf("missing backends for VMIDs: %v", expectedBackends)
 	}
+
+	// Verify IngressNodes includes both control planes and workers
+	if len(got.IngressNodes) != 3 {
+		t.Errorf("IngressNodes length = %v, want 3 (2 CPs + 1 worker)", len(got.IngressNodes))
+	}
+
+	expectedIngress := map[types.VMID]string{
+		201: "192.168.1.201",
+		202: "192.168.1.202",
+		301: "192.168.1.211",
+	}
+
+	for _, backend := range got.IngressNodes {
+		expectedIP, ok := expectedIngress[backend.VMID]
+		if !ok {
+			t.Errorf("unexpected ingress node VMID: %d", backend.VMID)
+			continue
+		}
+		if backend.IP.String() != expectedIP {
+			t.Errorf("IngressNode VMID %d: IP = %v, want %v", backend.VMID, backend.IP, expectedIP)
+		}
+		delete(expectedIngress, backend.VMID)
+	}
+
+	if len(expectedIngress) > 0 {
+		t.Errorf("missing ingress nodes for VMIDs: %v", expectedIngress)
+	}
 }
 
 func TestConfigFromClusterState_EmptyControlPlanes(t *testing.T) {
@@ -274,7 +359,7 @@ func TestConfigFromClusterState_EmptyControlPlanes(t *testing.T) {
 	state := &types.ClusterState{
 		ControlPlanes: []types.NodeState{},
 		Workers: []types.NodeState{
-			{VMID: 301, IP: net.ParseIP("192.168.1.301")},
+			{VMID: 301, IP: net.ParseIP("192.168.1.211")},
 		},
 	}
 
@@ -282,6 +367,11 @@ func TestConfigFromClusterState_EmptyControlPlanes(t *testing.T) {
 
 	if len(got.ControlPlanes) != 0 {
 		t.Errorf("ControlPlanes should be empty, got %d", len(got.ControlPlanes))
+	}
+
+	// Workers should still populate IngressNodes
+	if len(got.IngressNodes) != 1 {
+		t.Errorf("IngressNodes should have 1 worker, got %d", len(got.IngressNodes))
 	}
 
 	// Should still be able to generate (will error due to empty backends)
