@@ -180,11 +180,25 @@ func ConfigFromClusterState(cfg *types.Config, state *types.ClusterState) *Confi
 
 	for _, cp := range state.ControlPlanes {
 		if cp.IP == nil {
-			continue // Skip nodes without a resolved IP
+			continue
 		}
 		haConfig.ControlPlanes = append(haConfig.ControlPlanes, Backend{
 			VMID: cp.VMID,
 			IP:   cp.IP,
+		})
+		haConfig.IngressNodes = append(haConfig.IngressNodes, Backend{
+			VMID: cp.VMID,
+			IP:   cp.IP,
+		})
+	}
+
+	for _, w := range state.Workers {
+		if w.IP == nil {
+			continue
+		}
+		haConfig.IngressNodes = append(haConfig.IngressNodes, Backend{
+			VMID: w.VMID,
+			IP:   w.IP,
 		})
 	}
 
