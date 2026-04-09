@@ -105,8 +105,11 @@ func TestConfig_Generate(t *testing.T) {
 				if !strings.Contains(config, "server ingress-301 192.168.1.211:30443 check send-proxy") {
 					t.Error("config missing HTTPS ingress backend for worker node")
 				}
-				if !strings.Contains(config, "tcp-check connect port 30443 ssl verify none") {
-					t.Error("HTTPS ingress tcp-check missing 'verify none' for self-signed cert support")
+				if !strings.Contains(config, "tcp-check connect port 30443 ssl") {
+					t.Error("HTTPS ingress tcp-check missing missing ssl for health check")
+				}
+				if !strings.Contains(config, "default-server tinter 5s fall 3 rise 2 verify none") {
+					t.Error("HTTPS ingress default-server missing 'verify none' for self-signed cert support")
 				}
 			},
 		},
