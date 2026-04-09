@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -338,6 +339,9 @@ func TestSetPrivateKey(t *testing.T) {
 	})
 
 	t.Run("permission denied on key file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Skipping permission test on Windows - file permissions are not enforced the same way")
+		}
 		if os.Getuid() == 0 {
 			t.Skip("Skipping permission test when running as root")
 		}

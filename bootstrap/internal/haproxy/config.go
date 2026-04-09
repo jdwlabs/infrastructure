@@ -140,8 +140,8 @@ backend ingress-https
     mode tcp
     balance roundrobin
     option tcp-check
-    tcp-check connect port 30443 ssl
-    default-server inter 5s fall 3 rise 2 verify none
+    tcp-check connect port 30443
+    default-server inter 5s fall 3 rise 2
 {{- range .IngressNodes }}
     server ingress-{{ .VMID }} {{ .IP }}:30443 check send-proxy
 {{- end }}
