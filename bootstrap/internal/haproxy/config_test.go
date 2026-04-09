@@ -108,7 +108,7 @@ func TestConfig_Generate(t *testing.T) {
 				if !strings.Contains(config, "tcp-check connect port 30443") {
 					t.Error("HTTPS ingress tcp-check missing port 30443 health check")
 				}
-				if !strings.Contains(config, "tcp-check connect port 30443 ssl") {
+				if strings.Contains(config, "tcp-check connect port 30443 ssl") {
 					t.Error("HTTPS ingress tcp-check should not use ssl - backends expect PROXY protocol first")
 				}
 			},
