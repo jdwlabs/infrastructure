@@ -586,6 +586,9 @@ func TestKnownHostsCallback_TOFU(t *testing.T) {
 	// Create a temp known_hosts file via temp HOME
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", tmpHome)
+	}
 
 	sshDir := filepath.Join(tmpHome, ".ssh")
 	require.NoError(t, os.Mkdir(sshDir, 0700))
@@ -614,6 +617,9 @@ func TestKnownHostsCallback_TOFU(t *testing.T) {
 func TestKnownHostsCallback_Mismatch(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", tmpHome)
+	}
 
 	sshDir := filepath.Join(tmpHome, ".ssh")
 	require.NoError(t, os.Mkdir(sshDir, 0700))
