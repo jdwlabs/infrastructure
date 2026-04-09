@@ -32,6 +32,9 @@ func TestNodeConfig_SetAuditLogger(t *testing.T) {
 }
 
 func TestNodeConfigGenerate_ControlPlane(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping talosctl-dependent test on Windows - patch paths use Unix conventions")
+	}
 	if os.Getenv("SKIP_TALOSCTL") != "" {
 		t.Skip("Skipping talosctl-dependent test")
 	}
@@ -83,6 +86,9 @@ func TestNodeConfigGenerate_ControlPlane(t *testing.T) {
 }
 
 func TestNodeConfigGenerate_Worker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping talosctl-dependent test on Windows - pathc paths use Unix conventions")
+	}
 	if os.Getenv("SKIP_TALOSCTL") != "" {
 		t.Skip("Skipping talosctl-dependent test")
 	}
