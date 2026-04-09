@@ -820,6 +820,33 @@ func (app *App) executePlan(
 		}
 	}
 
+	// Phase 6c: Re-update HAProxy with workers included in ingress backends
+	// Phase 4 runs before workers are deployed so IngressNodes only has CPs.
+	// Now that workers are deployed and ready, re-generate to include them.
+	if len(plan.AddWorkers) > 0 && !cfg.DryRun && len(deployed.ControlPlanes) > 0 {
+		haproxyConfig := haproxy.ConfigFromClusterState(cfg, deployed)
+		configStr, err := haproxyConfig.Generate()
+		if err != nil {
+			app.Logger.Error("failed to generate HAProxy config with workers", zap.Error(err))
+			return fmt.Errorf("generate HAProxy config (post-worker): %w", err)
+		}
+
+		haproxyClient := app.createHAProxyClient(cfg)
+		if haproxyClient == nil {
+			app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
+			return fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
+		}
+
+		if err := haproxyClient.Update(ctx, configStr); err != nil {
+			app.Logger.Error("HAProxy update with workers failed",
+				zap.String("host", cfg.HAProxyIP.String()),
+				zap.String("user", cfg.HAProxyLoginUser),
+				zap.Error(err))
+			return fmt.Errorf("HAProxy update (post-worker) failed: %w", err)
+		}
+		app.Logger.Info("HAProxy updated with worker ingress nodes", zap.Int("ingressNodes", len(haproxyConfig.IngressNodes)))
+	}
+
 	// Phase 7: Update configs
 	if len(plan.UpdateConfigs) > 0 {
 		app.Logger.Info("updating configurations", zap.Int("count", len(plan.UpdateConfigs)))
