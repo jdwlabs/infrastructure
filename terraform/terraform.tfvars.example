@@ -19,6 +19,11 @@ haproxy_login_user     = "root"
 haproxy_stats_user     = "admin"
 haproxy_stats_password = "your-password"
 
+# Ingress NodePorts (e.g. NGINX Gateway Fabric uses 30180/30543 by default,
+# ingress-nginx uses 30080/30443). HAProxy forwards :80/:443 to these ports.
+ingress_http_nodeport = 30180
+ingress_tls_nodeport  = 30543
+
 proxmox_node_ips = {
   "pve1" = "192.168.1.100"
 }

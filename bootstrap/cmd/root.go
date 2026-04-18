@@ -62,6 +62,8 @@ func Execute() error {
 	rootCmd.PersistentFlags().StringVar(&cfg.HAProxySSHKeyPath, "haproxy-ssh-key", "", "Path to SSH private key for HAProxy (defaults to --ssh-key)")
 	rootCmd.PersistentFlags().StringVar(&cfg.HAProxyStatsUser, "haproxy-stats-user", "", "HAProxy stats username")
 	rootCmd.PersistentFlags().StringVar(&cfg.HAProxyStatsPassword, "haproxy-stats-password", "", "HAProxy stats password")
+	rootCmd.PersistentFlags().IntVar(&cfg.IngressHTTPNodePort, "ingress-http-nodeport", 0, "Ingress HTTP NodePort (HAProxy :80 backend)")
+	rootCmd.PersistentFlags().IntVar(&cfg.IngressTLSNodePort, "ingress-tls-nodeport", 0, "Ingress TLS NodePort (HAProxy :443 backend)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.InsecureSSH, "insecure-ssh", false, "Skip SSH host key verification (INSECURE)")
 	rootCmd.PersistentFlags().StringVar(&cfg.TerraformDir, "terraform-dir", "", "Directory containing Terraform files (default: auto-detect)")
 	rootCmd.PersistentFlags().StringVar(&cfg.PatchDir, "patch-dir", "", "Directory for patch template overrides")

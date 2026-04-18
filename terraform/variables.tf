@@ -81,6 +81,16 @@ variable "proxmox_node_ips" {
   default = null
 }
 
+variable "ingress_http_nodeport" {
+  type    = number
+  default = null
+}
+
+variable "ingress_tls_nodeport" {
+  type    = number
+  default = null
+}
+
 # CONTROL PLANE CONFIGURATION
 # This is a LIST of objects - add more objects to scale up
 variable "talos_control_configuration" {
