@@ -17,11 +17,13 @@ type Backend struct {
 
 // Config holds all data needed to generate an HAProxy configuration
 type Config struct {
-	HAProxyIP     net.IP
-	StatsUser     string
-	StatsPassword string
-	ControlPlanes []Backend
-	IngressNodes  []Backend // All nodes running ingress-nginx (CPs + workers)
+	HAProxyIP       net.IP
+	StatsUser       string
+	StatsPassword   string
+	ControlPlanes   []Backend
+	IngressNodes    []Backend // All nodes running ingress-nginx (CPs + workers)
+	IngressHTTPPort int       // NodePort for HTTP ingress traffic
+	IngressTLSPort  int       // NodePort for HTTPS/TLS ingress traffic
 }
 
 const haproxyTemplate = `# ======= GLOBAL =======
@@ -121,10 +123,10 @@ backend ingress-http
     mode tcp
     balance roundrobin
     option tcp-check
-    tcp-check connect port 30080
+    tcp-check connect port {{ .IngressHTTPPort }}
     default-server inter 5s fall 3 rise 2
 {{- range .IngressNodes }}
-    server ingress-{{ .VMID }} {{ .IP }}:30080 check send-proxy
+    server ingress-{{ .VMID }} {{ .IP }}:{{ $.IngressHTTPPort }} check send-proxy
 {{- end }}
 
 # ======= HTTPS INGRESS =======
@@ -140,10 +142,10 @@ backend ingress-https
     mode tcp
     balance roundrobin
     option tcp-check
-    tcp-check connect port 30443
+    tcp-check connect port {{ .IngressTLSPort }}
     default-server inter 5s fall 3 rise 2
 {{- range .IngressNodes }}
-    server ingress-{{ .VMID }} {{ .IP }}:30443 check send-proxy
+    server ingress-{{ .VMID }} {{ .IP }}:{{ $.IngressTLSPort }} check send-proxy
 {{- end }}
 {{- end }}
 `
@@ -155,6 +157,14 @@ func (c *Config) Generate() (string, error) {
 	}
 	if len(c.ControlPlanes) == 0 {
 		return "", fmt.Errorf("at least one control plane backend is required")
+	}
+	if len(c.IngressNodes) > 0 {
+		if c.IngressHTTPPort == 0 {
+			return "", fmt.Errorf("ingress HTTP port is required when ingress nodes are configured")
+		}
+		if c.IngressTLSPort == 0 {
+			return "", fmt.Errorf("ingress TLS port is required when ingress nodes are configured")
+		}
 	}
 
 	tmpl, err := template.New("haproxy").Parse(haproxyTemplate)
@@ -173,9 +183,11 @@ func (c *Config) Generate() (string, error) {
 // ConfigFromClusterState builds an HAProxy Config from the current cluster state
 func ConfigFromClusterState(cfg *types.Config, state *types.ClusterState) *Config {
 	haConfig := &Config{
-		HAProxyIP:     cfg.HAProxyIP,
-		StatsUser:     cfg.HAProxyStatsUser,
-		StatsPassword: cfg.HAProxyStatsPassword,
+		HAProxyIP:       cfg.HAProxyIP,
+		StatsUser:       cfg.HAProxyStatsUser,
+		StatsPassword:   cfg.HAProxyStatsPassword,
+		IngressHTTPPort: cfg.IngressHTTPNodePort,
+		IngressTLSPort:  cfg.IngressTLSNodePort,
 	}
 
 	for _, cp := range state.ControlPlanes {

@@ -782,6 +782,18 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 		}
 	}
 
+	// Ingress NodePorts (leave zero values as sentinels so flags/env override tfvars)
+	if m.config.IngressHTTPNodePort == 0 {
+		if v := extractSimpleIntField(content, "ingress_http_nodeport"); v > 0 {
+			m.config.IngressHTTPNodePort = v
+		}
+	}
+	if m.config.IngressTLSNodePort == 0 {
+		if v := extractSimpleIntField(content, "ingress_tls_nodeport"); v > 0 {
+			m.config.IngressTLSNodePort = v
+		}
+	}
+
 	// Proxmox node IPs map
 	if len(m.config.ProxmoxNodeIPs) == 0 {
 		rawMap := parseTFVarsMap(content, "proxmox_node_ips")
@@ -813,6 +825,20 @@ func extractSimpleStringField(content, key string) string {
 		return matches[1]
 	}
 	return ""
+}
+
+// extractSimpleIntField extracts a top-level integer assignment from HCL/tfvars content.
+// Matches patterns like: key = 30180 or key = "30180" with optional leading whitespace).
+// Returns 0 when the key is missing or the value is not a valid integer.
+func extractSimpleIntField(content, key string) int {
+	re := regexp.MustCompile(`(?m)^\s*` + key + `\s*=\s*"?(\d+)"?`)
+	matches := re.FindStringSubmatch(content)
+	if len(matches) >= 2 {
+		if v, err := strconv.Atoi(matches[1]); err == nil {
+			return v
+		}
+	}
+	return 0
 }
 
 // extractURLHost parses a URL and returns just the hostname (no scheme, port, or path).

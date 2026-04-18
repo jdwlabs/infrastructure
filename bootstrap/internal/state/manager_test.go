@@ -831,6 +831,30 @@ func TestManager_LoadTerraformExtras(t *testing.T) {
 			},
 		},
 		{
+			name:          "extracts ingress_http_nodeport",
+			tfvarsContent: `ingress_http_nodeport = 30180`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, 30180, c.IngressHTTPNodePort)
+			},
+		},
+		{
+			name:          "extracts ingress_tls_nodeport",
+			tfvarsContent: `ingress_tls_nodeport = 30543`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, 30543, c.IngressTLSNodePort)
+			},
+		},
+		{
+			name: "preserves ingress_http_nodeport when set by flag",
+			initialConfig: func(c *types.Config) {
+				c.IngressHTTPNodePort = 31080
+			},
+			tfvarsContent: `ingress_http_nodeport = 30180`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, 31080, c.IngressHTTPNodePort)
+			},
+		},
+		{
 			name: "extracts proxmox_node_ips map",
 			tfvarsContent: `proxmox_node_ips = {
   pve1 = "192.168.1.200"
@@ -1139,6 +1163,8 @@ haproxy_stats_password    = "changeme"
 kubernetes_version        = "v1.35.1"
 talos_version             = "v1.12.3"
 installer_image           = "factory.talos.dev/nocloud-installer/test:v1.12.3"
+ingress_http_nodeport     = 30180
+ingress_tls_nodeport      = 30543
 
 proxmox_node_ips = {
   pve1 = "192.168.1.200"
@@ -1171,6 +1197,8 @@ talos_worker_configuration = []
 	assert.Equal(t, "changeme", cfg.HAProxyStatsPassword)
 	assert.Len(t, cfg.ProxmoxNodeIPs, 2)
 	assert.True(t, cfg.ProxmoxNodeIPs["pve1"].Equal(net.ParseIP("192.168.1.200")))
+	assert.Equal(t, 30180, cfg.IngressHTTPNodePort)
+	assert.Equal(t, 30543, cfg.IngressTLSNodePort)
 }
 
 func TestResolveTFVarsPath(t *testing.T) {
