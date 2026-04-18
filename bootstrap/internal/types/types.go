@@ -156,6 +156,11 @@ type Config struct {
 	DefaultDisk             string `json:"default_disk"`
 	SecretsDir              string `json:"secrets_dir"`
 
+	// Ingress NodePorts for the cluster's edge gateway (e.g. NGINX Gateway Fabric).
+	// HAProxy forwards :80/:443 to these NodePorts on every node.
+	IngressHTTPNodePort int `json:"ingress_http_node_port"`
+	IngressTLSNodePort  int `json:"ingress_tls_node_port"`
+
 	// Proxmox connection
 	ProxmoxSSHUser     string            `json:"proxmox_ssh_user"`
 	ProxmoxSSHHost     string            `json:"proxmox_ssh_host"`
@@ -236,6 +241,12 @@ func (c *Config) Validate() error {
 	if len(c.ProxmoxNodeIPs) == 0 {
 		missing = append(missing, "proxmox-node-ips (configure via tfvars or flags)")
 	}
+	if c.IngressHTTPNodePort <= 0 {
+		missing = append(missing, "ingress-http-nodeport (INGRESS_HTTP_NODEPORT)")
+	}
+	if c.IngressTLSNodePort <= 0 {
+		missing = append(missing, "ingress-tls-nodeport (INGRESS_TLS_NODEPORT)")
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf("required configuration missing: %s", strings.Join(missing, ", "))
 	}
@@ -258,6 +269,8 @@ func TestConfig() *Config {
 		"pve1": net.ParseIP("192.168.1.200"),
 		"pve2": net.ParseIP("192.168.1.201"),
 	}
+	cfg.IngressHTTPNodePort = 30180
+	cfg.IngressTLSNodePort = 30543
 	return cfg
 }
 

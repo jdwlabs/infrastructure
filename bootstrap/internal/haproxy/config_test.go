@@ -75,6 +75,8 @@ func TestConfig_Generate(t *testing.T) {
 					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
 					{VMID: 301, IP: net.ParseIP("192.168.1.211")},
 				},
+				IngressHTTPPort: 30180,
+				IngressTLSPort:  30543,
 			},
 			wantErr: false,
 			checks: func(t *testing.T, config string) {
@@ -92,24 +94,86 @@ func TestConfig_Generate(t *testing.T) {
 				if !strings.Contains(config, "bind 192.168.1.237:443") {
 					t.Error("config missing HTTPS bind directive")
 				}
-				// Check ingress backends with send-proxy
-				if !strings.Contains(config, "server ingress-201 192.168.1.201:30080 check send-proxy") {
+				// Check ingress backends with send-proxy on the NGF NodePorts
+				if !strings.Contains(config, "server ingress-201 192.168.1.201:30180 check send-proxy") {
 					t.Error("config missing HTTP ingress backend for CP node")
 				}
-				if !strings.Contains(config, "server ingress-301 192.168.1.211:30080 check send-proxy") {
+				if !strings.Contains(config, "server ingress-301 192.168.1.211:30180 check send-proxy") {
 					t.Error("config missing HTTP ingress backend for worker node")
 				}
-				if !strings.Contains(config, "server ingress-201 192.168.1.201:30443 check send-proxy") {
+				if !strings.Contains(config, "server ingress-201 192.168.1.201:30543 check send-proxy") {
 					t.Error("config missing HTTPS ingress backend for CP node")
 				}
-				if !strings.Contains(config, "server ingress-301 192.168.1.211:30443 check send-proxy") {
+				if !strings.Contains(config, "server ingress-301 192.168.1.211:30543 check send-proxy") {
 					t.Error("config missing HTTPS ingress backend for worker node")
 				}
-				if !strings.Contains(config, "tcp-check connect port 30443") {
-					t.Error("HTTPS ingress tcp-check missing port 30443 health check")
+				if !strings.Contains(config, "tcp-check connect port 30180") {
+					t.Error("HTTP ingress tcp-check missing port 30180 health check")
 				}
-				if strings.Contains(config, "tcp-check connect port 30443 ssl") {
+				if !strings.Contains(config, "tcp-check connect port 30543") {
+					t.Error("HTTPS ingress tcp-check missing port 30543 health check")
+				}
+				if strings.Contains(config, "tcp-check connect port 30543 ssl") {
 					t.Error("HTTPS ingress tcp-check should not use ssl - backends expect PROXY protocol first")
+				}
+			},
+		},
+		{
+			name: "ingress nodes require HTTP port",
+			config: Config{
+				HAProxyIP: net.ParseIP("192.168.1.237"),
+				ControlPlanes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressNodes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressTLSPort: 30543,
+			},
+			wantErr: true,
+			errMsg:  "ingress HTTP port is required",
+		},
+		{
+			name: "ingress nodes require TLS port",
+			config: Config{
+				HAProxyIP: net.ParseIP("192.168.1.237"),
+				ControlPlanes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressNodes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressHTTPPort: 30180,
+			},
+			wantErr: true,
+			errMsg:  "ingress TLS port is required",
+		},
+		{
+			name: "custom ingress nodeports render verbatim",
+			config: Config{
+				HAProxyIP: net.ParseIP("192.168.1.237"),
+				ControlPlanes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressNodes: []Backend{
+					{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+				},
+				IngressHTTPPort: 31080,
+				IngressTLSPort:  31443,
+			},
+			wantErr: false,
+			checks: func(t *testing.T, config string) {
+				if !strings.Contains(config, "tcp-check connect port 31080") {
+					t.Error("custom HTTP ingress port not rendered")
+				}
+				if !strings.Contains(config, "tcp-check connect port 31443") {
+					t.Error("custom TLS ingress port not rendered")
+				}
+				if !strings.Contains(config, "192.168.1.201:31080 check send-proxy") {
+					t.Error("custom HTTP ingress backend not rendered")
+				}
+				if !strings.Contains(config, "192.168.1.201:31443 check send-proxy") {
+					t.Error("custom TLS ingress backend not rendered")
 				}
 			},
 		},
@@ -204,6 +268,8 @@ func TestConfig_Generate_ContainsExpectedSections(t *testing.T) {
 			{VMID: 202, IP: net.ParseIP("192.168.1.202")},
 			{VMID: 301, IP: net.ParseIP("192.168.1.211")},
 		},
+		IngressHTTPPort: 30180,
+		IngressTLSPort:  30543,
 	}
 
 	got, err := config.Generate()
@@ -266,6 +332,8 @@ func TestConfigFromClusterState(t *testing.T) {
 		HAProxyIP:            net.ParseIP("192.168.1.237"),
 		HAProxyStatsUser:     "haproxy",
 		HAProxyStatsPassword: "securepass",
+		IngressHTTPNodePort:  30180,
+		IngressTLSNodePort:   30543,
 	}
 
 	state := &types.ClusterState{
@@ -298,6 +366,12 @@ func TestConfigFromClusterState(t *testing.T) {
 	}
 	if got.StatsPassword != cfg.HAProxyStatsPassword {
 		t.Errorf("StatsPassword = %v, want %v", got.StatsPassword, cfg.HAProxyStatsPassword)
+	}
+	if got.IngressHTTPPort != cfg.IngressHTTPNodePort {
+		t.Errorf("IngressHTTPPort = %v, want %v", got.IngressHTTPPort, cfg.IngressHTTPNodePort)
+	}
+	if got.IngressTLSPort != cfg.IngressTLSNodePort {
+		t.Errorf("IngressTLSPort = %v, want %v", got.IngressTLSPort, cfg.IngressTLSNodePort)
 	}
 
 	// Verify only control planes are in ControlPlanes
