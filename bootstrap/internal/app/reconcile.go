@@ -202,7 +202,10 @@ func (app *App) RunReconcile(ctx context.Context) error {
 	}
 
 	if plan.IsEmpty() {
-		app.Logger.Info("no changes required")
+		app.Logger.Info("no node changes required")
+		if err := app.updateHAProxy(ctx, cfg, deployed); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -655,29 +658,8 @@ func (app *App) executePlan(
 	// Phase 4: Update HAProxy config
 	// Always update when CPs exist - CP IPs may change during reboots (DHCP)
 	// even when no CP membership change occurred.
-	if cfg.DryRun && len(deployed.ControlPlanes) > 0 {
-		app.Logger.Info("would update HAProxy configuration", zap.Int("backends", len(deployed.ControlPlanes)))
-	} else if !cfg.DryRun && len(deployed.ControlPlanes) > 0 {
-		haproxyConfig := haproxy.ConfigFromClusterState(cfg, deployed)
-		configStr, err := haproxyConfig.Generate()
-		if err != nil {
-			app.Logger.Error("failed to generate HAProxy config", zap.Error(err))
-			return fmt.Errorf("generate HAProxy config: %w", err)
-		}
-
-		haproxyClient := app.createHAProxyClient(cfg)
-		if haproxyClient == nil {
-			app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
-			return fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
-		}
-
-		if err := haproxyClient.Update(ctx, configStr); err != nil {
-			app.Logger.Error("HAProxy update failed",
-				zap.String("host", cfg.HAProxyIP.String()),
-				zap.String("user", cfg.HAProxyLoginUser),
-				zap.Error(err))
-			return fmt.Errorf("HAProxy update failed: %w", err)
-		}
+	if err := app.updateHAProxy(ctx, cfg, deployed); err != nil {
+		return err
 	}
 
 	// Phase 5: Fetch kubeconfig after bootstrap
@@ -947,6 +929,42 @@ func (app *App) executePlan(
 		app.Session.Workers = len(deployed.Workers)
 	}
 
+	return nil
+}
+
+// updateHAProxy regenerates and pushes the HAPRoxy config for the current
+// deployed state. It is a no-op when no control planes exist. In dry-run mode
+// it logs the intent without making changes.
+func (app *App) updateHAProxy(ctx context.Context, cfg *types.Config, deployed *types.ClusterState) error {
+	if len(deployed.ControlPlanes) == 0 {
+		return nil
+	}
+
+	if cfg.DryRun {
+		app.Logger.Info("would update HAProxy configuration", zap.Int("backends", len(deployed.ControlPlanes)))
+		return nil
+	}
+
+	haproxyConfig := haproxy.ConfigFromClusterState(cfg, deployed)
+	configStr, err := haproxyConfig.Generate()
+	if err != nil {
+		app.Logger.Error("failed to generate HAProxy", zap.Error(err))
+		return fmt.Errorf("generate HAProxy config: %w", err)
+	}
+
+	haproxyClient := app.createHAProxyClient(cfg)
+	if haproxyClient == nil {
+		app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
+		return fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
+	}
+
+	if err := haproxyClient.Update(ctx, configStr); err != nil {
+		app.Logger.Error("HAProxy update failed",
+			zap.String("host", cfg.HAProxyIP.String()),
+			zap.String("user", cfg.HAProxyLoginUser),
+			zap.Error(err))
+		return fmt.Errorf("HAProxy update failed: %w", err)
+	}
 	return nil
 }
 
