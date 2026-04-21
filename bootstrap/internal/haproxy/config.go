@@ -21,7 +21,7 @@ type Config struct {
 	StatsUser       string
 	StatsPassword   string
 	ControlPlanes   []Backend
-	IngressNodes    []Backend // All nodes running ingress-nginx (CPs + workers)
+	IngressNodes    []Backend // All nodes exposing ingress NodePort (CPs + workers)
 	IngressHTTPPort int       // NodePort for HTTP ingress traffic
 	IngressTLSPort  int       // NodePort for HTTPS/TLS ingress traffic
 }
