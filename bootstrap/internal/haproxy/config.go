@@ -126,7 +126,7 @@ backend ingress-http
     tcp-check connect port {{ .IngressHTTPPort }}
     default-server inter 5s fall 3 rise 2
 {{- range .IngressNodes }}
-    server ingress-{{ .VMID }} {{ .IP }}:{{ $.IngressHTTPPort }} check send-proxy
+    server ingress-{{ .VMID }} {{ .IP }}:{{ $.IngressHTTPPort }} check
 {{- end }}
 
 # ======= HTTPS INGRESS =======
@@ -145,7 +145,7 @@ backend ingress-https
     tcp-check connect port {{ .IngressTLSPort }}
     default-server inter 5s fall 3 rise 2
 {{- range .IngressNodes }}
-    server ingress-{{ .VMID }} {{ .IP }}:{{ $.IngressTLSPort }} check send-proxy
+    server ingress-{{ .VMID }} {{ .IP }}:{{ $.IngressTLSPort }} check
 {{- end }}
 {{- end }}
 `
