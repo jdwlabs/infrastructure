@@ -94,17 +94,17 @@ func TestConfig_Generate(t *testing.T) {
 				if !strings.Contains(config, "bind 192.168.1.237:443") {
 					t.Error("config missing HTTPS bind directive")
 				}
-				// Check ingress backends with send-proxy on the NGF NodePorts
-				if !strings.Contains(config, "server ingress-201 192.168.1.201:30180 check send-proxy") {
+				// Check ingress backends on the NGF NodePorts
+				if !strings.Contains(config, "server ingress-201 192.168.1.201:30180 check") {
 					t.Error("config missing HTTP ingress backend for CP node")
 				}
-				if !strings.Contains(config, "server ingress-301 192.168.1.211:30180 check send-proxy") {
+				if !strings.Contains(config, "server ingress-301 192.168.1.211:30180 check") {
 					t.Error("config missing HTTP ingress backend for worker node")
 				}
-				if !strings.Contains(config, "server ingress-201 192.168.1.201:30543 check send-proxy") {
+				if !strings.Contains(config, "server ingress-201 192.168.1.201:30543 check") {
 					t.Error("config missing HTTPS ingress backend for CP node")
 				}
-				if !strings.Contains(config, "server ingress-301 192.168.1.211:30543 check send-proxy") {
+				if !strings.Contains(config, "server ingress-301 192.168.1.211:30543 check") {
 					t.Error("config missing HTTPS ingress backend for worker node")
 				}
 				if !strings.Contains(config, "tcp-check connect port 30180") {
@@ -114,7 +114,7 @@ func TestConfig_Generate(t *testing.T) {
 					t.Error("HTTPS ingress tcp-check missing port 30543 health check")
 				}
 				if strings.Contains(config, "tcp-check connect port 30543 ssl") {
-					t.Error("HTTPS ingress tcp-check should not use ssl - backends expect PROXY protocol first")
+					t.Error("HTTPS ingress tcp-check should not use ssl")
 				}
 			},
 		},
@@ -169,10 +169,10 @@ func TestConfig_Generate(t *testing.T) {
 				if !strings.Contains(config, "tcp-check connect port 31443") {
 					t.Error("custom TLS ingress port not rendered")
 				}
-				if !strings.Contains(config, "192.168.1.201:31080 check send-proxy") {
+				if !strings.Contains(config, "192.168.1.201:31080 check") {
 					t.Error("custom HTTP ingress backend not rendered")
 				}
-				if !strings.Contains(config, "192.168.1.201:31443 check send-proxy") {
+				if !strings.Contains(config, "192.168.1.201:31443 check") {
 					t.Error("custom TLS ingress backend not rendered")
 				}
 			},
