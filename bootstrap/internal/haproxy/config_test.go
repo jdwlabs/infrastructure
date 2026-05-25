@@ -401,21 +401,19 @@ func TestConfigFromClusterState(t *testing.T) {
 		t.Errorf("missing backends for VMIDs: %v", expectedBackends)
 	}
 
-	// Verify IngressNodes includes both control planes and workers
-	if len(got.IngressNodes) != 3 {
-		t.Errorf("IngressNodes length = %v, want 3 (2 CPs + 1 worker)", len(got.IngressNodes))
+	// Verify IngressNodes contains only workers (CPs don't run nginx-gateway DaemonSet)
+	if len(got.IngressNodes) != 1 {
+		t.Errorf("IngressNodes length = %v, want 1 (workers only)", len(got.IngressNodes))
 	}
 
 	expectedIngress := map[types.VMID]string{
-		201: "192.168.1.201",
-		202: "192.168.1.202",
 		301: "192.168.1.211",
 	}
 
 	for _, backend := range got.IngressNodes {
 		expectedIP, ok := expectedIngress[backend.VMID]
 		if !ok {
-			t.Errorf("unexpected ingress node VMID: %d", backend.VMID)
+			t.Errorf("unexpected ingress node VMID: %d (CPs must not appear in IngressNodes)", backend.VMID)
 			continue
 		}
 		if backend.IP.String() != expectedIP {
