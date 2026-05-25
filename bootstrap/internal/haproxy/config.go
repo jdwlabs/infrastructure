@@ -198,10 +198,6 @@ func ConfigFromClusterState(cfg *types.Config, state *types.ClusterState) *Confi
 			VMID: cp.VMID,
 			IP:   cp.IP,
 		})
-		haConfig.IngressNodes = append(haConfig.IngressNodes, Backend{
-			VMID: cp.VMID,
-			IP:   cp.IP,
-		})
 	}
 
 	for _, w := range state.Workers {
