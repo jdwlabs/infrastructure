@@ -40,6 +40,45 @@ docs: add scenario for node replacement runbook
 ci: add terraform validate to PR workflow
 ```
 
+### Footers
+
+Footers appear after an optional body, separated by a blank line. Common footers:
+
+| Footer | When to use |
+|--------|-------------|
+| `Refs: JDWLABS-XX` | Links commit to a Jira issue (does not close it) |
+| `Closes: JDWLABS-XX` | Closes the Jira issue on merge |
+| `Closes: #N` | Closes a GitHub issue by number |
+| `BREAKING CHANGE: <desc>` | Required when a commit changes cluster topology or removes a module interface |
+| `Co-Authored-By: Name <email>` | Credit a co-author (human or AI) |
+
+**AI contributor footer** — include when commits were written with AI assistance:
+
+```
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+**Full examples with footers:**
+
+```
+feat(clusters): add talos-prod-2 worker node pool
+
+Adds 3 additional worker nodes to the production cluster.
+Terraform plan output reviewed and approved before apply.
+
+Refs: JDWLABS-71
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+```
+feat!(terraform): remove proxmox-v2 module
+
+BREAKING CHANGE: proxmox-v2 module removed; all clusters must
+migrate to proxmox-v3 before applying this change.
+
+Closes: JDWLABS-68
+```
+
 ### Rules
 
 - Subject line ≤72 characters, lowercase, no trailing period
