@@ -1,0 +1,27 @@
+# AGENTS.md
+
+Context for AI agents (OpenAI Codex, GitHub Copilot, and others) working in this repository.
+
+## What This Repo Is
+
+jdwlabs `infrastructure` defines the physical and virtual infrastructure for jdwlabs clusters using Terraform and Talos Linux. It provisions nodes, networking, and storage — but does NOT manage what runs on the cluster (that is the `platform` and `deployments` repos).
+
+## Key Concepts
+
+- **Talos Linux:** Immutable, API-driven OS for Kubernetes nodes. No SSH — all management via the Talos API (`talosctl`)
+- **Terraform:** Declarative infrastructure. Changes require `terraform plan` review before `terraform apply`
+- **State:** Terraform state is stored remotely — never edit `.tfstate` files directly
+- **Separation of concerns:** This repo provisions the cluster; `platform` configures what runs on it
+
+## Key Files
+
+- `clusters/<name>/` — per-cluster node definitions and network config
+- `terraform/modules/` — reusable Terraform modules
+- `scenarios/<name>/` — step-by-step runbooks for operational tasks
+
+## Constraints
+
+- Never run `terraform apply` or `terraform destroy` autonomously — always plan and stop
+- Never run `kubectl apply` or `kubectl delete` — cluster workload management belongs to ArgoCD
+- Read-only `kubectl get/describe/logs` commands are safe for investigation
+- Do not push changes to remote without developer review
