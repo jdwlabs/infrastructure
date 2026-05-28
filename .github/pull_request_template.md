@@ -6,10 +6,15 @@
 
 - [ ] `feat` — new infrastructure capability
 - [ ] `fix` — bug fix
-- [ ] `chore` — maintenance / provider upgrade / config
-- [ ] `docs` — documentation only
+- [ ] `build` — build system or provider/module dependency change
+- [ ] `chore` — maintenance / config / tooling
 - [ ] `ci` — CI/CD pipeline change
+- [ ] `docs` — documentation only
+- [ ] `perf` — performance improvement
 - [ ] `refactor` — restructure, no functional change
+- [ ] `revert` — revert a previous commit
+- [ ] `style` — formatting / whitespace (no logic change)
+- [ ] `test` — test additions or updates
 
 ## Checklist
 

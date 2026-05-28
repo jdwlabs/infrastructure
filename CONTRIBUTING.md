@@ -10,12 +10,15 @@ This repository follows [Conventional Commits](https://www.conventionalcommits.o
 |------|-------------|
 | `feat` | New infrastructure capability (new cluster, new module) |
 | `fix` | Bug fix in Terraform config or bootstrap scripts |
-| `chore` | Maintenance: provider upgrades, config cleanup |
-| `docs` | Documentation only (no infra changes) |
+| `build` | Provider, module, or tool version change |
+| `chore` | Maintenance: config cleanup, tooling (no infra change) |
 | `ci` | CI/CD pipeline changes |
+| `docs` | Documentation only (no infra changes) |
+| `perf` | Performance improvement |
 | `refactor` | Restructure with no functional change |
-| `test` | Adding or updating infrastructure tests |
 | `revert` | Reverting a previous commit |
+| `style` | Formatting or whitespace only (no logic change) |
+| `test` | Adding or updating infrastructure tests |
 
 ### Format
 
