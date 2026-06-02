@@ -10,7 +10,7 @@ Infrastructure-as-code for jdwlabs cluster provisioning. Contains Terraform modu
 
 - `terraform/` — Terraform modules and root configuration for cluster infrastructure
 - `clusters/` — Per-cluster node definitions, network, and storage configuration
-- `bootstrap/` — Initial cluster bootstrap scripts and tooling
+- `bootstrap/` — `talops` CLI: full cluster lifecycle (bootstrap, reconcile, status, reset, infra deploy/destroy, up/down)
 - `scenarios/` — Step-by-step runbooks for common operational tasks
 - `docs/` — Architecture and operations documentation
 

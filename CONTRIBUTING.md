@@ -35,7 +35,7 @@ This repository follows [Conventional Commits](https://www.conventionalcommits.o
 ```
 feat(clusters): add talos-prod cluster definition
 fix(terraform): correct worker node count for talos-4h8
-chore: upgrade proxmox provider to 3.0.1
+build: upgrade proxmox provider to 3.0.1
 docs: add scenario for node replacement runbook
 ci: add terraform validate to PR workflow
 ```
@@ -46,9 +46,9 @@ Footers appear after an optional body, separated by a blank line. Common footers
 
 | Footer | When to use |
 |--------|-------------|
-| `Refs: JDWLABS-XX` | Links commit to a Jira issue (does not close it) |
-| `Closes: JDWLABS-XX` | Closes the Jira issue on merge |
-| `Closes: #N` | Closes a GitHub issue by number |
+| `Refs: JDWLABS-XX` | Links commit to a Jira issue |
+| `Refs: #N` | Links commit to a GitHub issue by number |
+| `Closes: #N` | Auto-closes a GitHub issue on merge |
 | `BREAKING CHANGE: <desc>` | Required when a commit changes cluster topology or removes a module interface |
 | `Co-Authored-By: Name <email>` | Credit a co-author (human or AI) |
 
@@ -71,12 +71,12 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
 ```
-feat!(terraform): remove proxmox-v2 module
+feat(terraform)!: remove proxmox-v2 module
 
 BREAKING CHANGE: proxmox-v2 module removed; all clusters must
 migrate to proxmox-v3 before applying this change.
 
-Closes: JDWLABS-68
+Refs: JDWLABS-68
 ```
 
 ### Rules
@@ -87,7 +87,7 @@ Closes: JDWLABS-68
 
 ## Pull Requests
 
-1. Branch from `main`: `git checkout -b feat/short-description`
+1. Create a worktree: `gwta feat/short-description` (or `git worktree add ~/worktrees/infrastructure/feat/short-description -b feat/short-description`)
 2. Run `terraform validate` before opening PR
 3. PR title must follow conventional commit format
 4. Include `terraform plan` output in PR description for any infra changes

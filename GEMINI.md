@@ -11,7 +11,7 @@ Infrastructure-as-code for jdwlabs cluster provisioning. Terraform + Talos Linux
 
 - `terraform/` — Terraform modules and root config
 - `clusters/` — Per-cluster node and network definitions
-- `bootstrap/` — Cluster bootstrap tooling
+- `bootstrap/` — `talops` CLI: full cluster lifecycle (bootstrap, reconcile, infra deploy/destroy, up/down)
 - `scenarios/` — Operational runbooks
 
 ## Development Commands
@@ -32,3 +32,4 @@ kubectl get pods -A               # Pod status (read-only)
 - Read-only `kubectl get/describe/logs` are safe
 - Never modify state files directly
 - Produce plans and stop — human applies
+- Never push to remote — stage and commit only
