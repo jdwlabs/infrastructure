@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(terraform init*)",
+      "Bash(terraform validate*)",
+      "Bash(terraform plan*)",
+      "Bash(terraform show*)",
+      "Bash(terraform fmt*)",
+      "Bash(kubectl get*)",
+      "Bash(kubectl describe*)",
+      "Bash(kubectl logs*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status*)",
+      "Bash(git add *)",
+      "Bash(git commit*)"
+    ],
+    "deny": [
+      "Bash(terraform apply*)",
+      "Bash(terraform destroy*)",
+      "Bash(kubectl apply*)",
+      "Bash(kubectl delete*)",
+      "Bash(git push*)"
+    ]
+  }
+}
