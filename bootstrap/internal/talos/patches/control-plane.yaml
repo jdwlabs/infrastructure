@@ -37,6 +37,17 @@ cluster:
       heartbeat-interval: "500"
       election-timeout: "5000"
   apiServer:
+    # Trust id_tokens from the platform Dex instance so Headlamp (OIDC
+    # client "headlamp") can authenticate users against the API server.
+    # The issuer is platform-layer (ArgoCD's Dex) — a deliberate upward
+    # coupling: without it no human-facing SSO to the cluster exists.
+    # The JWT authenticator initializes lazily, so the apiserver still
+    # boots when the issuer is unreachable (e.g. during cluster bootstrap).
+    extraArgs:
+      oidc-issuer-url: https://argocd.jdwlabs.com/api/dex
+      oidc-client-id: headlamp
+      oidc-username-claim: email
+      oidc-username-prefix: "oidc:"
     certSANs:
       - {{ .ControlPlaneEndpoint }}
       - {{ .HAProxyIP }}
