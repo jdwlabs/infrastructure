@@ -658,3 +658,43 @@ func (c *Client) GenerateNodeConfig(_ context.Context, spec *types.NodeSpec, sec
 	outputDir := filepath.Join(secretsDir, "..", "nodes")
 	return nc.Generate(spec, outputDir)
 }
+
+// NodeVersion returns the Talos version tag reported by the node's machine API.
+// Returns an empty string when the API is unreachable (caller decides whether
+// to skip or abort).
+func (c *Client) NodeVersion(ctx context.Context, ip net.IP) (string, error) {
+	tc, err := c.getClient(ctx, ip, false)
+	if err != nil {
+		return "", fmt.Errorf("create talos client: %w", err)
+	}
+	defer func() { _ = tc.Close() }()
+
+	resp, err := tc.Version(ctx)
+	if err != nil {
+		return "", fmt.Errorf("version call to %s: %w", ip, err)
+	}
+
+	if len(resp.Messages) == 0 || resp.Messages[0].Version == nil {
+		return "", fmt.Errorf("empty version response from %s", ip)
+	}
+
+	return resp.Messages[0].Version.Tag, nil
+}
+
+// Upgrade triggers a Talos upgrade on the node at ip to the given installer
+// image. The call returns as soon as the upgrade is accepted; the caller must
+// wait for the node to reboot and become healthy via WaitForAPI.
+func (c *Client) Upgrade(ctx context.Context, ip net.IP, image string) error {
+	tc, err := c.getClient(ctx, ip, false)
+	if err != nil {
+		return fmt.Errorf("create talos client: %w", err)
+	}
+	defer func() { _ = tc.Close() }()
+
+	_, err = tc.Upgrade(ctx, image, true, false, false)
+	if err != nil {
+		return fmt.Errorf("upgrade %s to %s: %w", ip, image, err)
+	}
+
+	return nil
+}
