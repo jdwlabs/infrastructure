@@ -31,3 +31,37 @@ machine:
       - name: nvme_tcp
       - name: vfio_pci
       - name: zfs
+---
+# virtio_net leaves tx-checksum-ip-generic enabled on flannel's VXLAN link, so
+# inner TCP checksums are never filled in after encapsulation; the receiving
+# node's conntrack marks those packets INVALID and kube-proxy's nftables rules
+# drop them, silently blackholing cross-node pod TCP while ICMP still passes.
+# rx-checksumming is fixed-on under virtio_net, so the only lever is sender-side
+# tx offload, disabled on every node. The feature set mirrors the interim
+# in-cluster DaemonSet (ethtool -K tx-checksum-ip-generic/tx/gso/gro/tso off)
+# so behaviour is unchanged while that DaemonSet is retired. Talos re-applies
+# this whenever the EthernetSpec reconciles, which covers boot-time creation of
+# flannel.1; after flannel upgrades that recreate the link mid-life, re-check
+# with `talosctl get ethernetstatus flannel.1`.
+apiVersion: v1alpha1
+kind: EthernetConfig
+name: flannel.1
+features:
+  tx-checksum-ip-generic: false
+  tx-generic-segmentation: false
+  tx-tcp-segmentation: false
+  tx-tcp6-segmentation: false
+  rx-gro: false
+---
+# Same offload set on the physical uplink as belt-and-braces: encapsulated
+# packets leave through this NIC and virtio_net's tx offloads were implicated
+# in the same checksum corruption.
+apiVersion: v1alpha1
+kind: EthernetConfig
+name: {{ .DefaultNetworkInterface }}
+features:
+  tx-checksum-ip-generic: false
+  tx-generic-segmentation: false
+  tx-tcp-segmentation: false
+  tx-tcp6-segmentation: false
+  rx-gro: false
