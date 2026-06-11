@@ -575,6 +575,164 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+func TestClient_CordonNode(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	tests := []struct {
+		name        string
+		nodeName    string
+		mockErr     bool
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "successful cordon",
+			nodeName: "worker-1",
+			wantErr:  false,
+		},
+		{
+			name:        "cordon fails",
+			nodeName:    "worker-1",
+			mockErr:     true,
+			wantErr:     true,
+			errContains: "kubectl cordon",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				assert.Equal(t, "kubectl", name)
+				assert.Contains(t, args, "cordon")
+				assert.Contains(t, args, tt.nodeName)
+
+				if tt.mockErr {
+					if runtime.GOOS == "windows" {
+						return exec.Command("cmd", "/c", "exit", "1")
+					}
+					return exec.Command("false")
+				}
+				return mockExecCmd("node/worker-1 cordoned", 0)
+			}
+
+			client, _ := newTestClient(t)
+			err := client.CordonNode(context.Background(), tt.nodeName)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestClient_UncordonNode(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	tests := []struct {
+		name        string
+		nodeName    string
+		mockErr     bool
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "successful uncordon",
+			nodeName: "worker-1",
+			wantErr:  false,
+		},
+		{
+			name:        "uncordon fails",
+			nodeName:    "worker-1",
+			mockErr:     true,
+			wantErr:     true,
+			errContains: "kubectl uncordon",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				assert.Equal(t, "kubectl", name)
+				assert.Contains(t, args, "uncordon")
+				assert.Contains(t, args, tt.nodeName)
+
+				if tt.mockErr {
+					if runtime.GOOS == "windows" {
+						return exec.Command("cmd", "/c", "exit", "1")
+					}
+					return exec.Command("false")
+				}
+				return mockExecCmd("node/worker-1 uncordoned", 0)
+			}
+
+			client, _ := newTestClient(t)
+			err := client.UncordonNode(context.Background(), tt.nodeName)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestClient_WaitForLonghornVolumesHealthy(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	t.Run("healthy immediately — no degraded volumes", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			assert.Equal(t, "kubectl", name)
+			assert.Contains(t, args, "volumes.longhorn.io")
+			// Empty output means jsonpath found no degraded volumes
+			return mockExecCmd("", 0)
+		}
+
+		client, _ := newTestClient(t)
+		err := client.WaitForLonghornVolumesHealthy(context.Background(), 5*time.Second)
+		assert.NoError(t, err)
+	})
+
+	t.Run("kubectl fails — treated as healthy to avoid blocking on missing Longhorn", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if runtime.GOOS == "windows" {
+				return exec.Command("cmd", "/c", "exit", "1")
+			}
+			return exec.Command("false")
+		}
+
+		client, _ := newTestClient(t)
+		err := client.WaitForLonghornVolumesHealthy(context.Background(), 5*time.Second)
+		assert.NoError(t, err)
+	})
+
+	t.Run("context timeout with persistent degraded volumes", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			// Each line is a degraded volume name from the jsonpath query
+			return mockExecCmd("pvc-abc123\npvc-def456\npvc-ghi789", 0)
+		}
+
+		client, _ := newTestClient(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		err := client.WaitForLonghornVolumesHealthy(ctx, 100*time.Millisecond)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "degraded")
+	})
+}
+
 func TestIntegration_Client(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

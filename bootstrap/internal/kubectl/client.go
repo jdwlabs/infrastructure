@@ -198,6 +198,100 @@ func (c *Client) GetParsedNodes(ctx context.Context) ([]KubeNode, error) {
 	return nodes, nil
 }
 
+// CordonNode marks a node as unschedulable so pods are not placed on it
+// while the node is being upgraded or drained.
+func (c *Client) CordonNode(ctx context.Context, nodeName string) error {
+	c.logger.Info("cordoning node", zap.String("node", nodeName))
+
+	args := []string{"cordon", nodeName}
+	ac, cmd := c.auditedCommand(ctx, args...)
+	if output, err := combinedOutput(ac, cmd); err != nil {
+		return fmt.Errorf("%s: %w, output: %s", c.cmdString(args...), err, string(output))
+	}
+
+	return nil
+}
+
+// UncordonNode restores a node to schedulable state after an upgrade completes.
+func (c *Client) UncordonNode(ctx context.Context, nodeName string) error {
+	c.logger.Info("uncordoning node", zap.String("node", nodeName))
+
+	args := []string{"uncordon", nodeName}
+	ac, cmd := c.auditedCommand(ctx, args...)
+	if output, err := combinedOutput(ac, cmd); err != nil {
+		return fmt.Errorf("%s: %w, output: %s", c.cmdString(args...), err, string(output))
+	}
+
+	return nil
+}
+
+// WaitForLonghornVolumesHealthy polls until no volumes in volumes.longhorn.io report
+// a degraded replica count, or the timeout expires. A kubectl failure is treated as
+// healthy — it means Longhorn is not installed and the cluster should not be blocked.
+func (c *Client) WaitForLonghornVolumesHealthy(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		degraded, err := c.countDegradedLonghornVolumes(ctx)
+		if err != nil {
+			// Longhorn not present or kubectl failed — unblock the caller.
+			return nil
+		}
+		if degraded == 0 {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%d degraded Longhorn volume(s) after %s — aborting to protect data", degraded, timeout)
+		}
+
+		c.logger.Info("waiting for Longhorn volumes to heal",
+			zap.Int("degraded", degraded),
+			zap.Duration("timeout", timeout))
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%d degraded Longhorn volume(s): %w", degraded, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// countDegradedLonghornVolumes counts volumes.longhorn.io that have fewer ready
+// replicas than desired. Returns (0, nil) when Longhorn is absent or the query fails.
+func (c *Client) countDegradedLonghornVolumes(ctx context.Context) (int, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// jsonpath filter returns one line per degraded volume name.
+	// An empty response means all volumes are healthy.
+	args := []string{
+		"get", "volumes.longhorn.io",
+		"--all-namespaces",
+		"--no-headers",
+		"-o", `jsonpath={range .items[?(@.status.robustness!="healthy")]}{.metadata.name}{"\n"}{end}`,
+	}
+	ac, cmd := c.auditedCommand(queryCtx, args...)
+	output, err := combinedOutput(ac, cmd)
+	if err != nil {
+		// Longhorn CRD absent or API unreachable — treat as healthy.
+		return 0, fmt.Errorf("longhorn query failed: %w", err)
+	}
+
+	// Count lines that look like Kubernetes resource names (non-empty, no spaces).
+	// This ignores shell profile banner lines that may appear in test environments.
+	count := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.Contains(trimmed, " ") {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // WaitForNodeReady polls until the named node reaches Ready status or the timeout expires
 func (c *Client) WaitForNodeReady(ctx context.Context, nodeName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
