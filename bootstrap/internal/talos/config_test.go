@@ -1,11 +1,13 @@
 package talos
 
 import (
+	"bytes"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"text/template"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"github.com/stretchr/testify/assert"
@@ -538,6 +540,64 @@ func TestResolveNodePatch(t *testing.T) {
 		result := resolveNodePatch(301, "", "")
 		assert.Empty(t, result)
 	})
+}
+
+// TestGeneratePatchContainsInstallerImage verifies that the rendered patch always
+// carries the installer image from cfg.InstallerImage, regardless of what the base
+// config was generated with. This catches the stale-base-config bug where bumping
+// installer_image in tfvars had no effect on existing nodes.
+func TestGeneratePatchContainsInstallerImage(t *testing.T) {
+	tests := []struct {
+		name           string
+		installerImage string
+		role           types.Role
+	}{
+		{
+			name:           "control-plane patch embeds installer image",
+			installerImage: "factory.talos.dev/installer/upgraded:v1.13.4",
+			role:           types.RoleControlPlane,
+		},
+		{
+			name:           "worker patch embeds installer image",
+			installerImage: "factory.talos.dev/installer/upgraded:v1.13.4",
+			role:           types.RoleWorker,
+		},
+		{
+			name:           "different image propagated correctly",
+			installerImage: "ghcr.io/siderolabs/installer:v1.12.0",
+			role:           types.RoleControlPlane,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := types.TestConfig()
+			cfg.InstallerImage = tt.installerImage
+			cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+
+			// Render the patch for the role
+			tmplStr, _ := resolvePatchTemplate(tt.role, "", "")
+			data := templateData{
+				Hostname:                "test-node",
+				DefaultDisk:             cfg.DefaultDisk,
+				DefaultNetworkInterface: cfg.DefaultNetworkInterface,
+				HAProxyIP:               cfg.HAProxyIP.String(),
+				ControlPlaneEndpoint:    cfg.ControlPlaneEndpoint,
+				InstallerImage:          cfg.InstallerImage,
+				ClusterName:             cfg.ClusterName,
+			}
+
+			tmpl, err := template.New("patch").Parse(tmplStr)
+			require.NoError(t, err)
+
+			var buf bytes.Buffer
+			require.NoError(t, tmpl.Execute(&buf, data))
+
+			rendered := buf.String()
+			assert.Contains(t, rendered, tt.installerImage,
+				"rendered patch for role %s must contain InstallerImage", tt.role)
+		})
+	}
 }
 
 func BenchmarkNodeConfigGenerate(b *testing.B) {

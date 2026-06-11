@@ -2,6 +2,7 @@ machine:
   type: controlplane
   install:
     disk: /dev/{{ .DefaultDisk }}
+    image: {{ .InstallerImage }}
     extraKernelArgs:
       - console=tty0
       - console=ttyS0
