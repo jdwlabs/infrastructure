@@ -65,8 +65,13 @@ func (app *App) InitConfig(_ *cobra.Command) error {
 	cfg := app.Cfg
 	if v := os.Getenv("CLUSTER_NAME"); v != "" {
 		cfg.ClusterName = v
-		cfg.SecretsDir = filepath.Join("clusters", cfg.ClusterName, "secrets")
 	}
+	// ClusterName is final here (default < --cluster flag < CLUSTER_NAME env).
+	// Re-derive SecretsDir from it: the flag writes ClusterName after
+	// DefaultConfig precomputed the path, which once sent secrets for a named
+	// cluster to clusters/cluster/ and generated a rogue CA there.
+	// SECRETS_DIR below still wins as an explicit override.
+	cfg.SecretsDir = filepath.Join("clusters", cfg.ClusterName, "secrets")
 	if v := os.Getenv("TERRAFORM_TFVARS"); v != "" {
 		cfg.TerraformTFVars = v
 	}
