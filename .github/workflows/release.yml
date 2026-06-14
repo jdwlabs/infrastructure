@@ -14,11 +14,11 @@ jobs:
       run:
         working-directory: bootstrap
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.4.0
         with:
           go-version-file: bootstrap/go.mod
 
