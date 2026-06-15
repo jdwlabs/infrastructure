@@ -23,7 +23,7 @@ require (
 	github.com/apparentlymart/go-textseg/v13 v13.0.0 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
-	github.com/cloudflare/circl v1.5.0 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/containerd/go-cni v1.1.10 // indirect
 	github.com/containernetworking/cni v1.2.3 // indirect
 	github.com/cosi-project/runtime v0.7.6 // indirect
