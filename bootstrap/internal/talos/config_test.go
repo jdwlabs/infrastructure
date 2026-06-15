@@ -80,7 +80,9 @@ func TestNodeConfigGenerate_ControlPlane(t *testing.T) {
 	assert.Contains(t, contentStr, "endpoint: https://cluster.example.com:6443")
 	assert.Contains(t, contentStr, "disk: /dev/sda")
 	assert.Contains(t, contentStr, "interface: eth0")
-	assert.Contains(t, contentStr, "vm.nr_hugepages: \"1024\"")
+	// Control planes do not schedule workloads (allowSchedulingOnControlPlanes:
+	// false), so the hugepages reservation is worker-only — see the worker test.
+	assert.NotContains(t, contentStr, "vm.nr_hugepages")
 	// Note: the actual field name is allowSchedulingOnControlPlanes (with s)
 	assert.Contains(t, contentStr, "allowSchedulingOnControlPlanes: false")
 }
@@ -129,6 +131,8 @@ func TestNodeConfigGenerate_Worker(t *testing.T) {
 	// Hostname is set via HostnameConfig with auto: stable, not inline
 	assert.Contains(t, contentStr, "auto: stable")
 	assert.Contains(t, contentStr, "destination: /var/local")
+	// hugepages are reserved on workers (where workloads run), not control planes
+	assert.Contains(t, contentStr, "vm.nr_hugepages: \"1024\"")
 	assert.NotContains(t, contentStr, "allowSchedulingOnControlPlanes")
 }
 
