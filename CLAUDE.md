@@ -53,6 +53,15 @@ kubectl logs <pod> -n <ns>        # Pod logs
 
 See `scenarios/` for step-by-step runbooks for common failure modes (node not joining, disk issues, network partition).
 
+## Secrets
+
+Sensitive artifacts (`terraform.tfvars`, the Talos secrets bundle, `talosconfig`, bootstrap
+state) are stored as SOPS+age encrypted `*.enc.yaml` files committed to git — the shared,
+versioned source of truth. Plaintext working copies are gitignored and regenerated on demand.
+`talops` auto-hydrates before a command and auto-seals changed plaintext after (disable with
+`TALOPS_NO_AUTOSEAL=1`). Manage with `talops secrets {status,hydrate,seal,lock,edit,add-device}`.
+See `docs/secrets.md`.
+
 ## AI Agent Contract
 
 - `terraform apply` is NEVER run autonomously — produce a plan, stop, and await human approval
@@ -60,6 +69,7 @@ See `scenarios/` for step-by-step runbooks for common failure modes (node not jo
 - `kubectl apply` and `kubectl delete` are out of scope — use ArgoCD via the `deployments` repo
 - Read-only `kubectl get`, `kubectl describe`, `kubectl logs` are safe
 - Never modify `.tfstate` files directly — they are managed by the Terraform backend
+- Never commit decrypted plaintext secrets; only the encrypted `*.enc.yaml` vault is tracked
 - Never push to remote — stage and commit only
 
 ## References

@@ -21,12 +21,20 @@ docs/         Architecture documentation
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 # Edit terraform.tfvars with your Proxmox credentials and cluster settings
 
-# 2. Build the bootstrap tool
+# 2. Set up the secret vault (SOPS + age) — see docs/secrets.md
+age-keygen -o ~/.config/sops/age/keys.txt
+talops secrets add-device <your-age-public-key>   # existing repo: git pull instead
+
+# 3. Build the bootstrap tool
 cd bootstrap && make build
 
-# 3. Provision and bootstrap
+# 4. Provision and bootstrap
 ./build/talops up
 ```
+
+Secrets (`terraform.tfvars`, the Talos secrets bundle, `talosconfig`, and bootstrap state)
+are stored as SOPS+age encrypted files committed to git and shared across machines. See
+[docs/secrets.md](docs/secrets.md) for setup, onboarding a new device, and revocation.
 
 ## Commands
 
@@ -43,6 +51,9 @@ talops infra destroy         Destroy infrastructure
 talops infra plan            Preview infrastructure changes
 talops infra status          Show infrastructure state
 talops infra cleanup         Remove generated Terraform files
+talops secrets status        Show vault recipients and artifact state
+talops secrets add-device    Authorize a device's age key and re-key the vault
+talops secrets hydrate/seal  Decrypt vault to working files / encrypt back
 ```
 
 ## Demo
