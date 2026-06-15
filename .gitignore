@@ -14,6 +14,11 @@ Thumbs.db
 *.key
 *.secret
 
-# Bootstrap runtime state
-clusters/
+# Bootstrap runtime state — plaintext working cache (regenerable).
+# The encrypted vault/ under each cluster is committed; only the decrypted
+# working copies are ignored.
+clusters/*/secrets/
+clusters/*/nodes/
+clusters/*/state/
+clusters/*/*.log
 logs/
