@@ -4,9 +4,39 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMarkReadOnly(t *testing.T) {
+	mk := func(name, parent string) *cobra.Command {
+		c := &cobra.Command{Use: name}
+		if parent != "" {
+			p := &cobra.Command{Use: parent}
+			p.AddCommand(c)
+		}
+		return c
+	}
+	cases := []struct {
+		name, parent string
+		readOnly     bool
+	}{
+		{"status", "", true},
+		{"plan", "infra", true},
+		{"version", "", true},
+		{"hydrate", "secrets", true},
+		{"seal", "secrets", true},
+		{"reconcile", "", false},
+		{"up", "", false},
+		{"deploy", "infra", false},
+	}
+	for _, tc := range cases {
+		a := New("test")
+		a.MarkReadOnly(mk(tc.name, tc.parent))
+		assert.Equal(t, tc.readOnly, a.readOnlyCmd, "%s (parent %q)", tc.name, tc.parent)
+	}
+}
 
 func TestInitConfigSecretsDir(t *testing.T) {
 	t.Run("derives SecretsDir from ClusterName set by flag", func(t *testing.T) {
