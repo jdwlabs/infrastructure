@@ -20,8 +20,8 @@ github.com/brianvoe/gofakeit/v6 v6.24.0 h1:74yq7RRz/noddscZHRS2T84oHZisW9muwbb8s
 github.com/brianvoe/gofakeit/v6 v6.24.0/go.mod h1:Ow6qC71xtwm79anlwKRlWZW6zVq9D2XHE4QSSMP/rU8=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
-github.com/cloudflare/circl v1.5.0 h1:hxIWksrX6XN5a1L2TI/h53AGPhNHoUBo+TD1ms9+pys=
-github.com/cloudflare/circl v1.5.0/go.mod h1:uddAzsPgqdMAYatqJ0lsjX1oECcQLIlRpzZh3pJrofs=
+github.com/cloudflare/circl v1.6.3 h1:9GPOhQGF9MCYUeXyMYlqTR6a5gTrgR/fBLXvUgtVcg8=
+github.com/cloudflare/circl v1.6.3/go.mod h1:2eXP6Qfat4O/Yhh8BznvKnJ+uzEoTQ6jVKJRn81BiS4=
 github.com/containerd/go-cni v1.1.10 h1:c2U73nld7spSWfiJwSh/8W9DK+/qQwYM2rngIhCyhyg=
 github.com/containerd/go-cni v1.1.10/go.mod h1:/Y/sL8yqYQn1ZG1om1OncJB1W4zN3YmjfP/ShCzG/OY=
 github.com/containernetworking/cni v1.2.3 h1:hhOcjNVUQTnzdRJ6alC5XF+wd9mfGIUaj8FuJbEslXM=
