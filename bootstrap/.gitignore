@@ -12,13 +12,19 @@ talos-bootstrap.exe
 *.out
 vendor/
 
-# Cluster state (sensitive)
-clusters/
-secrets/
+# Cluster state — plaintext working cache (regenerable). The encrypted vault/
+# is committed; only the decrypted working copies are ignored.
+clusters/*/secrets/
+clusters/*/nodes/
+clusters/*/state/
+clusters/*/*.log
 *.yaml
 !*.example
 # Source YAML files embedded in the binary are not generated configs
 !internal/talos/patches/*.yaml
+# The encrypted SOPS vault is the shared source of truth — keep it tracked
+!clusters/*/vault/
+!clusters/*/vault/*.enc.yaml
 
 # IDE
 .vscode/
