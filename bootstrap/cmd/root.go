@@ -20,6 +20,8 @@ var version = "dev"
 func Execute() error {
 	a := app.New(version)
 
+	var allowStaleVault bool
+	var fetchVault bool
 	var runErr error
 	defer func() {
 		a.Close(runErr)
@@ -30,10 +32,25 @@ func Execute() error {
 		Short:        "Smart reconciliation for Talos clusters",
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Anchor to the repo root first so clusters/, terraform/, and the
+			// vault resolve identically regardless of the invocation directory.
+			if err := a.AnchorToRepoRoot(cmd); err != nil {
+				return err
+			}
 			if err := a.InitConfig(cmd); err != nil {
 				return err
 			}
 			if err := a.InitSession(cmd); err != nil {
+				return err
+			}
+			// Decrypt the committed vault into the plaintext working files
+			// before anything reads them (tfvars first, so path resolution
+			// below can find a freshly hydrated terraform.tfvars).
+			if err := a.HydrateSecrets(); err != nil {
+				return err
+			}
+			a.MarkReadOnly(cmd)
+			if err := a.CheckVaultGit(allowStaleVault, fetchVault); err != nil {
 				return err
 			}
 			a.ResolveAllPaths()
@@ -67,6 +84,8 @@ func Execute() error {
 	rootCmd.PersistentFlags().BoolVar(&cfg.InsecureSSH, "insecure-ssh", false, "Skip SSH host key verification (INSECURE)")
 	rootCmd.PersistentFlags().StringVar(&cfg.TerraformDir, "terraform-dir", "", "Directory containing Terraform files (default: auto-detect)")
 	rootCmd.PersistentFlags().StringVar(&cfg.PatchDir, "patch-dir", "", "Directory for patch template overrides")
+	rootCmd.PersistentFlags().BoolVar(&allowStaleVault, "allow-stale-vault", false, "Operate even if the local branch is behind upstream (vault may be stale)")
+	rootCmd.PersistentFlags().BoolVar(&fetchVault, "fetch", false, "Run git fetch before the stale-vault check for an accurate behind-count")
 
 	rootCmd.AddCommand(
 		bootstrapCmd(a),
@@ -77,6 +96,7 @@ func Execute() error {
 		upCmd(a),
 		downCmd(a),
 		pruneNodesCmd(a),
+		secretsCmd(a),
 		versionCmd(version),
 	)
 
@@ -134,7 +154,8 @@ func statusCmd(a *app.App) *cobra.Command {
 }
 
 func resetCmd(a *app.App) *cobra.Command {
-	return &cobra.Command{
+	var purgeVault bool
+	cmd := &cobra.Command{
 		Use:   "reset",
 		Short: "Reset cluster state",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -148,20 +169,47 @@ func resetCmd(a *app.App) *cobra.Command {
 			}
 
 			clusterDir := filepath.Join("clusters", a.Cfg.ClusterName)
+			prompt := fmt.Sprintf("Are you sure you want to reset cluster %q (%s)? [y/N]: ", a.Cfg.ClusterName, clusterDir)
+			if purgeVault {
+				prompt = fmt.Sprintf("Reset cluster %q AND DELETE its encrypted vault (%s)? This destroys the only backup of the Talos secrets. [y/N]: ",
+					a.Cfg.ClusterName, filepath.Join(clusterDir, "vault"))
+			}
 			if !a.Cfg.AutoApprove {
-				if !a.PromptConfirm(fmt.Sprintf("Are you sure you want to reset cluster %q (%s)? [y/N]: ", a.Cfg.ClusterName, clusterDir)) {
+				if !a.PromptConfirm(prompt) {
 					return nil
 				}
 			}
 
-			if err := os.RemoveAll(clusterDir); err != nil {
-				a.Logger.Error("Remove cluster failed", zap.Error(err))
-				return fmt.Errorf("remove cluster dir: %w", err)
+			// Remove the plaintext working state. The encrypted vault/ is
+			// preserved unless --purge-vault is given, so a reset does not
+			// destroy the recoverable secrets bundle.
+			if purgeVault {
+				if err := os.RemoveAll(clusterDir); err != nil {
+					a.Logger.Error("Remove cluster failed", zap.Error(err))
+					return fmt.Errorf("remove cluster dir: %w", err)
+				}
+			} else {
+				entries, err := os.ReadDir(clusterDir)
+				if err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("read cluster dir: %w", err)
+				}
+				for _, e := range entries {
+					if e.Name() == "vault" {
+						continue
+					}
+					path := filepath.Join(clusterDir, e.Name())
+					if err := os.RemoveAll(path); err != nil {
+						a.Logger.Error("Remove failed", zap.String("path", path), zap.Error(err))
+						return fmt.Errorf("remove %s: %w", path, err)
+					}
+				}
 			}
-			a.Logger.Info("Remove cluster dir", zap.String("clusterDir", clusterDir))
+			a.Logger.Info("Reset cluster", zap.String("clusterDir", clusterDir), zap.Bool("purge_vault", purgeVault))
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&purgeVault, "purge-vault", false, "Also delete the encrypted vault (destroys the secrets backup)")
+	return cmd
 }
 
 func infraCmd(a *app.App) *cobra.Command {
