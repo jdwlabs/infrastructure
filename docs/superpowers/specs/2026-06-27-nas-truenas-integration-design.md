@@ -30,12 +30,13 @@ workloads.
 | pve2 | .201 | Ryzen5 3550H / 12G | 512G AirDisk | 1GbE | talos-cp-01 (200), talos-worker-02 (301) |
 | pve3 | .202 | Ryzen5 3550H / 12G | 512G AirDisk | 1GbE | talos-cp-02 (201), talos-worker-03 (302) |
 | pve4 | .203 | Ryzen5 3550H / 12G | 512G AirDisk | 1GbE | talos-cp-03 (202), talos-worker-04 (303) |
-| pve5 | .204 | Ryzen5 3550H / 12G | **2TB Samsung 9100 PRO (PCIe5) — IDLE/empty** | 1GbE | none |
+| pve5 | .204 | **Ryzen9 9950X (16C/32T) / 128G** | **2TB Samsung 9100 PRO (PCIe5) — IDLE/empty** | 1GbE | none |
 
 - Talos topology: 3 control planes + 4 workers across pve1–pve4.
 - `vmbr0` reports 10000Mb — this is a Linux bridge cosmetic value, **not real**.
   Real uplink (`nic0`) is **1GbE everywhere**.
-- pve5's fast PCIe5 NVMe is unused (flagged; see Out of Scope).
+- **pve5 is by far the most capable node** (16C/32T, 128G RAM, 2TB PCIe5 NVMe)
+  yet runs no guests — significantly underused (flagged; see Out of Scope).
 
 ### TrueNAS `.205` (SCALE 25.10.4 Community)
 
@@ -195,8 +196,9 @@ operational steps (no repo artifact) unless later codified — see Out of Scope.
 
 ## Out of Scope (flagged for follow-up)
 
-- **pve5 idle 2TB PCIe5 NVMe** — significant underused fast storage; candidate
-  for a dedicated Longhorn fast tier or local-VM disk. Separate decision.
+- **pve5 idle capacity (Ryzen9 9950X / 128G / 2TB PCIe5 NVMe)** — the cluster's
+  strongest node runs no guests. Candidate for a dedicated Longhorn fast tier,
+  rehosting heavier Talos workers, or local-VM disk. Separate decision.
 - **SLOG SSD on TrueNAS** — would accelerate sync writes (NFS default).
   Unnecessary at 1GbE; revisit with a faster link.
 - **Storage VLAN / NIC bond** — the 1GbE link is the throughput ceiling. A
