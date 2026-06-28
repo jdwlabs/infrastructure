@@ -162,7 +162,7 @@ Run from any Proxmox node (pve1–pve5); the backup lands on the NAS regardless 
 which node initiates it:
 
 ```bash
-ssh root@192.168.1.200
+ssh -i ~/.ssh/id_ed25519_pve root@192.168.1.200
 vzdump <VMID> --storage truenas-backup --mode snapshot --compress zstd
 ```
 
@@ -277,8 +277,12 @@ sudo midclt call sharing.nfs.query \
     [print(s["id"], s["path"]) for s in json.load(sys.stdin) \
     if "storage/k8s/vols" in s["path"]]'
 sudo midclt call sharing.nfs.delete <NFS_SHARE_ID>
-sudo midclt call pool.dataset.delete \
-  '{"id": "storage/k8s/vols/<PVC_UID>", "recursive": false}'
+sudo midclt call pool.dataset.delete 'storage/k8s/vols/<PVC_UID>' '{"recursive": false}'
+```
+
+Caution: Verify the `pool.dataset.delete` argument form against your TrueNAS SCALE version before running; API signatures can change between releases.
+
+```bash
 ```
 
 Skipping this step leaves orphaned datasets and NFS exports on TrueNAS. They do not
@@ -290,7 +294,7 @@ harm anything immediately, but they consume space and accumulate without bound.
 
 ### Talos VM Disks Stay on Local NVMe
 
-The Talos control plane and worker VMs (VMIDs 200–203, 300–303) have their disks
+The Talos control plane and worker VMs (VMIDs 200–202, 300–303) have their disks
 on per-node local NVMe (`local-lvm`). This is intentional and must not change.
 
 Talos VMs back Longhorn storage replicas. Moving a Talos VM disk to a 1GbE NFS
