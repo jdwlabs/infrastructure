@@ -322,7 +322,7 @@ backup jobs.
 # Proxmox: both storages active on all nodes
 for ip in 200 201 202 203 204; do
   echo "=== pve.$ip ==="
-  ssh root@192.168.1.$ip \
+  ssh -i ~/.ssh/id_ed25519_pve root@192.168.1.$ip \
     "pvesm status | grep -E 'truenas-vmdisks|truenas-backup'"
 done
 
