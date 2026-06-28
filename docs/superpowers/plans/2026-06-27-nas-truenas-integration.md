@@ -299,7 +299,6 @@ spec:
             host: 192.168.1.205
             port: 80
             apiKey: "{{ .api_key }}"
-            allowInsecure: true
           zfs:
             datasetParentName: storage/k8s/vols
             detachedSnapshotsDatasetParentName: storage/k8s/snaps

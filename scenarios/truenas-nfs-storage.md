@@ -60,7 +60,7 @@ session to TrueNAS (the `truenas_admin` user requires a tty for `sudo`).
 ### Step 1 — Create a new API key on TrueNAS (interactive, requires sudo tty)
 
 ```bash
-ssh truenas_admin@192.168.1.205
+ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205
 sudo midclt call api_key.create '{"name": "democratic-csi-new"}'
 ```
 
@@ -126,7 +126,7 @@ kubectl rollout status deployment -n democratic-csi
 First find its ID:
 
 ```bash
-ssh truenas_admin@192.168.1.205
+ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205
 midclt call api_key.query | python3 -c \
   'import sys, json; [print(k["id"], k["name"]) for k in json.load(sys.stdin)]'
 ```
@@ -270,7 +270,7 @@ kubectl delete pv <PV_NAME>
 **4. Remove the TrueNAS dataset and its NFS export (interactive sudo):**
 
 ```bash
-ssh truenas_admin@192.168.1.205
+ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205
 # The dataset name comes from step 2
 sudo midclt call sharing.nfs.query \
   | python3 -c 'import sys,json; \
@@ -281,9 +281,6 @@ sudo midclt call pool.dataset.delete 'storage/k8s/vols/<PVC_UID>' '{"recursive":
 ```
 
 Caution: Verify the `pool.dataset.delete` argument form against your TrueNAS SCALE version before running; API signatures can change between releases.
-
-```bash
-```
 
 Skipping this step leaves orphaned datasets and NFS exports on TrueNAS. They do not
 harm anything immediately, but they consume space and accumulate without bound.
@@ -334,6 +331,6 @@ kubectl get storageclass truenas-nfs
 kubectl get externalsecret democratic-csi-driver-config -n democratic-csi
 
 # TrueNAS: datasets exist (read-only, no sudo)
-ssh truenas_admin@192.168.1.205 \
+ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 \
   "zfs list -r storage -o name | grep -E 'storage/(proxmox|backup|k8s)'"
 ```

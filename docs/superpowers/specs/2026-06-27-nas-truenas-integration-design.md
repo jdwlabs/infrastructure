@@ -83,7 +83,7 @@ ISOs, backups, templates, and *future* live-migratable VMs only.
    │ NFS client            │ democratic-csi             │ pool: storage (RAIDZ2, 35.1T)
    │                       │  (freenas-api-nfs)         │  ├─ storage/proxmox  → NFS share
    ├─ truenas-vmdisks ─────┼────────────────────────────┤  ├─ storage/backup   → NFS share
-   │   (images,iso,vztmpl) │                            │  └─ storage/k8s      → NFS share
+   │   (images,iso,vztmpl) │                            │  └─ storage/k8s/{vols,snaps} (dynamic shares via API)
    └─ truenas-backup ──────┘   SC: truenas-nfs ─────────┘     + TrueNAS API key → Vault
        (backup)                (non-default, Retain, RWX+RWO)
 ```
@@ -98,7 +98,9 @@ Datasets under pool `storage`:
 |---------|---------|----------|
 | `storage/proxmox` | VM disks / ISO / templates | Proxmox NFS storage `truenas-vmdisks` |
 | `storage/backup` | Proxmox vzdump backups | Proxmox NFS storage `truenas-backup` |
-| `storage/k8s` | Kubernetes PVs | democratic-csi `truenas-nfs` |
+| `storage/k8s` | Parent dataset for Kubernetes dynamic provisioning — no static NFS share; `democratic-csi` creates child dataset + NFS export pairs under `storage/k8s/vols` (PVs) and `storage/k8s/snaps` (detached snapshots) via the TrueNAS API | democratic-csi `truenas-nfs` (API-driven) |
+| `storage/k8s/vols` | Root for dynamically provisioned PV child datasets | democratic-csi (created on PVC bind) |
+| `storage/k8s/snaps` | Root for detached snapshot datasets | democratic-csi (created on snapshot) |
 
 NFS shares: each dataset exported to `192.168.1.0/24`, `maproot=root` (required
 so Proxmox and the CSI driver can manage ownership). Create a TrueNAS **API
@@ -164,12 +166,12 @@ precedent).
 3. **k8s CSI** — add democratic-csi service in platform repo + ESO secret +
    `truenas-nfs` StorageClass. Verify: bind a test RWX PVC, write/read from two
    pods on different nodes.
-4. **Docs + Jira** — runbook in `infrastructure/scenarios/`, update
-   ARCHITECTURE.md storage section; file epic + subtasks.
+4. **Docs** — runbook in `infrastructure/scenarios/`, update
+   ARCHITECTURE.md storage section; file follow-up issues (epic + subtasks).
 
 ## Acceptance Criteria
 
-- [ ] TrueNAS pool `storage` has datasets `proxmox`, `backup`, `k8s`, each NFS-exported to `192.168.1.0/24` with `maproot=root`.
+- [ ] TrueNAS pool `storage` has datasets `storage/proxmox` and `storage/backup` each statically NFS-exported to `192.168.1.0/24` with `maproot=root`; datasets `storage/k8s` (parent), `storage/k8s/vols`, and `storage/k8s/snaps` exist with no static share — the driver creates child dataset + NFS export pairs dynamically via the TrueNAS API.
 - [ ] TrueNAS API key stored in Vault (`kv/truenas-csi`), not in Git.
 - [ ] Proxmox shows `truenas-vmdisks` and `truenas-backup` on all 5 nodes.
 - [ ] A vzdump backup successfully writes to `truenas-backup`.
@@ -188,7 +190,7 @@ precedent).
 | platform | `tenants/platform/services/democratic-csi/postInstall/external-secret.yaml` | New |
 | platform | `tenants/platform/services/democratic-csi/postInstall/storageclass-truenas-nfs.yaml` | New |
 | platform | `tenants/platform/tenant.yaml` | Register democratic-csi service |
-| infrastructure | `scenarios/<nas-runbook>.md` | New runbook |
+| infrastructure | `scenarios/truenas-nfs-storage.md` | New runbook |
 | infrastructure | `docs/ARCHITECTURE.md` | Add storage tier section |
 
 TrueNAS dataset/share/API-key creation and Proxmox NFS storage registration are
