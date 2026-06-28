@@ -347,6 +347,69 @@ backend talos-controlplane
 - Environment variables - Secrets, overrides (see table above)
 - CLI flags - Runtime behavior (dry-run, auto-approve, etc.)
 
+## Storage Tiers
+
+The cluster uses two distinct storage tiers that serve different workload profiles.
+Keeping them separate preserves Longhorn performance while unlocking shared capacity
+and RWX access for workloads that need it.
+
+### Tier 1 — Longhorn (default, on-node NVMe, replicated)
+
+Longhorn is the default StorageClass (`storageclass.kubernetes.io/is-default-class:
+"true"`). It provisions volumes on the local NVMe disks inside the Talos VMs and
+replicates them across worker nodes in-cluster.
+
+- **Use for:** databases, caches, Vault, and any latency-sensitive workload.
+- **Characteristics:** low latency (local NVMe); I/O does not leave the node for
+  reads; replication provides in-cluster durability without depending on external
+  infrastructure.
+- **Existing PVCs are untouched** — this tier is the operational baseline and no
+  migration away from it is planned or required.
+
+Talos VM disks (`local-lvm` per node) also reside on local NVMe. They must remain
+there: Longhorn replica I/O runs over the same path, so moving a Talos VM disk to
+a network share would serialize all Longhorn traffic over a 1GbE link and cripple
+cluster storage performance.
+
+### Tier 2 — TrueNAS NFS (`truenas-nfs`, capacity/RWX, opt-in)
+
+A TrueNAS box (`192.168.1.205`, 35.1 TiB RAIDZ2) provides a secondary NFS tier.
+It is opt-in: workloads must explicitly set `storageClassName: truenas-nfs`.
+
+- **Use for:** RWX (ReadWriteMany) shared mounts, bulk data, ISOs, container
+  templates, and Proxmox backup archives.
+- **Characteristics:** high raw capacity (35 TiB); RWX native via NFS; bounded at
+  roughly 118 MB/s total (1GbE link shared by all NFS consumers); HDD latency.
+- **Not suitable for** latency-sensitive workloads — the 1GbE/HDD profile is
+  incompatible with database or Vault storage backends.
+
+Kubernetes PVs are provisioned dynamically by the `democratic-csi` `freenas-api-nfs`
+driver, which calls the TrueNAS API to create a child ZFS dataset and NFS export
+per PVC under `storage/k8s/vols`. The StorageClass uses `reclaimPolicy: Retain`:
+deleting a PVC leaves the PV and TrueNAS dataset in place and requires manual
+cleanup (documented in `scenarios/truenas-nfs-storage.md`).
+
+Proxmox gets two cluster-wide NFS storages backed by static NFS shares:
+
+| Storage ID | Dataset | Content |
+|-----------|---------|---------|
+| `truenas-vmdisks` | `storage/proxmox` | `images`, `iso`, `vztmpl` |
+| `truenas-backup` | `storage/backup` | `backup` (vzdump archives) |
+
+VMs whose disks reside on `truenas-vmdisks` can be live-migrated between any of the
+five Proxmox nodes without copying data — this is the key benefit over the per-node
+`local-lvm` pools.
+
+### Tier Selection Summary
+
+| Need | StorageClass | Notes |
+|------|-------------|-------|
+| Default PVC (RWO, fast) | `longhorn` | Implicit — no annotation needed |
+| RWX shared mount | `truenas-nfs` | Explicit `storageClassName` required |
+| Bulk data / large volume | `truenas-nfs` | Explicit `storageClassName` required |
+| Proxmox backup | `truenas-backup` (Proxmox storage) | Via `vzdump --storage truenas-backup` |
+| Proxmox ISO / template | `truenas-vmdisks` (Proxmox storage) | Via Proxmox UI or `pvesm` |
+
 ## Operational Flows
 
 ### 1. Initial Bootstrap (`talops up`)
