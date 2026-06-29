@@ -22,3 +22,6 @@ clusters/*/nodes/
 clusters/*/state/
 clusters/*/*.log
 logs/
+
+# Superpowers working docs (plans/specs are local scratch, not repo artifacts)
+docs/superpowers/
