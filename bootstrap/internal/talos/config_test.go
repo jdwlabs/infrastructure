@@ -131,8 +131,9 @@ func TestNodeConfigGenerate_Worker(t *testing.T) {
 	// Hostname is set via HostnameConfig with auto: stable, not inline
 	assert.Contains(t, contentStr, "auto: stable")
 	assert.Contains(t, contentStr, "destination: /var/local")
-	// hugepages are reserved on workers (where workloads run), not control planes
-	assert.Contains(t, contentStr, "vm.nr_hugepages: \"1024\"")
+	// No hugepages reservation: nothing requests hugepages, and the 2Gi/node
+	// it stranded shrank allocatable enough to OOM-kill BestEffort pods.
+	assert.NotContains(t, contentStr, "vm.nr_hugepages")
 	assert.NotContains(t, contentStr, "allowSchedulingOnControlPlanes")
 }
 

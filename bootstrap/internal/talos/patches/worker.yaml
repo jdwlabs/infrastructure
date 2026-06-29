@@ -13,8 +13,6 @@ machine:
       - ip: {{ .HAProxyIP }}
         aliases:
           - {{ .ControlPlaneEndpoint }}
-  sysctls:
-    vm.nr_hugepages: "1024"
   kubelet:
     extraArgs:
       rotate-server-certificates: "true"
