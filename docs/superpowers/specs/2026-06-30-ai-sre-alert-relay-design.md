@@ -158,9 +158,9 @@ Each is a small, independently-testable Go package with a narrow interface.
 
 ## Dependencies / risks
 
-- **apps image pipeline (JDWLABS-72).** Building `jdwlabs/ai-sre-relay` depends
-  on the apps publish pipeline being healthy. If still blocked, that must clear
-  first — this is the critical path for the chosen Go packaging.
+- **apps image pipeline.** Building `jdwlabs/ai-sre-relay` reuses the apps
+  publish pipeline. It runs on GitHub-hosted runners, so the build is
+  independent of cluster health — not a cluster-state critical path.
 - **Holmes `/api/investigate` payload shape** must be confirmed against the
   deployed 0.34.0 image at implementation time.
 - **PR quality.** Structured-patch generation is the riskiest feature; the
