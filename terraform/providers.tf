@@ -12,4 +12,11 @@ provider "proxmox" {
   endpoint  = var.proxmox_endpoint
   api_token = "${var.proxmox_api_token_id}=${var.proxmox_api_token_secret}"
   insecure  = true
+
+  # Cloud-image disk imports (qm importdisk) run over node SSH, not the API;
+  # the provider only reads keys from a running ssh-agent.
+  ssh {
+    agent    = true
+    username = "root"
+  }
 }
