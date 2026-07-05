@@ -138,10 +138,10 @@ variable "gpu_vm_id" {
   default     = 500
 }
 
-variable "gpu_pci_id" {
-  description = "PCI address of the RTX 5090 on pve5. Whole-device form (no function suffix) passes VGA + audio together."
+variable "gpu_pci_mapping" {
+  description = "Cluster PCI resource mapping name for the RTX 5090 (pvesh /cluster/mapping/pci). Whole-device mapping passes VGA + audio together."
   type        = string
-  default     = "0000:01:00"
+  default     = "gpu-rtx5090"
 }
 
 variable "gpu_vm_cores" {
