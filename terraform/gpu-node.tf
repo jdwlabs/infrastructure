@@ -4,11 +4,14 @@
 # it over the LAN. Host prerequisites: IOMMU enabled (already on) and the GPU
 # bound to vfio-pci (nouveau blacklisted) before the VM can start.
 
+# content_type "import" + .qcow2 name: lets the VM disk use API-based
+# import_from instead of the provider's node-SSH importdisk path, which
+# cannot reach an ssh-agent from this workstation.
 resource "proxmox_virtual_environment_download_file" "ubuntu_cloud_image" {
-  content_type = "iso"
+  content_type = "import"
   datastore_id = "local"
   node_name    = var.gpu_vm_node
-  file_name    = "ubuntu-24.04-server-cloudimg-amd64.img"
+  file_name    = "ubuntu-24.04-server-cloudimg-amd64.qcow2"
   url          = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
 }
 
@@ -51,7 +54,7 @@ resource "proxmox_virtual_environment_vm" "gpu_inference" {
     size         = var.gpu_vm_disk_size
     iothread     = true
     discard      = "on"
-    file_id      = proxmox_virtual_environment_download_file.ubuntu_cloud_image.id
+    import_from  = proxmox_virtual_environment_download_file.ubuntu_cloud_image.id
   }
 
   network_device {
