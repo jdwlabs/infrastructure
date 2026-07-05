@@ -169,9 +169,9 @@ variable "gpu_vm_ip" {
 }
 
 variable "gpu_vm_gateway" {
-  description = "Default gateway for the GPU VM."
+  description = "Default gateway for the GPU VM. The LAN gateway is .254, not .1 (verified: pve5's own default route)."
   type        = string
-  default     = "192.168.1.1"
+  default     = "192.168.1.254"
 }
 
 variable "gpu_vm_user" {
