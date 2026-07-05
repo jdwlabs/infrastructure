@@ -36,10 +36,13 @@ resource "proxmox_virtual_environment_vm" "gpu_inference" {
     dedicated = var.gpu_vm_memory
   }
 
+  # Cluster PCI resource mapping, not a raw PCI id: Proxmox only lets root
+  # set hostpci for non-mapped devices, and terraform runs as an API token
+  # (needs Mapping.Use on /mapping/pci/<name>, granted via PVEMappingUser).
   hostpci {
-    device = "hostpci0"
-    id     = var.gpu_pci_id
-    pcie   = true
+    device  = "hostpci0"
+    mapping = var.gpu_pci_mapping
+    pcie    = true
   }
 
   disk {
