@@ -51,3 +51,6 @@ talos_worker_configuration = [
     disk_size = 100
   },
 ]
+
+# GPU inference VM (AI-SRE local tier)
+gpu_vm_ssh_public_key = "ssh-ed25519 AAAA... you@host"

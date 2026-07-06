@@ -118,3 +118,69 @@ variable "talos_worker_configuration" {
     disk_size = number
   }))
 }
+
+# GPU INFERENCE VM (pve5 / RTX 5090 — AI-SRE local model tier)
+variable "gpu_vm_name" {
+  description = "Name of the GPU inference VM on pve5."
+  type        = string
+  default     = "vllm-inference"
+}
+
+variable "gpu_vm_node" {
+  description = "Proxmox node hosting the GPU."
+  type        = string
+  default     = "pve5"
+}
+
+variable "gpu_vm_id" {
+  description = "Proxmox VMID for the GPU inference VM."
+  type        = number
+  default     = 500
+}
+
+variable "gpu_pci_mapping" {
+  description = "Cluster PCI resource mapping name for the RTX 5090 (pvesh /cluster/mapping/pci). Whole-device mapping passes VGA + audio together."
+  type        = string
+  default     = "gpu-rtx5090"
+}
+
+variable "gpu_vm_cores" {
+  description = "vCPU cores for the GPU VM."
+  type        = number
+  default     = 8
+}
+
+variable "gpu_vm_memory" {
+  description = "Dedicated memory (MiB) for the GPU VM."
+  type        = number
+  default     = 32768
+}
+
+variable "gpu_vm_disk_size" {
+  description = "Root disk size (GiB). Model weights are large; fp8 ~35B needs ~40GiB plus headroom."
+  type        = number
+  default     = 200
+}
+
+variable "gpu_vm_ip" {
+  description = "Static LAN IP for the GPU VM (CIDR)."
+  type        = string
+  default     = "192.168.1.50/24"
+}
+
+variable "gpu_vm_gateway" {
+  description = "Default gateway for the GPU VM. The LAN gateway is .254, not .1 (verified: pve5's own default route)."
+  type        = string
+  default     = "192.168.1.254"
+}
+
+variable "gpu_vm_user" {
+  description = "Cloud-init admin user on the GPU VM."
+  type        = string
+  default     = "vllm"
+}
+
+variable "gpu_vm_ssh_public_key" {
+  description = "SSH public key granted to the cloud-init user."
+  type        = string
+}
