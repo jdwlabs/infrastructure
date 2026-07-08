@@ -1,5 +1,7 @@
 machine:
   type: worker
+  nodeLabels:
+    workload.jdwlabs.io/worker: "true"
   install:
     disk: /dev/{{ .DefaultDisk }}
     extraKernelArgs:
