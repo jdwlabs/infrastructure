@@ -62,6 +62,14 @@ versioned source of truth. Plaintext working copies are gitignored and regenerat
 `TALOPS_NO_AUTOSEAL=1`). Manage with `talops secrets {status,hydrate,seal,lock,edit,add-device}`.
 See `docs/secrets.md`.
 
+## Code & Manifest Comments
+
+Never put a Jira ticket ID (`JDWLABS-*`) or PR/issue number in a comment in
+any file here — Terraform HCL and Talos machine-config YAML included.
+Traceability lives in the commit message and PR description; comments
+should explain *why* the config is what it is so they stay meaningful
+after the ticket closes.
+
 ## AI Agent Contract
 
 - `terraform apply` is NEVER run autonomously — produce a plan, stop, and await human approval
