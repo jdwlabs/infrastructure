@@ -765,7 +765,7 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 		}
 	}
 
-	// Admin source-IP allowlist for HAProxy k8s/talos frontends (JDWLABS-53 hardening)
+	// Admin source-IP allowlist for HAProxy k8s/talos frontends
 	if len(m.config.AdminAllowedCIDRs) == 0 {
 		if v := parseTFVarsStringList(content, "admin_allowed_cidrs"); len(v) > 0 {
 			m.config.AdminAllowedCIDRs = v
