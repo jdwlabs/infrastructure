@@ -427,6 +427,24 @@ func TestConfigFromClusterState(t *testing.T) {
 	}
 }
 
+func TestConfigFromClusterState_AdminAllowedCIDRs(t *testing.T) {
+	cfg := &types.Config{
+		HAProxyIP:         net.ParseIP("192.168.1.237"),
+		AdminAllowedCIDRs: []string{"192.168.1.0/24"},
+	}
+	state := &types.ClusterState{
+		ControlPlanes: []types.NodeState{
+			{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+		},
+	}
+
+	got := ConfigFromClusterState(cfg, state)
+
+	if len(got.AllowedAdminCIDRs) != 1 || got.AllowedAdminCIDRs[0] != "192.168.1.0/24" {
+		t.Errorf("AllowedAdminCIDRs = %v, want [192.168.1.0/24]", got.AllowedAdminCIDRs)
+	}
+}
+
 func TestConfigFromClusterState_EmptyControlPlanes(t *testing.T) {
 	cfg := &types.Config{
 		HAProxyIP:            net.ParseIP("192.168.1.237"),

@@ -299,6 +299,9 @@ func (app *App) InitConfig(_ *cobra.Command) error {
 	if v := os.Getenv("HAPROXY_STATS_PASSWORD"); v != "" {
 		cfg.HAProxyStatsPassword = v
 	}
+	if v := os.Getenv("ADMIN_ALLOWED_CIDRS"); v != "" {
+		cfg.AdminAllowedCIDRs = strings.Split(v, ",")
+	}
 	if v := os.Getenv("INGRESS_HTTP_NODEPORT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.IngressHTTPNodePort = n
