@@ -3,8 +3,11 @@
 cluster_name = "test-core"
 
 proxmox_endpoint         = "https://192.168.1.200:8006/api2/json"
-proxmox_api_token_id     = "terraform@pve!cluster"
-proxmox_api_token_secret = "9c85e97c-ec5e-43e1-b6ad-a0b46268a600"
+# Real credentials are never committed here — override via
+# TF_VAR_proxmox_api_token_id / TF_VAR_proxmox_api_token_secret env vars
+# when actually running a scaling test against real Proxmox.
+proxmox_api_token_id     = "terraform@pve!token-name"
+proxmox_api_token_secret = "your-token-secret"
 
 # Go bootstrapper configuration
 control_plane_endpoint = "cluster.jdwlabs.com"
