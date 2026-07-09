@@ -300,7 +300,13 @@ func (app *App) InitConfig(_ *cobra.Command) error {
 		cfg.HAProxyStatsPassword = v
 	}
 	if v := os.Getenv("ADMIN_ALLOWED_CIDRS"); v != "" {
-		cfg.AdminAllowedCIDRs = strings.Split(v, ",")
+		var cidrs []string
+		for _, c := range strings.Split(v, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				cidrs = append(cidrs, c)
+			}
+		}
+		cfg.AdminAllowedCIDRs = cidrs
 	}
 	if v := os.Getenv("INGRESS_HTTP_NODEPORT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
