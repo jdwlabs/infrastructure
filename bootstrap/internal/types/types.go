@@ -141,21 +141,21 @@ func (p *ReconcilePlan) IsEmpty() bool {
 
 // Config represents your terraform.tfvars + environment variables
 type Config struct {
-	ClusterName             string `json:"cluster_name"`
-	TerraformTFVars         string `json:"terraform_tfvars"`
-	ControlPlaneEndpoint    string `json:"control_plane_endpoint"`
-	HAProxyIP               net.IP `json:"haproxy_ip"`
-	HAProxyLoginUser        string `json:"haproxy_login_username"`
-	HAProxySSHKeyPath       string `json:"haproxy_ssh_key_path"`
-	HAProxyStatsUser        string `json:"haproxy_stats_username"`
-	HAProxyStatsPassword    string `json:"haproxy_stats_password"`
+	ClusterName             string   `json:"cluster_name"`
+	TerraformTFVars         string   `json:"terraform_tfvars"`
+	ControlPlaneEndpoint    string   `json:"control_plane_endpoint"`
+	HAProxyIP               net.IP   `json:"haproxy_ip"`
+	HAProxyLoginUser        string   `json:"haproxy_login_username"`
+	HAProxySSHKeyPath       string   `json:"haproxy_ssh_key_path"`
+	HAProxyStatsUser        string   `json:"haproxy_stats_username"`
+	HAProxyStatsPassword    string   `json:"haproxy_stats_password"`
 	AdminAllowedCIDRs       []string `json:"admin_allowed_cidrs"`
-	KubernetesVersion       string `json:"kubernetes_version"`
-	TalosVersion            string `json:"talos_version"`
-	InstallerImage          string `json:"installer_image"`
-	DefaultNetworkInterface string `json:"default_network_interface"`
-	DefaultDisk             string `json:"default_disk"`
-	SecretsDir              string `json:"secrets_dir"`
+	KubernetesVersion       string   `json:"kubernetes_version"`
+	TalosVersion            string   `json:"talos_version"`
+	InstallerImage          string   `json:"installer_image"`
+	DefaultNetworkInterface string   `json:"default_network_interface"`
+	DefaultDisk             string   `json:"default_disk"`
+	SecretsDir              string   `json:"secrets_dir"`
 
 	// Ingress NodePorts for the cluster's edge gateway (e.g. NGINX Gateway Fabric).
 	// HAProxy forwards :80/:443 to these NodePorts on every node.
