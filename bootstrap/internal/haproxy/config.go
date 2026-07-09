@@ -195,11 +195,12 @@ func (c *Config) Generate() (string, error) {
 // ConfigFromClusterState builds an HAProxy Config from the current cluster state
 func ConfigFromClusterState(cfg *types.Config, state *types.ClusterState) *Config {
 	haConfig := &Config{
-		HAProxyIP:       cfg.HAProxyIP,
-		StatsUser:       cfg.HAProxyStatsUser,
-		StatsPassword:   cfg.HAProxyStatsPassword,
-		IngressHTTPPort: cfg.IngressHTTPNodePort,
-		IngressTLSPort:  cfg.IngressTLSNodePort,
+		HAProxyIP:         cfg.HAProxyIP,
+		StatsUser:         cfg.HAProxyStatsUser,
+		StatsPassword:     cfg.HAProxyStatsPassword,
+		IngressHTTPPort:   cfg.IngressHTTPNodePort,
+		IngressTLSPort:    cfg.IngressTLSNodePort,
+		AllowedAdminCIDRs: cfg.AdminAllowedCIDRs,
 	}
 
 	for _, cp := range state.ControlPlanes {
