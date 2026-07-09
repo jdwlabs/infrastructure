@@ -19,6 +19,10 @@ haproxy_login_user     = "root"
 haproxy_stats_user     = "admin"
 haproxy_stats_password = "your-password"
 
+# Restrict the k8s/talos apiserver frontends to these source CIDRs.
+# Leave empty ([]) to keep them reachable from anywhere (current default).
+admin_allowed_cidrs = []
+
 # Ingress NodePorts (e.g. NGINX Gateway Fabric uses 30180/30543 by default,
 # ingress-nginx uses 30080/30443). HAProxy forwards :80/:443 to these ports.
 ingress_http_nodeport = 30180

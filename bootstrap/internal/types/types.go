@@ -149,6 +149,7 @@ type Config struct {
 	HAProxySSHKeyPath       string `json:"haproxy_ssh_key_path"`
 	HAProxyStatsUser        string `json:"haproxy_stats_username"`
 	HAProxyStatsPassword    string `json:"haproxy_stats_password"`
+	AdminAllowedCIDRs       []string `json:"admin_allowed_cidrs"`
 	KubernetesVersion       string `json:"kubernetes_version"`
 	TalosVersion            string `json:"talos_version"`
 	InstallerImage          string `json:"installer_image"`

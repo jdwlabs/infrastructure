@@ -341,6 +341,7 @@ backend talos-controlplane
 | `HAPROXY_LOGIN_USER` | SSH user for HAProxy host |
 | `HAPROXY_STATS_USER` | HAProxy stats page username |
 | `HAPROXY_STATS_PASSWORD` | HAProxy stats page password |
+| `ADMIN_ALLOWED_CIDRS` | Comma-separated source CIDRs allowed to reach k8s/talos apiserver frontends |
 
 **Key Configuration Sources**:
 - `terraform.tfvars` - VM specifications, Proxmox connection

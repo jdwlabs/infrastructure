@@ -61,6 +61,12 @@ variable "haproxy_stats_password" {
   default   = null
 }
 
+variable "admin_allowed_cidrs" {
+  description = "Source CIDRs allowed to reach the HAProxy k8s-apiserver (6443) and talos-apiserver (50000) frontends. Empty list means unrestricted (current behavior)."
+  type        = list(string)
+  default     = []
+}
+
 variable "kubernetes_version" {
   type    = string
   default = null

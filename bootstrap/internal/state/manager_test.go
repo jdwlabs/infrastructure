@@ -1201,6 +1201,24 @@ talos_worker_configuration = []
 	assert.Equal(t, 30543, cfg.IngressTLSNodePort)
 }
 
+func TestLoadTerraformExtras_AdminAllowedCIDRs(t *testing.T) {
+	tmpDir := t.TempDir()
+	logger := zaptest.NewLogger(t)
+
+	cfg := types.DefaultConfig()
+	cfg.TerraformTFVars = filepath.Join(tmpDir, "terraform.tfvars")
+
+	content := `admin_allowed_cidrs = ["192.168.1.0/24", "203.0.113.5/32"]`
+	err := os.WriteFile(cfg.TerraformTFVars, []byte(content), 0644)
+	require.NoError(t, err)
+
+	manager := NewManager(cfg, logger)
+	err = manager.LoadTerraformExtras(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"192.168.1.0/24", "203.0.113.5/32"}, cfg.AdminAllowedCIDRs)
+}
+
 func TestResolveTFVarsPath(t *testing.T) {
 	t.Run("file exists at configured path", func(t *testing.T) {
 		tmpDir := t.TempDir()
