@@ -765,6 +765,13 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 		}
 	}
 
+	// Admin source-IP allowlist for HAProxy k8s/talos frontends (JDWLABS-53 hardening)
+	if len(m.config.AdminAllowedCIDRs) == 0 {
+		if v := parseTFVarsStringList(content, "admin_allowed_cidrs"); len(v) > 0 {
+			m.config.AdminAllowedCIDRs = v
+		}
+	}
+
 	// Kubernetes and Talos versions
 	if m.config.KubernetesVersion == "" {
 		if v := extractSimpleStringField(content, "kubernetes_version"); v != "" {
@@ -892,5 +899,28 @@ func parseTFVarsMap(content, key string) map[string]string {
 		result[m[1]] = m[2]
 	}
 
+	return result
+}
+
+// parseTFVarsStringList extracts a []string from an HCL list literal.
+// Matches: key = ["v1", "v2"]
+// Returns nil if the key is not found or the list is empty.
+func parseTFVarsStringList(content, key string) []string {
+	re := regexp.MustCompile(`(?m)^` + key + `\s*=\s*\[([^\]]*)\]`)
+	matches := re.FindStringSubmatch(content)
+	if len(matches) < 2 {
+		return nil
+	}
+
+	itemRe := regexp.MustCompile(`"([^"]*)"`)
+	items := itemRe.FindAllStringSubmatch(matches[1], -1)
+	if len(items) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(items))
+	for _, m := range items {
+		result = append(result, m[1])
+	}
 	return result
 }
