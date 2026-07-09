@@ -79,3 +79,22 @@ func TestInitConfigSecretsDir(t *testing.T) {
 		assert.Equal(t, filepath.Join("clusters", "cluster", "secrets"), a.Cfg.SecretsDir)
 	})
 }
+
+func TestInitConfigAdminAllowedCIDRs(t *testing.T) {
+	t.Run("unset env leaves AdminAllowedCIDRs untouched", func(t *testing.T) {
+		a := New("test")
+
+		require.NoError(t, a.InitConfig(nil))
+
+		assert.Nil(t, a.Cfg.AdminAllowedCIDRs)
+	})
+
+	t.Run("ADMIN_ALLOWED_CIDRS env is split and whitespace-trimmed", func(t *testing.T) {
+		a := New("test")
+		t.Setenv("ADMIN_ALLOWED_CIDRS", "10.0.0.0/8, 192.168.1.0/24 ,203.0.113.5/32")
+
+		require.NoError(t, a.InitConfig(nil))
+
+		assert.Equal(t, []string{"10.0.0.0/8", "192.168.1.0/24", "203.0.113.5/32"}, a.Cfg.AdminAllowedCIDRs)
+	})
+}
