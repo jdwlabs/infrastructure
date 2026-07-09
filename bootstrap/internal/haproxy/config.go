@@ -17,13 +17,14 @@ type Backend struct {
 
 // Config holds all data needed to generate an HAProxy configuration
 type Config struct {
-	HAProxyIP       net.IP
-	StatsUser       string
-	StatsPassword   string
-	ControlPlanes   []Backend
-	IngressNodes    []Backend // All nodes exposing ingress NodePort (CPs + workers)
-	IngressHTTPPort int       // NodePort for HTTP ingress traffic
-	IngressTLSPort  int       // NodePort for HTTPS/TLS ingress traffic
+	HAProxyIP         net.IP
+	StatsUser         string
+	StatsPassword     string
+	ControlPlanes     []Backend
+	IngressNodes      []Backend // All nodes exposing ingress NodePort (CPs + workers)
+	IngressHTTPPort   int       // NodePort for HTTP ingress traffic
+	IngressTLSPort    int       // NodePort for HTTPS/TLS ingress traffic
+	AllowedAdminCIDRs []string  // If set, restricts k8s/talos apiserver frontends to these source CIDRs
 }
 
 const haproxyTemplate = `# ======= GLOBAL =======
@@ -76,6 +77,9 @@ frontend k8s-apiserver
     mode tcp
     bind {{ .HAProxyIP }}:6443
     option tcplog
+{{- if .AllowedAdminCIDRs }}
+    tcp-request connection reject unless { src {{ range .AllowedAdminCIDRs }}{{ . }} {{ end }}}
+{{- end }}
     tcp-request inspect-delay 5s
     tcp-request content accept if { req_ssl_hello_type 1 }
     default_backend k8s-controlplane
@@ -95,6 +99,9 @@ frontend talos-apiserver
     mode tcp
     bind {{ .HAProxyIP }}:50000
     option tcplog
+{{- if .AllowedAdminCIDRs }}
+    tcp-request connection reject unless { src {{ range .AllowedAdminCIDRs }}{{ . }} {{ end }}}
+{{- end }}
     tcp-request inspect-delay 5s
     tcp-request content accept if { req_ssl_hello_type 1 }
     default_backend talos-controlplane
@@ -164,6 +171,11 @@ func (c *Config) Generate() (string, error) {
 		}
 		if c.IngressTLSPort == 0 {
 			return "", fmt.Errorf("ingress TLS port is required when ingress nodes are configured")
+		}
+	}
+	for _, cidr := range c.AllowedAdminCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return "", fmt.Errorf("invalid admin CIDR %q: %w", cidr, err)
 		}
 	}
 

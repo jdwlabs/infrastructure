@@ -497,3 +497,59 @@ func TestBackend_Struct(t *testing.T) {
 		t.Errorf("IP = %v, want %v", backend.IP, ip)
 	}
 }
+
+func TestConfig_Generate_AdminAllowlist(t *testing.T) {
+	config := Config{
+		HAProxyIP: net.ParseIP("192.168.1.237"),
+		ControlPlanes: []Backend{
+			{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+		},
+		AllowedAdminCIDRs: []string{"192.168.1.0/24", "203.0.113.5/32"},
+	}
+
+	got, err := config.Generate()
+	if err != nil {
+		t.Fatalf("Generate() unexpected error: %v", err)
+	}
+
+	wantACL := "tcp-request connection reject unless { src 192.168.1.0/24 203.0.113.5/32 }"
+	if strings.Count(got, wantACL) != 2 {
+		t.Errorf("expected admin allowlist ACL on both k8s and talos frontends, got config:\n%s", got)
+	}
+}
+
+func TestConfig_Generate_NoAdminAllowlist(t *testing.T) {
+	config := Config{
+		HAProxyIP: net.ParseIP("192.168.1.237"),
+		ControlPlanes: []Backend{
+			{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+		},
+	}
+
+	got, err := config.Generate()
+	if err != nil {
+		t.Fatalf("Generate() unexpected error: %v", err)
+	}
+
+	if strings.Contains(got, "tcp-request connection reject") {
+		t.Errorf("expected no admin allowlist ACL when AllowedAdminCIDRs is empty, got config:\n%s", got)
+	}
+}
+
+func TestConfig_Generate_InvalidAdminCIDR(t *testing.T) {
+	config := Config{
+		HAProxyIP: net.ParseIP("192.168.1.237"),
+		ControlPlanes: []Backend{
+			{VMID: 201, IP: net.ParseIP("192.168.1.201")},
+		},
+		AllowedAdminCIDRs: []string{"not-a-cidr"},
+	}
+
+	_, err := config.Generate()
+	if err == nil {
+		t.Fatal("expected error for invalid CIDR, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid admin CIDR") {
+		t.Errorf("error = %v, want containing 'invalid admin CIDR'", err)
+	}
+}
