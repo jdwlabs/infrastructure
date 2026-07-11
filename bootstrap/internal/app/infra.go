@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -90,12 +91,6 @@ func (app *App) RunInfraDeploy(ctx context.Context, tfDir string, skipPlan bool)
 		runner.SetOutput(app.Session.Console)
 	}
 
-	// Backup
-	if !app.Cfg.SkipBackup {
-		app.backupFile(tfDir, "terraform.tfstate", "tfstate")
-		app.backupFile(tfDir, "terraform.tfvars", "tfvars")
-	}
-
 	// Init
 	app.Logger.Info("initializing terraform")
 	terraformDir := filepath.Join(tfDir, ".terraform")
@@ -105,6 +100,12 @@ func (app *App) RunInfraDeploy(ctx context.Context, tfDir string, skipPlan bool)
 		}
 	} else {
 		app.Logger.Debug("terraform already initialized")
+	}
+
+	// Backup (state after init so `state pull` can reach a remote backend)
+	if !app.Cfg.SkipBackup {
+		app.backupState(ctx, tfDir, runner, "tfstate")
+		app.backupFile(tfDir, "terraform.tfvars", "tfvars")
 	}
 
 	// Fmt + Validate
@@ -211,13 +212,8 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 		return err
 	}
 
-	// Check state
-	tfstatePath := filepath.Join(tfDir, "terraform.tfstate")
-	if _, err := os.Stat(tfstatePath); err != nil {
-		app.Logger.Warn("no state file found, nothing to destroy")
-		return nil
-	}
-
+	// Check state via the backend (a local terraform.tfstate only exists with
+	// the legacy local backend; state list works for local and remote alike)
 	resources, err := runner.StateList(ctx)
 	if err != nil {
 		if force {
@@ -256,7 +252,7 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 
 	// Backup
 	if !app.Cfg.SkipBackup {
-		app.backupFile(tfDir, "terraform.tfstate", "pre-destroy")
+		app.backupState(ctx, tfDir, runner, "pre-destroy")
 	}
 
 	// Create destroy plan
@@ -331,7 +327,7 @@ func (app *App) RunInfraDestroy(ctx context.Context, tfDir string, force, gracef
 
 	// Remove state if empty
 	if resources, err := runner.StateList(ctx); err == nil && len(resources) == 0 {
-		_ = os.Remove(tfstatePath)
+		_ = os.Remove(filepath.Join(tfDir, "terraform.tfstate"))
 		stateDir := filepath.Join(tfDir, ".tf-deploy-state")
 		_ = os.Remove(filepath.Join(stateDir, "deploy-state.json"))
 		app.Logger.Info("all resources destroyed")
@@ -591,6 +587,43 @@ func (app *App) deployModeLabel() string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// backupState backs up terraform state before mutating operations. With the
+// legacy local backend it copies terraform.tfstate; with a remote backend no
+// local state file exists, so it pulls the state through terraform instead.
+func (app *App) backupState(ctx context.Context, tfDir string, runner *terraform.Runner, prefix string) {
+	if fileExists(filepath.Join(tfDir, "terraform.tfstate")) {
+		app.Logger.Info("backing up local state file")
+		app.backupFile(tfDir, "terraform.tfstate", prefix)
+		return
+	}
+
+	app.Logger.Info("no local state file, backing up via terraform state pull")
+	data, err := runner.StatePull(ctx)
+	if err != nil {
+		app.Logger.Warn("state backup failed: could not pull state from backend", zap.Error(err))
+		return
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		app.Logger.Info("backend holds no state, nothing to back up")
+		return
+	}
+
+	backupDir := filepath.Join(tfDir, "backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		app.Logger.Warn("could not create backup dir", zap.Error(err))
+		return
+	}
+
+	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s-%s.terraform.tfstate",
+		prefix, time.Now().Format("20060102_150405")))
+	if err := os.WriteFile(backupPath, data, 0644); err != nil {
+		app.Logger.Warn("could not write state backup", zap.String("file", backupPath), zap.Error(err))
+		return
+	}
+
+	app.Logger.Info("backed up pulled state", zap.String("file", backupPath))
 }
 
 func (app *App) backupFile(tfDir, filename, prefix string) {
