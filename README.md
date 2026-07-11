@@ -25,15 +25,20 @@ cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 age-keygen -o ~/.config/sops/age/keys.txt
 talops secrets add-device <your-age-public-key>   # existing repo: git pull instead
 
-# 3. Build the bootstrap tool
+# 3. Terraform remote state credentials (MinIO) — see docs/secrets.md
+sops -d terraform/backend-credentials.enc.yaml   # export as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+
+# 4. Build the bootstrap tool
 cd bootstrap && make build
 
-# 4. Provision and bootstrap
+# 5. Provision and bootstrap
 ./build/talops up
 ```
 
 Secrets (`terraform.tfvars`, the Talos secrets bundle, `talosconfig`, and bootstrap state)
-are stored as SOPS+age encrypted files committed to git and shared across machines. See
+are stored as SOPS+age encrypted files committed to git and shared across machines. Terraform
+state lives in a remote S3 (MinIO) backend; its credentials are vaulted in
+`terraform/backend-credentials.enc.yaml` and hydrated manually. See
 [docs/secrets.md](docs/secrets.md) for setup, onboarding a new device, and revocation.
 
 ## Commands

@@ -25,7 +25,7 @@ Infrastructure-as-code for jdwlabs cluster provisioning. Contains Terraform modu
 ### Terraform
 
 ```bash
-terraform init                    # Initialize working directory (run once per env)
+terraform init                    # Initialize working directory (needs remote-state creds — see docs/secrets.md)
 terraform validate                # Validate HCL syntax and configuration
 terraform plan -out=tfplan        # Preview changes — always review before applying
 terraform show tfplan             # Human-readable plan review
@@ -60,7 +60,9 @@ state) are stored as SOPS+age encrypted `*.enc.yaml` files committed to git — 
 versioned source of truth. Plaintext working copies are gitignored and regenerated on demand.
 `talops` auto-hydrates before a command and auto-seals changed plaintext after (disable with
 `TALOPS_NO_AUTOSEAL=1`). Manage with `talops secrets {status,hydrate,seal,lock,edit,add-device}`.
-See `docs/secrets.md`.
+Terraform state lives in a remote S3 (MinIO) backend; its credentials are vaulted in
+`terraform/backend-credentials.enc.yaml` and hydrated manually — `talops` does not manage
+that file. See `docs/secrets.md`.
 
 ## Code & Manifest Comments
 

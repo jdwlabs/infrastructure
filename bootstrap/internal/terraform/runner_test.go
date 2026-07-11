@@ -130,6 +130,85 @@ func TestRunner_Init(t *testing.T) {
 	}
 }
 
+func TestRunner_Init_PassesInputFalse(t *testing.T) {
+	oldExec := execCommandContext
+	defer func() { execCommandContext = oldExec }()
+
+	var gotArgs []string
+	execCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
+		gotArgs = args
+		return mockExecCommand("Initialized", nil)(ctx, command, args...)
+	}
+
+	logger := zaptest.NewLogger(t)
+	runner := NewRunner(t.TempDir(), logger)
+
+	if err := runner.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	found := false
+	for _, a := range gotArgs {
+		if a == "-input=false" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Init() args = %v, want -input=false present", gotArgs)
+	}
+}
+
+func TestRunner_StatePull(t *testing.T) {
+	tests := []struct {
+		name        string
+		output      string
+		exitErr     error
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "state returned",
+			output:  `{"version":4,"serial":1,"resources":[]}`,
+			exitErr: nil,
+			wantErr: false,
+		},
+		{
+			name:        "pull fails",
+			output:      "",
+			exitErr:     errors.New("exit status 1"),
+			wantErr:     true,
+			errContains: "terraform state pull",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldExec := execCommandContext
+			defer func() { execCommandContext = oldExec }()
+
+			execCommandContext = mockExecCommand(tt.output, tt.exitErr)
+
+			logger := zaptest.NewLogger(t)
+			runner := NewRunner(t.TempDir(), logger)
+
+			data, err := runner.StatePull(context.Background())
+			if (err != nil) != tt.wantErr {
+				t.Errorf("StatePull() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("StatePull() error = %v, should contain %v", err, tt.errContains)
+				}
+				return
+			}
+			if string(data) != tt.output {
+				t.Errorf("StatePull() = %q, want %q", string(data), tt.output)
+			}
+		})
+	}
+}
+
 func TestRunner_Fmt(t *testing.T) {
 	tests := []struct {
 		name    string

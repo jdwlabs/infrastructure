@@ -17,7 +17,7 @@ Infrastructure-as-code for jdwlabs cluster provisioning. Terraform + Talos Linux
 ## Development Commands
 
 ```bash
-terraform init                    # Initialize working directory
+terraform init                    # Initialize working directory (needs remote-state creds — see docs/secrets.md)
 terraform validate                # Validate HCL
 terraform plan -out=tfplan        # Preview changes (never auto-apply)
 terraform show tfplan             # Review plan
