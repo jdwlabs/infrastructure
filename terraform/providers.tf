@@ -1,10 +1,36 @@
 terraform {
-  required_version = ">= 1.5.0"
+  # use_lockfile (native S3 state locking) requires Terraform >= 1.10
+  required_version = ">= 1.10.0"
   required_providers {
     proxmox = {
-      source  = "bpg/proxmox" # Use newer provider
-      version = ">= 0.53.1"
+      source = "bpg/proxmox"
+      # Pessimistic patch-level pin: the committed .terraform.lock.hcl holds the
+      # exact version; this window allows deliberate `init -upgrade` patch bumps
+      # without editing HCL, while blocking surprise minor-version jumps.
+      version = "~> 0.99.0"
     }
+  }
+
+  # Remote state on MinIO (TrueNAS, S3-compatible). No credentials here:
+  # the backend reads the standard AWS credential chain (AWS_ACCESS_KEY_ID/
+  # AWS_SECRET_ACCESS_KEY env vars, or the default profile in
+  # ~/.aws/credentials). Source of truth: terraform/backend-credentials.enc.yaml
+  # (SOPS vault) — see docs/secrets.md. The skip_* flags disable AWS-account
+  # validations that a self-hosted S3 endpoint cannot answer; region is a
+  # required-but-meaningless placeholder for MinIO.
+  backend "s3" {
+    bucket = "terraform-state"
+    key    = "infrastructure/terraform.tfstate"
+    region = "us-east-1"
+    endpoints = {
+      s3 = "http://192.168.1.205:9000"
+    }
+    use_path_style              = true
+    use_lockfile                = true
+    skip_credentials_validation = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
   }
 }
 

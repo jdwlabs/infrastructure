@@ -9,6 +9,7 @@ ever committing plaintext.
 | Artifact | Plaintext (gitignored, local) | Encrypted vault (committed) |
 | --- | --- | --- |
 | Proxmox creds + cluster topology | `terraform/terraform.tfvars` | `terraform/terraform.tfvars.enc.yaml` |
+| Terraform state backend creds (MinIO) | env vars / `~/.aws/credentials` (manual) | `terraform/backend-credentials.enc.yaml` |
 | Talos secrets bundle (cluster PKI, tokens) | `clusters/<name>/secrets/secrets.yaml` | `clusters/<name>/vault/secrets.enc.yaml` |
 | Talos client config | `clusters/<name>/secrets/talosconfig` | `clusters/<name>/vault/talosconfig.enc.yaml` |
 | Reconciler state | `clusters/<name>/state/bootstrap-state.json` | `clusters/<name>/vault/bootstrap-state.enc.yaml` |
@@ -86,6 +87,41 @@ bundle. Treat this as a manual, reviewed operation.
 Generate one extra age key, store its **private** half offline (password manager / hardware
 token), and keep it as a permanent recipient. If every device key is lost, the vault is
 otherwise unrecoverable.
+
+## Terraform remote state backend credentials
+
+Terraform state lives in an S3-compatible MinIO bucket on the TrueNAS host
+(`http://192.168.1.205:9000`, bucket `terraform-state`, native lockfile locking).
+The backend block in `terraform/providers.tf` carries no credentials — Terraform
+resolves them through the standard AWS chain. The canonical copy of the access
+key is `terraform/backend-credentials.enc.yaml` (same SOPS/age vault flow, but
+hydrated manually — `talops` does not manage this file).
+
+Setting up a new machine:
+
+```bash
+sops -d terraform/backend-credentials.enc.yaml   # read access_key_id / secret_access_key
+```
+
+Then either export them for the shell that runs `terraform`/`talops`:
+
+```bash
+export AWS_ACCESS_KEY_ID=<access_key_id>
+export AWS_SECRET_ACCESS_KEY=<secret_access_key>
+```
+
+or install them once as the `default` profile in `~/.aws/credentials`:
+
+```ini
+[default]
+aws_access_key_id = <access_key_id>
+aws_secret_access_key = <secret_access_key>
+```
+
+The env vars win over the profile when both are present. The file also holds the
+MinIO root credentials (break-glass; day-to-day access uses the scoped
+`terraform-state-rw` key). Never write these values into `*.tf`, `*.tfvars`, or
+shell history — and never `source`/`eval` a decrypted secrets file.
 
 ## Command reference
 
