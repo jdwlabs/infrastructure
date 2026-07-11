@@ -10,7 +10,7 @@ jdwlabs `infrastructure` defines the physical and virtual infrastructure for jdw
 
 - **Talos Linux:** Immutable, API-driven OS for Kubernetes nodes. No SSH — all management via the Talos API (`talosctl`)
 - **Terraform:** Declarative infrastructure. Changes require `terraform plan` review before `terraform apply`
-- **State:** Terraform state is stored remotely — never edit `.tfstate` files directly
+- **State:** Terraform state is stored remotely (S3-compatible MinIO; credentials vaulted in `terraform/backend-credentials.enc.yaml` — see `docs/secrets.md`) — never edit `.tfstate` files directly
 - **Separation of concerns:** This repo provisions the cluster; `platform` configures what runs on it
 
 ## Key Files

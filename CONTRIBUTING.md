@@ -100,3 +100,7 @@ terraform init                    # Initialize (once per working dir)
 terraform validate                # Validate config
 terraform plan -out=tfplan        # Preview changes
 ```
+
+Terraform state is remote (S3-compatible MinIO), so `init` and `plan` need the
+backend credentials from `terraform/backend-credentials.enc.yaml` — see
+[docs/secrets.md](docs/secrets.md).
