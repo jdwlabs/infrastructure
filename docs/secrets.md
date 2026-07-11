@@ -123,6 +123,19 @@ MinIO root credentials (break-glass; day-to-day access uses the scoped
 `terraform-state-rw` key). Never write these values into `*.tf`, `*.tfvars`, or
 shell history — and never `source`/`eval` a decrypted secrets file.
 
+**One-time migration for existing machines:** a working directory whose
+`.terraform/` was initialized against the old local backend must be
+re-initialized once (`talops` skips init when `.terraform/` exists, and plan
+fails with "Backend initialization required" until this is done). From
+`terraform/`, run:
+
+```bash
+terraform init -migrate-state   # move local terraform.tfstate into MinIO
+```
+
+or, if the state already lives in the bucket, delete `.terraform/` and re-run
+`terraform init`.
+
 ## Command reference
 
 | Command | Purpose |

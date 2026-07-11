@@ -46,10 +46,11 @@ func (r *Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// Init runs terraform init. Skips if .terraform/ already exists when skipIfExists is true.
+// Init runs terraform init with -input=false so a pending backend change
+// fails fast instead of hanging on an interactive migration prompt.
 func (r *Runner) Init(ctx context.Context) error {
 	r.logger.Debug("running terraform init")
-	cmd := r.command(ctx, "init")
+	cmd := r.command(ctx, "init", "-input=false")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("terraform init: %w\n%s", err, string(output))
@@ -194,6 +195,17 @@ func (r *Runner) ShowStateJSON(ctx context.Context) (*StateOutput, error) {
 		return nil, fmt.Errorf("parse terraform state JSON: %w", err)
 	}
 	return &state, nil
+}
+
+// StatePull runs terraform state pull and returns the raw state, wherever the
+// backend stores it. Requires an initialized working directory.
+func (r *Runner) StatePull(ctx context.Context) ([]byte, error) {
+	cmd := r.command(ctx, "state", "pull")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("terraform state pull: %w", err)
+	}
+	return output, nil
 }
 
 // StateList runs terraform state list and returns the resource addresses.
