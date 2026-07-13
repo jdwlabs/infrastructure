@@ -1,0 +1,14 @@
+name: Security Scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    uses: jdwlabs/.github/.github/workflows/security-scan.yml@main
