@@ -10,8 +10,11 @@ Talos Kubernetes cluster provisioning on Proxmox - Terraform for VMs, Go tool fo
 
 ```
 terraform/    Proxmox VM definitions (providers, variables, control/worker nodes)
-bootstrap/    Go CLI tool - cluster bootstrap, reconciliation, infrastructure management
-docs/         Architecture documentation
+bootstrap/    Go CLI tool (talops) - cluster bootstrap, reconciliation, infrastructure management
+clusters/     Per-cluster runtime state created by talops (plaintext working files are
+              gitignored; the SOPS+age encrypted vault is the shared source of truth)
+scenarios/    Step-by-step operational runbooks and scaling-test fixtures
+docs/         Architecture and operations documentation
 ```
 
 ## Quick Start
