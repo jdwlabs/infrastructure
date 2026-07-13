@@ -1,0 +1,66 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Renovate is the single owner of dependency updates for this repo; keep repository-level (UI) Dependabot disabled.",
+    "Covers: Go modules (bootstrap/), Terraform providers (bpg/proxmox), GitHub Actions pins, and Talos/talosctl/sops/age version pins via the custom regex managers below.",
+    "All Talos pins (tfvars, tfvars.example, CI talosctl install) are grouped into one PR so the cluster target version moves atomically. Talos upgrades are applied by a human runbook — the PR is a prompt, not an auto-rollout."
+  ],
+  "extends": ["github>jdwlabs/.github"],
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "description": "Provider constraints use >= floors; bump the floor so new releases still produce a reviewable PR",
+      "matchManagers": ["terraform"],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Keep every Talos version pin in a single PR",
+      "matchDepNames": ["siderolabs/talos"],
+      "groupName": "talos"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "talos_version pin in Terraform tfvars",
+      "managerFilePatterns": ["/^terraform/terraform\\.tfvars(\\.example)?$/"],
+      "matchStrings": ["talos_version\\s*=\\s*\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Talos installer image tag in Terraform tfvars (factory.talos.dev schematic or ghcr.io installer)",
+      "managerFilePatterns": ["/^terraform/terraform\\.tfvars(\\.example)?$/"],
+      "matchStrings": [
+        "installer_image\\s*=\\s*\"(?:factory\\.talos\\.dev|ghcr\\.io/siderolabs)/[^\"]+:(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "talosctl version installed in CI (pinned to the repo's target Talos version)",
+      "managerFilePatterns": ["/^\\.github/workflows/bootstrap\\.yml$/"],
+      "matchStrings": ["TALOS_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "sops version installed in CI",
+      "managerFilePatterns": ["/^\\.github/workflows/bootstrap\\.yml$/"],
+      "matchStrings": ["SOPS_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "getsops/sops",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "age version installed in CI",
+      "managerFilePatterns": ["/^\\.github/workflows/bootstrap\\.yml$/"],
+      "matchStrings": ["AGE_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "FiloSottile/age",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
+}
