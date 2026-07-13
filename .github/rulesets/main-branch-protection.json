@@ -1,0 +1,47 @@
+{
+  "id": 14488997,
+  "name": "Main Branch Protection",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "jdwlabs/infrastructure",
+  "enforcement": "disabled",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH",
+        "refs/heads/main"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_signatures"
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5HOoKQzgDdFaU",
+  "created_at": "2026-03-29T21:32:20.132-05:00",
+  "updated_at": "2026-03-29T21:32:47.056-05:00",
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ],
+  "current_user_can_bypass": "always",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/jdwlabs/infrastructure/rulesets/14488997"
+    },
+    "html": {
+      "href": "https://github.com/jdwlabs/infrastructure/rules/14488997"
+    }
+  }
+}

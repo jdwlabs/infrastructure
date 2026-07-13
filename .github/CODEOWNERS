@@ -1,0 +1,8 @@
+# Last matching pattern wins; keep the catch-all first.
+* @jdwillmsen
+
+# Proxmox/Talos provisioning — changes reshape the physical cluster.
+/terraform/ @jdwillmsen
+
+# Cluster bootstrap sequence and secrets wiring.
+/bootstrap/ @jdwillmsen

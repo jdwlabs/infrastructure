@@ -1,0 +1,44 @@
+{
+  "id": 17653702,
+  "name": "Release Tag Protection",
+  "target": "tag",
+  "source_type": "Repository",
+  "source": "jdwlabs/infrastructure",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v*",
+        "refs/tags/*-v*"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5HOoKQzgENX8Y",
+  "created_at": "2026-06-13T23:41:17.520-05:00",
+  "updated_at": "2026-06-13T23:46:37.947-05:00",
+  "bypass_actors": [
+    {
+      "actor_id": null,
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    }
+  ],
+  "current_user_can_bypass": "always",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/jdwlabs/infrastructure/rulesets/17653702"
+    },
+    "html": {
+      "href": "https://github.com/jdwlabs/infrastructure/rules/17653702"
+    }
+  }
+}
