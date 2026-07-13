@@ -13,6 +13,11 @@ Thumbs.db
 *.pem
 *.key
 *.secret
+.env*
+kubeconfig*
+*.kubeconfig
+# Go sources like bootstrap/internal/talos/kubeconfig.go are code, not credentials
+!kubeconfig*.go
 
 # Bootstrap runtime state — plaintext working cache (regenerable).
 # The encrypted vault/ under each cluster is committed; only the decrypted
