@@ -1,0 +1,49 @@
+{
+  "id": 17653701,
+  "name": "Branch Naming Convention",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "jdwlabs/infrastructure",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [
+        "refs/heads/main",
+        "refs/heads/gh-pages"
+      ],
+      "include": [
+        "refs/heads/**"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "branch_name_pattern",
+      "parameters": {
+        "operator": "regex",
+        "pattern": "^(feat|fix|hotfix|release|chore|docs|refactor|test|ci)/.+",
+        "negate": false,
+        "name": "Conventional prefixes"
+      }
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5HOoKQzgENX8U",
+  "created_at": "2026-06-13T23:41:17.517-05:00",
+  "updated_at": "2026-06-13T23:41:17.535-05:00",
+  "bypass_actors": [
+    {
+      "actor_id": null,
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    }
+  ],
+  "current_user_can_bypass": "always",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/jdwlabs/infrastructure/rulesets/17653701"
+    },
+    "html": {
+      "href": "https://github.com/jdwlabs/infrastructure/rules/17653701"
+    }
+  }
+}
