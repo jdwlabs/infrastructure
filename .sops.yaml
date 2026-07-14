@@ -1,3 +1,7 @@
 creation_rules:
     - path_regex: \.enc\.ya?ml$
-      age: age1xqpap4ud2xpwvt0rkjwwtt9pkfk2yu0304et5jemv73amqjx4s7qn94jgu
+      # Two recipients: the workstation device key (~/.config/sops/age/keys.txt)
+      # and an offline recovery key held outside any repo device (break-glass,
+      # per docs/secrets.md). Vault re-keyed after the original single device
+      # key was lost — single-recipient vaults have no recovery path.
+      age: age1mnzxgvn0zq7t0fqc59uc9f3a24g5wmye9f6gqaa080w240s4q3gs40q9ch,age1ucm8z6jwu0cxk757whhjxvqnv9nf6egfaeltjc8ulxf9f8clpcnqggjv55
