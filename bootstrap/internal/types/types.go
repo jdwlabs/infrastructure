@@ -200,12 +200,18 @@ type InfraDeployState struct {
 	LastDeployment   string `json:"last_deployment"`
 }
 
+// DefaultClusterName is the placeholder cluster name used until the real
+// name arrives from --cluster, CLUSTER_NAME, or terraform.tfvars. Paths
+// derived while the name is still this placeholder point at a cluster
+// directory that should never exist on disk.
+const DefaultClusterName = "cluster"
+
 // DefaultConfig returns a config with sensible defaults.
 // Infrastructure-specific values (IPs, endpoints, credentials) are left
 // empty and must be provided via flags, environment variables, or tfvars.
 func DefaultConfig() *Config {
 	cfg := &Config{
-		ClusterName:             "cluster",
+		ClusterName:             DefaultClusterName,
 		TerraformTFVars:         "terraform.tfvars",
 		DefaultNetworkInterface: "eth0",
 		DefaultDisk:             "sda",

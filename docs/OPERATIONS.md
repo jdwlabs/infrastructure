@@ -66,10 +66,10 @@ Preconditions:
 - Regenerate and validate node configs without applying:
   render the role patch, apply with
   `talosctl machineconfig patch clusters/core/secrets/<role>.yaml --patch @<patch> -o <out>`
-  and inspect that the two `EthernetConfig` documents are present. Note:
-  `talops reconcile` currently resolves the secrets dir from a literal
-  `clusters/cluster/secrets` path; set the secrets-dir override to
-  `clusters/core/secrets` when using it.
+  and inspect that the two `EthernetConfig` documents are present.
+  `talops reconcile` resolves the secrets dir from `--cluster`,
+  `CLUSTER_NAME`, or the `cluster_name` in `terraform.tfvars`; no
+  secrets-dir override is needed.
 
 Order: workers first (smaller blast radius), then control planes one at a
 time with etcd health checks between each.

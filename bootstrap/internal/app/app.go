@@ -247,11 +247,6 @@ func (app *App) InitSession(cmd *cobra.Command) error {
 
 	app.CheckPrerequisites()
 
-	if cmd.Parent() == nil || cmd.Parent().Name() != "infra" {
-		clusterDir := filepath.Join("clusters", app.Cfg.ClusterName)
-		EnsureClusterGitignore(clusterDir)
-	}
-
 	return nil
 }
 
@@ -355,6 +350,32 @@ func (app *App) ResolveAllPaths() {
 			app.Logger.Debug("terraform.tfvars not found during path resolution", zap.Error(err))
 		}
 	}
+
+	// Step 3: Resolve the cluster name (and with it SecretsDir) from tfvars.
+	// Without this, commands run without --cluster/CLUSTER_NAME kept the
+	// placeholder name and read secrets from the placeholder cluster
+	// directory — the path that once grew a rogue CA. An explicit flag or
+	// env value still wins: tfvars only replaces the placeholder.
+	if err := stateMgr.LoadTerraformExtras(context.Background()); err != nil {
+		if app.Logger != nil {
+			app.Logger.Debug("could not resolve cluster name from tfvars", zap.Error(err))
+		}
+	}
+}
+
+// EnsureClusterScaffold creates the per-cluster .gitignore that keeps
+// generated plaintext (secrets, node configs, state) out of git. It must run
+// only after the cluster name is final; while the name is still the
+// placeholder it would scaffold a stray placeholder cluster directory.
+// infra subcommands never touch cluster state, so they skip it.
+func (app *App) EnsureClusterScaffold(cmd *cobra.Command) {
+	if cmd.Parent() != nil && cmd.Parent().Name() == "infra" {
+		return
+	}
+	if app.Cfg.ClusterName == types.DefaultClusterName {
+		return
+	}
+	EnsureClusterGitignore(filepath.Join("clusters", app.Cfg.ClusterName))
 }
 
 // CheckPrerequisites verifies required CLI tools are available

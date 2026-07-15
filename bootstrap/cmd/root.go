@@ -10,6 +10,7 @@ import (
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/app"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/state"
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -54,6 +55,9 @@ func Execute() error {
 				return err
 			}
 			a.ResolveAllPaths()
+			// Scaffold the per-cluster .gitignore only now that the cluster
+			// name is final (flag/env/tfvars all merged).
+			a.EnsureClusterScaffold(cmd)
 			return nil
 		},
 	}
@@ -61,7 +65,7 @@ func Execute() error {
 	cfg := a.Cfg
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVarP(&cfg.ClusterName, "cluster", "c", "cluster", "Cluster name")
+	rootCmd.PersistentFlags().StringVarP(&cfg.ClusterName, "cluster", "c", types.DefaultClusterName, "Cluster name")
 	rootCmd.PersistentFlags().StringVarP(&cfg.TerraformTFVars, "tfvars", "t", "terraform.tfvars", "Path to terraform.tfvars")
 	rootCmd.PersistentFlags().BoolVarP(&cfg.AutoApprove, "auto-approve", "a", false, "Skip confirmations")
 	rootCmd.PersistentFlags().BoolVarP(&cfg.DryRun, "dry-run", "d", false, "Simulate only")
