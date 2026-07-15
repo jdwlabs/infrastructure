@@ -695,7 +695,7 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
 
 	// Only update cluster name if it's still at the default value
-	if m.config.ClusterName == "cluster" {
+	if m.config.ClusterName == types.DefaultClusterName {
 		if name := extractSimpleStringField(content, "cluster_name"); name != "" {
 			m.config.ClusterName = name
 			// Re-derive paths based on new cluster name
