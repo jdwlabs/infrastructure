@@ -1,0 +1,7 @@
+# golang.org/x/crypto/openpgp is deprecated upstream by design — no fixed
+# version exists or ever will, so this finding is not actionable. Trivy flags
+# the whole golang.org/x/crypto module, but bootstrap/ imports only
+# golang.org/x/crypto/ssh{,/agent,/knownhosts} (Proxmox node discovery);
+# `go mod why golang.org/x/crypto/openpgp` reports "main module does not need
+# package". x/crypto module updates continue to flow via Renovate.
+GO-2026-5932
