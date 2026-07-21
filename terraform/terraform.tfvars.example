@@ -45,6 +45,16 @@ talos_control_configuration = [
 ]
 
 # Worker Nodes
+# Sizing guidance:
+# - Prefer fewer, larger workers over many small ones: a 4096 MiB worker
+#   keeps only ~1-2 GiB schedulable after system reserve, so placement (not
+#   total capacity) becomes the binding constraint.
+# - Longhorn stores replicas on the worker's own disk: a new worker's
+#   disk_size must match or exceed the Longhorn-exposed capacity of any
+#   worker it is meant to replace, or replica rebuilds will not fit.
+# - On hosts shared with non-Talos VMs (GPU inference, CI runners), keep the
+#   sum of all dedicated `memory` below host RAM minus the co-tenant
+#   reservation — Proxmox dedicated memory is not reclaimed while a VM runs.
 talos_worker_configuration = [
   {
     node_name = "pve1"
@@ -53,6 +63,14 @@ talos_worker_configuration = [
     cpu_cores = 4
     memory    = 8192
     disk_size = 100
+  },
+  {
+    node_name = "pve2"
+    vm_name   = "talos-worker-2"
+    vmid      = 302
+    cpu_cores = 6
+    memory    = 16384
+    disk_size = 200
   },
 ]
 
