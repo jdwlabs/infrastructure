@@ -7,7 +7,7 @@ on `gpu-node.tf` for that).
 
 **VM:** `vllm-inference`, static `192.168.1.50`, user `vllm`
 **GPU:** RTX 5090, PCI `0000:01:00` (VGA + audio, IOMMU group 13), cluster mapping `gpu-rtx5090`
-**Model:** `openai/gpt-oss-20b` (native mxfp4, ~16GiB — leaves headroom on the 32GiB card for KV cache)
+**Model:** `QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ`, served as `qwen/qwen3-coder-30b-a3b` (AWQ 4-bit, ~15.7GiB — 30B-total/3.3B-active MoE coder; GQA keeps the 32k-ctx KV cache ~3GiB on the 32GiB card)
 
 ---
 
@@ -96,9 +96,12 @@ Wants=network-online.target
 
 [Service]
 User=vllm
-ExecStart=/home/vllm/vllm-env/bin/vllm serve openai/gpt-oss-20b \
+ExecStart=/home/vllm/vllm-env/bin/vllm serve QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ \
+  --served-model-name qwen/qwen3-coder-30b-a3b \
   --host 0.0.0.0 --port 8000 \
-  --max-model-len 32768
+  --quantization awq_marlin \
+  --max-model-len 32768 \
+  --enable-auto-tool-choice --tool-call-parser qwen3_xml
 Restart=always
 RestartSec=10
 
@@ -126,8 +129,9 @@ After reboot: `sudo systemctl start vllm`.
 
 ## 4. First-boot model download
 
-The ~13GiB `gpt-oss-20b` download over the default `huggingface_hub` requests
-backend hung indefinitely for us — connections sat in `CLOSE-WAIT` against the
+The model download (~13GiB for the original `gpt-oss-20b`; ~16GiB for the
+`Qwen3-Coder-30B-A3B-Instruct-AWQ` weights) over the default `huggingface_hub`
+requests backend hung indefinitely for us — connections sat in `CLOSE-WAIT` against the
 AWS CloudFront edge IPs backing the HF CDN with zero bytes moving, both on the
 full download and on the lighter revision/etag re-check that runs on every
 `vllm serve` start even once the model is cached. **This is separate from the
@@ -149,17 +153,17 @@ cleanly and `HF_HUB_OFFLINE=1` will refuse to start with
 `IncompleteSnapshotError` against it:
 
 ```bash
-rm -rf ~/.cache/huggingface/hub/models--openai--gpt-oss-20b
+rm -rf ~/.cache/huggingface/hub/models--QuantTrio--Qwen3-Coder-30B-A3B-Instruct-AWQ
 sudo systemctl restart vllm
 ```
 
 ## 5. Verify
 
 ```bash
-curl -s http://192.168.1.50:8000/v1/models | grep gpt-oss
+curl -s http://192.168.1.50:8000/v1/models | grep qwen
 curl -s http://192.168.1.50:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"say ok"}],"max_tokens":20}'
+  -d '{"model":"qwen/qwen3-coder-30b-a3b","messages":[{"role":"user","content":"say ok"}],"max_tokens":20}'
 ```
 
 `nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader` should
