@@ -1,6 +1,17 @@
 # Runbook: Worker rebalance onto pve5 (scale out, retire small workers)
 
-Status: PLANNED — every `terraform apply` in this runbook is executed by a
+Status: DEFERRED (2026-07-21) — do not execute. The worker-capacity problem
+this plan targeted was resolved by right-sizing (honest requests, QoS floors,
+priorityClasses), relocating monitoring to the pve5 worker, and storage
+cleanup: the biggest worker runs ~16% live, cluster requests ~19% of
+allocatable. The remaining hot spot is the control planes, which this
+worker-only plan cannot help — see `scenarios/cp-memory-resize.md`. The
+former CI-node reservation on pve5 is void (self-hosted ARC runners are
+dormant; CI is exclusively GitHub-hosted), leaving pve5 earmarked for the
+GPU/AI node. Kept as reference for a future genuine worker-capacity need;
+the guardrails below remain the standard for any such execution.
+
+If ever executed: every `terraform apply` in this runbook is run by a
 human. The agent contract forbids autonomous applies. Workers only — this
 runbook never touches a control-plane node.
 
