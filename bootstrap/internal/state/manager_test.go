@@ -498,32 +498,34 @@ func TestManager_UpdateNodeState(t *testing.T) {
 	}
 
 	t.Run("adds new control plane", func(t *testing.T) {
-		f.manager.UpdateNodeState(state, 100, "192.168.1.10", "hash1", types.RoleControlPlane)
+		f.manager.UpdateNodeState(state, 100, "192.168.1.10", "hash1", "tmpl1", types.RoleControlPlane)
 
 		require.Len(t, state.ControlPlanes, 1)
 		assert.Equal(t, types.VMID(100), state.ControlPlanes[0].VMID)
 		assert.Equal(t, "hash1", state.ControlPlanes[0].ConfigHash)
+		assert.Equal(t, "tmpl1", state.ControlPlanes[0].TemplateHash)
 		assert.True(t, state.ControlPlanes[0].IP.Equal(net.ParseIP("192.168.1.10")))
 		assert.False(t, state.ControlPlanes[0].LastSeen.IsZero())
 	})
 
 	t.Run("updates existing control plane", func(t *testing.T) {
-		f.manager.UpdateNodeState(state, 100, "192.168.1.11", "hash2", types.RoleControlPlane)
+		f.manager.UpdateNodeState(state, 100, "192.168.1.11", "hash2", "tmpl2", types.RoleControlPlane)
 
 		require.Len(t, state.ControlPlanes, 1)
 		assert.Equal(t, "hash2", state.ControlPlanes[0].ConfigHash)
+		assert.Equal(t, "tmpl2", state.ControlPlanes[0].TemplateHash)
 		assert.True(t, state.ControlPlanes[0].IP.Equal(net.ParseIP("192.168.1.11")))
 	})
 
 	t.Run("adds worker", func(t *testing.T) {
-		f.manager.UpdateNodeState(state, 200, "192.168.1.20", "hash3", types.RoleWorker)
+		f.manager.UpdateNodeState(state, 200, "192.168.1.20", "hash3", "tmpl3", types.RoleWorker)
 
 		require.Len(t, state.Workers, 1)
 		assert.Equal(t, types.VMID(200), state.Workers[0].VMID)
 	})
 
 	t.Run("handles empty IP", func(t *testing.T) {
-		f.manager.UpdateNodeState(state, 300, "", "hash4", types.RoleControlPlane)
+		f.manager.UpdateNodeState(state, 300, "", "hash4", "tmpl4", types.RoleControlPlane)
 
 		found := false
 		for _, cp := range state.ControlPlanes {
@@ -533,6 +535,53 @@ func TestManager_UpdateNodeState(t *testing.T) {
 			}
 		}
 		assert.True(t, found)
+	})
+}
+
+// TestManager_SetNodeTemplateHash validates template hash backfill on deployed nodes
+func TestManager_SetNodeTemplateHash(t *testing.T) {
+	f := newTestFixture(t)
+
+	newState := func() *types.ClusterState {
+		return &types.ClusterState{
+			ControlPlanes: []types.NodeState{{VMID: 100, ConfigHash: "cfg1"}},
+			Workers:       []types.NodeState{{VMID: 200, ConfigHash: "cfg2", TemplateHash: "old"}},
+		}
+	}
+
+	t.Run("backfills missing hash on control plane", func(t *testing.T) {
+		state := newState()
+
+		changed := f.manager.SetNodeTemplateHash(state, 100, types.RoleControlPlane, "tmpl1")
+
+		assert.True(t, changed)
+		assert.Equal(t, "tmpl1", state.ControlPlanes[0].TemplateHash)
+		assert.Equal(t, "cfg1", state.ControlPlanes[0].ConfigHash, "config hash untouched")
+	})
+
+	t.Run("updates stale hash on worker", func(t *testing.T) {
+		state := newState()
+
+		changed := f.manager.SetNodeTemplateHash(state, 200, types.RoleWorker, "new")
+
+		assert.True(t, changed)
+		assert.Equal(t, "new", state.Workers[0].TemplateHash)
+	})
+
+	t.Run("no-op when hash already current", func(t *testing.T) {
+		state := newState()
+
+		changed := f.manager.SetNodeTemplateHash(state, 200, types.RoleWorker, "old")
+
+		assert.False(t, changed)
+	})
+
+	t.Run("no-op for unknown node", func(t *testing.T) {
+		state := newState()
+
+		changed := f.manager.SetNodeTemplateHash(state, 999, types.RoleWorker, "tmpl")
+
+		assert.False(t, changed)
 	})
 }
 

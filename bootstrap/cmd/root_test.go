@@ -141,6 +141,15 @@ func TestReconcileCmd(t *testing.T) {
 		assert.Equal(t, "Show changes without applying", flag.Usage)
 	})
 
+	t.Run("generate-only flag is registered", func(t *testing.T) {
+		a := setupTestApp(t)
+		cmd := reconcileCmd(a)
+
+		flag := cmd.Flags().Lookup("generate-only")
+		require.NotNil(t, flag)
+		assert.Equal(t, "false", flag.DefValue)
+	})
+
 	t.Run("plan mode sets dry-run", func(t *testing.T) {
 		a := setupTestApp(t)
 

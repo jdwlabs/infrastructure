@@ -35,11 +35,18 @@ copy stays until deleted by hand.
 
 1. Rebuild talops so the embedded template no longer carries the entry:
    `cd bootstrap && go build -o build/ ./...` (or `build.bat`).
-2. Regenerate node configs (talops auto-hydrates the vault):
-   `talops reconcile` resolves the secrets dir from `--cluster`,
-   `CLUSTER_NAME`, or `cluster_name` in `terraform.tfvars`. Inspect a
-   regenerated CP config and confirm `cluster.extraManifests` lists only
-   `kubelet-serving-cert-approver`.
+2. Regenerate node configs without contacting any node (talops auto-hydrates
+   the vault): `talops reconcile --generate-only` resolves the secrets dir
+   from `--cluster`, `CLUSTER_NAME`, or `cluster_name` in `terraform.tfvars`
+   and rewrites every YAML under `clusters/<name>/nodes/` from the current
+   templates. Inspect a regenerated CP config and confirm
+   `cluster.extraManifests` lists only `kubelet-serving-cert-approver`.
+   (A plain `talops reconcile` also detects the template change on its own —
+   it compares the recorded template hash in `bootstrap-state.json` against
+   the current template inputs, regenerates stale YAMLs, and lists the
+   affected nodes under "Update N node config(s)" in the plan. State files
+   written before template-hash tracking regenerate configs on the first run
+   and backfill the hash without applying anything if the YAML is unchanged.)
 3. **HUMAN**: apply the regenerated config to the three control planes, one
    at a time (workers carry the same cluster section but extraManifests only
    acts on control planes; applying to workers too keeps drift at zero):

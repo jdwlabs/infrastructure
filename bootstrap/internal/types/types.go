@@ -38,13 +38,17 @@ type NodeSpec struct {
 
 // NodeState represents what we know is deployed (your DEPLOYED_*_IPS)
 type NodeState struct {
-	VMID       VMID       `json:"vmid"`
-	IP         net.IP     `json:"ip,omitempty"`
-	ConfigHash string     `json:"config_hash,omitempty"`
-	MAC        string     `json:"mac,omitempty"` // For IP rediscovery
-	LastSeen   time.Time  `json:"last_seen"`
-	Role       Role       `json:"role,omitempty"`       // Stored for audit trail (self-describing history entries)
-	RemovedAt  *time.Time `json:"removed_at,omitempty"` // Set when node is removed from cluster
+	VMID       VMID   `json:"vmid"`
+	IP         net.IP `json:"ip,omitempty"`
+	ConfigHash string `json:"config_hash,omitempty"`
+	// TemplateHash covers the config-generation inputs (rendered role patch,
+	// per-node patch, base config) at last apply. Empty on state files written
+	// before tracking existed — treated as unknown, never as a match.
+	TemplateHash string     `json:"template_hash,omitempty"`
+	MAC          string     `json:"mac,omitempty"` // For IP rediscovery
+	LastSeen     time.Time  `json:"last_seen"`
+	Role         Role       `json:"role,omitempty"`       // Stored for audit trail (self-describing history entries)
+	RemovedAt    *time.Time `json:"removed_at,omitempty"` // Set when node is removed from cluster
 }
 
 // MarshalJSON customizes JSON serialization for NodeState
@@ -118,6 +122,22 @@ type ClusterState struct {
 	TalosVersion         string      `json:"talos_version"`
 }
 
+// NodeTemplateHash returns the recorded template hash for a deployed node,
+// or "" when the node is unknown or predates template-hash tracking.
+func (s *ClusterState) NodeTemplateHash(vmid VMID) string {
+	for i := range s.ControlPlanes {
+		if s.ControlPlanes[i].VMID == vmid {
+			return s.ControlPlanes[i].TemplateHash
+		}
+	}
+	for i := range s.Workers {
+		if s.Workers[i].VMID == vmid {
+			return s.Workers[i].TemplateHash
+		}
+	}
+	return ""
+}
+
 // ReconcilePlan replaces your PLAN_* arrays
 type ReconcilePlan struct {
 	NeedsBootstrap      bool   `json:"needs_bootstrap"`
@@ -177,6 +197,7 @@ type Config struct {
 	PlanMode         bool   `json:"plan_mode"`
 	SkipPreflight    bool   `json:"skip_preflight"`
 	ForceReconfigure bool   `json:"force_reconfigure"`
+	GenerateOnly     bool   `json:"generate_only"` // Regenerate node YAMLs without contacting nodes
 	LogLevel         string `json:"log_level"`
 	LogDir           string `json:"log_dir"`
 	NoColor          bool   `json:"no_color"`

@@ -658,3 +658,10 @@ func (c *Client) GenerateNodeConfig(_ context.Context, spec *types.NodeSpec, sec
 	outputDir := filepath.Join(secretsDir, "..", "nodes")
 	return nc.Generate(spec, outputDir)
 }
+
+// NodeTemplateHash computes the hash of the inputs that produce a node's
+// rendered config (role patch template, per-node patch, base config).
+// Pure local computation - never contacts a node.
+func (c *Client) NodeTemplateHash(spec *types.NodeSpec) (string, error) {
+	return NewNodeConfig(c.config).TemplateHash(spec)
+}

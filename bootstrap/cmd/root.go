@@ -127,6 +127,7 @@ func bootstrapCmd(a *app.App) *cobra.Command {
 
 func reconcileCmd(a *app.App) *cobra.Command {
 	var planMode bool
+	var generateOnly bool
 	cmd := &cobra.Command{
 		Use:   "reconcile",
 		Short: "Reconcile cluster with terraform.tfvars",
@@ -138,11 +139,15 @@ func reconcileCmd(a *app.App) *cobra.Command {
 				a.Cfg.PlanMode = true
 				a.Cfg.DryRun = true
 			}
+			if generateOnly {
+				a.Cfg.GenerateOnly = true
+			}
 
 			return a.RunReconcile(ctx)
 		},
 	}
 	cmd.Flags().BoolVarP(&planMode, "plan", "p", false, "Show changes without applying")
+	cmd.Flags().BoolVar(&generateOnly, "generate-only", false, "Regenerate node config YAMLs from templates without contacting nodes")
 	return cmd
 }
 
