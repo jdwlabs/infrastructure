@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/discovery"
@@ -43,7 +44,11 @@ func (app *App) RunReconcile(ctx context.Context) error {
 	)
 
 	if app.Session != nil && app.Session.AuditLog != nil {
-		app.Session.AuditLog.WriteEntry("RECONCILE-START", fmt.Sprintf("cluster=%s dry_run=%v plan_mode=%v", cfg.ClusterName, cfg.DryRun, cfg.PlanMode))
+		app.Session.AuditLog.WriteEntry("RECONCILE-START", fmt.Sprintf("cluster=%s dry_run=%v plan_mode=%v generate_only=%v", cfg.ClusterName, cfg.DryRun, cfg.PlanMode, cfg.GenerateOnly))
+	}
+
+	if cfg.GenerateOnly {
+		return app.runGenerateOnly(ctx, stateMgr)
 	}
 
 	if cfg.InsecureSSH {
@@ -113,23 +118,42 @@ func (app *App) RunReconcile(ctx context.Context) error {
 	}
 	app.Logger.Info("loaded desired state", zap.Int("nodes", len(desired)))
 
-	// Generate node configs for any desired nodes missing configs
-	for vmid, spec := range desired {
-		configPath := stateMgr.NodeConfigPath(vmid, spec.Role)
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			app.Logger.Info("generating config for node", zap.Int("vmid", int(vmid)), zap.String("role", string(spec.Role)))
-			if _, err := talosClient.GenerateNodeConfig(ctx, spec, cfg.SecretsDir); err != nil {
-				app.Logger.Error("failed to generate node config", zap.Error(err))
-				return fmt.Errorf("generate config for VMID %d: %w", vmid, err)
-			}
-		}
-	}
-
 	app.Logger.Info("loading deployed state")
 	deployed, err := stateMgr.LoadDeployedState(ctx)
 	if err != nil {
 		app.Logger.Error("failed to load deployed state", zap.Error(err))
 		return fmt.Errorf("load deployed state: %w", err)
+	}
+
+	// Generate node configs for desired nodes whose on-disk YAML is missing or
+	// stale. Staleness is detected by comparing the recorded template hash
+	// against the current config-generation inputs, so a template-only change
+	// (embedded patch, per-cluster override, per-node patch, base config)
+	// regenerates the YAML; the plan's config-hash comparison then picks up the
+	// difference and schedules a gated per-node apply.
+	for vmid, spec := range desired {
+		configPath := stateMgr.NodeConfigPath(vmid, spec.Role)
+		_, statErr := os.Stat(configPath)
+		configExists := statErr == nil
+
+		currentTemplateHash, hashErr := talosClient.NodeTemplateHash(spec)
+		if hashErr != nil {
+			app.Logger.Warn("failed to compute template hash", zap.Int("vmid", int(vmid)), zap.Error(hashErr))
+		}
+
+		reason := configRegenReason(configExists, deployed.NodeTemplateHash(vmid), currentTemplateHash)
+		if reason == "" {
+			continue
+		}
+
+		app.Logger.Info("generating config for node",
+			zap.Int("vmid", int(vmid)),
+			zap.String("role", string(spec.Role)),
+			zap.String("reason", reason))
+		if _, err := talosClient.GenerateNodeConfig(ctx, spec, cfg.SecretsDir); err != nil {
+			app.Logger.Error("failed to generate node config", zap.Error(err))
+			return fmt.Errorf("generate config for VMID %d: %w", vmid, err)
+		}
 	}
 
 	// Phase 2: Discovery
@@ -201,6 +225,33 @@ func (app *App) RunReconcile(ctx context.Context) error {
 		return nil
 	}
 
+	// Backfill template hashes for unchanged nodes: state files written before
+	// hash tracking (or after a template revert) regenerate identical YAMLs, so
+	// no apply is needed - just record the hash so the next run skips the regen.
+	if !cfg.DryRun {
+		backfilled := false
+		for _, vmid := range plan.NoOp {
+			spec, exists := desired[vmid]
+			if !exists {
+				continue
+			}
+			templateHash, hashErr := talosClient.NodeTemplateHash(spec)
+			if hashErr != nil || templateHash == "" {
+				continue
+			}
+			if stateMgr.SetNodeTemplateHash(deployed, vmid, spec.Role, templateHash) {
+				backfilled = true
+			}
+		}
+		if backfilled {
+			if err := stateMgr.Save(ctx, deployed); err != nil {
+				app.Logger.Warn("failed to save backfilled template hashes", zap.Error(err))
+			} else {
+				app.Logger.Info("recorded template hashes for unchanged nodes")
+			}
+		}
+	}
+
 	if plan.IsEmpty() {
 		app.Logger.Info("no node changes required")
 		if err := app.updateHAProxy(ctx, cfg, deployed); err != nil {
@@ -229,6 +280,73 @@ func (app *App) RunReconcile(ctx context.Context) error {
 	if app.Session != nil && app.Session.AuditLog != nil {
 		app.Session.AuditLog.WriteEntry("RECONCILE-END", fmt.Sprintf("cluster=%s status=success", cfg.ClusterName))
 	}
+	return nil
+}
+
+// configRegenReason decides whether a node's on-disk YAML must be regenerated
+// before planning, and why. Empty string means the config is current. An
+// unknown stored hash (state file predating template-hash tracking) forces a
+// regeneration but never an apply: the plan's config-hash comparison decides
+// whether the freshly rendered YAML actually differs from what was deployed.
+func configRegenReason(configExists bool, storedTemplateHash, currentTemplateHash string) string {
+	switch {
+	case !configExists:
+		return "config file missing"
+	case currentTemplateHash == "":
+		return ""
+	case storedTemplateHash == "":
+		return "template hash not yet tracked in state"
+	case storedTemplateHash != currentTemplateHash:
+		return "template inputs changed"
+	default:
+		return ""
+	}
+}
+
+// runGenerateOnly regenerates every desired node's config YAML from the
+// current patch templates without contacting any node. Deployed state is left
+// untouched: the next reconcile compares the regenerated YAMLs against the
+// recorded config hashes and plans gated per-node applies for any that differ.
+func (app *App) runGenerateOnly(ctx context.Context, stateMgr *state.Manager) error {
+	cfg := app.Cfg
+
+	desired, err := stateMgr.LoadDesiredState(ctx)
+	if err != nil {
+		app.Logger.Error("failed to load desired state", zap.Error(err))
+		return fmt.Errorf("load desired state: %w", err)
+	}
+	if len(desired) == 0 {
+		app.Logger.Error("no nodes defined in desired state")
+		return fmt.Errorf("no nodes defined in desired state - check your terraform.tfvars")
+	}
+
+	talosClient := talos.NewClient(cfg)
+	talosClient.SetLogger(app.Logger)
+	if app.Session != nil && app.Session.AuditLog != nil {
+		talosClient.SetAuditLogger(app.Session.AuditLog)
+	}
+
+	vmids := make([]types.VMID, 0, len(desired))
+	for vmid := range desired {
+		vmids = append(vmids, vmid)
+	}
+	sort.Slice(vmids, func(i, j int) bool { return vmids[i] < vmids[j] })
+
+	for _, vmid := range vmids {
+		spec := desired[vmid]
+		app.Logger.Info("regenerating node config",
+			zap.Int("vmid", int(vmid)),
+			zap.String("role", string(spec.Role)),
+			zap.String("path", stateMgr.NodeConfigPath(vmid, spec.Role)))
+		if _, err := talosClient.GenerateNodeConfig(ctx, spec, cfg.SecretsDir); err != nil {
+			app.Logger.Error("failed to generate node config", zap.Int("vmid", int(vmid)), zap.Error(err))
+			return fmt.Errorf("generate config for VMID %d: %w", vmid, err)
+		}
+	}
+
+	app.Logger.Info("node configs regenerated - no nodes contacted",
+		zap.Int("nodes", len(vmids)),
+		zap.String("hint", "run 'talops reconcile' to plan gated applies for changed configs"))
 	return nil
 }
 
@@ -286,7 +404,7 @@ func (app *App) executeBootstrap(
 			return firstVMID, nil
 		}
 
-		newIP, err := app.deployNode(ctx, firstVMID, types.RoleControlPlane, live, deployed, stateMgr, scanner, talosClient)
+		newIP, err := app.deployNode(ctx, spec, live, deployed, stateMgr, scanner, talosClient)
 		if err != nil {
 			app.Logger.Error("bootstrap first control plane failed", zap.Int("vmid", int(firstVMID)), zap.Error(err))
 			return 0, fmt.Errorf("bootstrap first CP: %w", err)
@@ -370,14 +488,14 @@ func (app *App) bootstrapEtcdAndWait(ctx context.Context, talosClient *talos.Cli
 // deployNode handles the apply -> reboot -> wait -> hash flow for adding a node
 func (app *App) deployNode(
 	ctx context.Context,
-	vmid types.VMID,
-	role types.Role,
+	spec *types.NodeSpec,
 	live map[types.VMID]*types.LiveNode,
 	deployed *types.ClusterState,
 	stateMgr *state.Manager,
 	scanner *discovery.Scanner,
 	talosClient *talos.Client,
 ) (net.IP, error) {
+	vmid, role := spec.VMID, spec.Role
 	node, ok := live[vmid]
 	if !ok || node.IP == nil {
 		// Retry IP discovery up to 3 times with 10s intervals - VMs may still be booting
@@ -442,7 +560,11 @@ func (app *App) deployNode(
 	if hashErr != nil {
 		app.Logger.Warn("failed to hash config file", zap.Int("vmid", int(vmid)), zap.Error(hashErr))
 	}
-	stateMgr.UpdateNodeState(deployed, vmid, newIP.String(), configHash, role)
+	templateHash, hashErr := talosClient.NodeTemplateHash(spec)
+	if hashErr != nil {
+		app.Logger.Warn("failed to compute template hash", zap.Int("vmid", int(vmid)), zap.Error(hashErr))
+	}
+	stateMgr.UpdateNodeState(deployed, vmid, newIP.String(), configHash, templateHash, role)
 
 	app.Logger.Info("node deployed, Talos API responding", zap.Int("vmid", int(vmid)), zap.String("role", string(role)), zap.String("ip", newIP.String()))
 	return newIP, nil
@@ -648,7 +770,7 @@ func (app *App) executePlan(
 				continue
 			}
 
-			if _, err := app.deployNode(ctx, vmid, types.RoleControlPlane, live, deployed, stateMgr, scanner, talosClient); err != nil {
+			if _, err := app.deployNode(ctx, spec, live, deployed, stateMgr, scanner, talosClient); err != nil {
 				app.Logger.Error("failed to add control plane", zap.Int("vmid", int(vmid)), zap.Error(err))
 				return fmt.Errorf("add CP %d: %w", vmid, err)
 			}
@@ -743,7 +865,7 @@ func (app *App) executePlan(
 					return nil
 				}
 
-				if _, err := app.deployNode(gctx, vmid, types.RoleWorker, live, deployed, stateMgr, scanner, talosClient); err != nil {
+				if _, err := app.deployNode(gctx, spec, live, deployed, stateMgr, scanner, talosClient); err != nil {
 					return fmt.Errorf("add worker %d: %w", vmid, err)
 				}
 				return nil
@@ -882,7 +1004,11 @@ func (app *App) executePlan(
 			if hashErr != nil {
 				app.Logger.Warn("failed to hash config file", zap.Int("vmid", int(vmid)), zap.Error(hashErr))
 			}
-			stateMgr.UpdateNodeState(deployed, vmid, nodeIP.String(), configHash, spec.Role)
+			templateHash, hashErr := talosClient.NodeTemplateHash(spec)
+			if hashErr != nil {
+				app.Logger.Warn("failed to compute template hash", zap.Int("vmid", int(vmid)), zap.Error(hashErr))
+			}
+			stateMgr.UpdateNodeState(deployed, vmid, nodeIP.String(), configHash, templateHash, spec.Role)
 		}
 	}
 

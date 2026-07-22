@@ -547,15 +547,16 @@ func (m *Manager) Save(_ context.Context, state *types.ClusterState) error {
 
 // UpdateNodeState updates a node's state in the cluster state.
 // Safe for concurrent use from multiple goroutines.
-func (m *Manager) UpdateNodeState(state *types.ClusterState, vmid types.VMID, ip string, hash string, role types.Role) {
+func (m *Manager) UpdateNodeState(state *types.ClusterState, vmid types.VMID, ip string, hash string, templateHash string, role types.Role) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	nodeState := types.NodeState{
-		VMID:       vmid,
-		ConfigHash: hash,
-		LastSeen:   time.Now(),
-		Role:       role,
+		VMID:         vmid,
+		ConfigHash:   hash,
+		TemplateHash: templateHash,
+		LastSeen:     time.Now(),
+		Role:         role,
 	}
 	if ip != "" {
 		nodeState.IP = parseIP(ip)
@@ -588,6 +589,32 @@ func (m *Manager) UpdateNodeState(state *types.ClusterState, vmid types.VMID, ip
 			state.Workers = append(state.Workers, nodeState)
 		}
 	}
+}
+
+// SetNodeTemplateHash records the current template hash on an already-deployed
+// node without touching its config hash, IP, or last-seen time. Used to backfill
+// state files written before template-hash tracking existed when the regenerated
+// config turned out identical (no apply happened). Returns true when the state
+// was modified. Safe for concurrent use from multiple goroutines.
+func (m *Manager) SetNodeTemplateHash(state *types.ClusterState, vmid types.VMID, role types.Role, templateHash string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var nodes []types.NodeState
+	switch role {
+	case types.RoleControlPlane:
+		nodes = state.ControlPlanes
+	case types.RoleWorker:
+		nodes = state.Workers
+	}
+
+	for i := range nodes {
+		if nodes[i].VMID == vmid && nodes[i].TemplateHash != templateHash {
+			nodes[i].TemplateHash = templateHash
+			return true
+		}
+	}
+	return false
 }
 
 // RemoveNodeState removes a node from the active cluster state and moves it

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -192,10 +193,21 @@ func resolveNodePatch(vmid types.VMID, patchDir, clusterDir string) string {
 	return ""
 }
 
-// Generate creates a Talos node config by generating a patch file and applying it
-// to the base config using talosctl machineconfig patch. Returns the SHA256 hash.
-// Uses the patch override chain: --patch-dir > clusters/<cluster>/patches/ > embedded.
-func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, error) {
+// baseConfigFileName maps a node role to its base config file in SecretsDir.
+func baseConfigFileName(role types.Role) (string, error) {
+	switch role {
+	case types.RoleControlPlane:
+		return "control-plane.yaml", nil
+	case types.RoleWorker:
+		return "worker.yaml", nil
+	default:
+		return "", fmt.Errorf("unknown node role: %s", role)
+	}
+}
+
+// renderRolePatch resolves the role patch template through the override chain
+// and renders it with this node's template data.
+func (nc *NodeConfig) renderRolePatch(spec *types.NodeSpec) ([]byte, error) {
 	data := templateData{
 		Hostname:                spec.Name,
 		DefaultDisk:             nc.cfg.DefaultDisk,
@@ -206,14 +218,73 @@ func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, 
 		ClusterName:             nc.cfg.ClusterName,
 	}
 
-	var baseConfigName string
-	switch spec.Role {
-	case types.RoleControlPlane:
-		baseConfigName = "control-plane.yaml"
-	case types.RoleWorker:
-		baseConfigName = "worker.yaml"
-	default:
-		return "", fmt.Errorf("unknown node role: %s", spec.Role)
+	clusterDir := filepath.Join("clusters", nc.cfg.ClusterName)
+	tmplStr, _ := resolvePatchTemplate(spec.Role, nc.cfg.PatchDir, clusterDir)
+
+	tmpl, err := template.New("nodePatch").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("execute template: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// TemplateHash computes a SHA256 over the inputs that determine a node's
+// rendered config: the role patch template rendered with this node's data,
+// the optional per-node patch, and the base config the patches apply to.
+// A change in any input means the node YAML on disk is stale and must be
+// regenerated. Missing per-node patch and base config hash as empty sections,
+// so the hash stays comparable across those states.
+func (nc *NodeConfig) TemplateHash(spec *types.NodeSpec) (string, error) {
+	baseName, err := baseConfigFileName(spec.Role)
+	if err != nil {
+		return "", err
+	}
+
+	rendered, err := nc.renderRolePatch(spec)
+	if err != nil {
+		return "", err
+	}
+
+	clusterDir := filepath.Join("clusters", nc.cfg.ClusterName)
+
+	var nodePatch []byte
+	if path := resolveNodePatch(spec.VMID, nc.cfg.PatchDir, clusterDir); path != "" {
+		nodePatch, err = os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read per-node patch: %w", err)
+		}
+	}
+
+	// Base config may not exist yet (fresh checkout before hydration); hash it
+	// as empty so the eventual regeneration records the real hash.
+	baseConfig, err := os.ReadFile(filepath.Join(nc.cfg.SecretsDir, baseName))
+	if err != nil {
+		baseConfig = nil
+	}
+
+	h := sha256.New()
+	for _, section := range [][]byte{rendered, nodePatch, baseConfig} {
+		// Length-prefix each section so boundaries stay unambiguous
+		var lenBuf [8]byte
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(section)))
+		h.Write(lenBuf[:])
+		h.Write(section)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Generate creates a Talos node config by generating a patch file and applying it
+// to the base config using talosctl machineconfig patch. Returns the SHA256 hash.
+// Uses the patch override chain: --patch-dir > clusters/<cluster>/patches/ > embedded.
+func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, error) {
+	baseConfigName, err := baseConfigFileName(spec.Role)
+	if err != nil {
+		return "", err
 	}
 
 	// Ensure base configs exists
@@ -224,20 +295,12 @@ func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, 
 		}
 	}
 
-	// Resolve role patch template from override chain
-	clusterDir := filepath.Join("clusters", nc.cfg.ClusterName)
-	tmplStr, _ := resolvePatchTemplate(spec.Role, nc.cfg.PatchDir, clusterDir)
-
-	// Render patch template
-	tmpl, err := template.New("nodePatch").Parse(tmplStr)
+	rendered, err := nc.renderRolePatch(spec)
 	if err != nil {
-		return "", fmt.Errorf("parse template: %w", err)
+		return "", err
 	}
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("execute template: %w", err)
-	}
+	clusterDir := filepath.Join("clusters", nc.cfg.ClusterName)
 
 	// Write patch to temp file
 	patchDir := filepath.Join(outputDir, ".patches")
@@ -246,7 +309,7 @@ func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, 
 	}
 
 	patchFile := filepath.Join(patchDir, fmt.Sprintf("%s-%d.yaml", spec.Role, spec.VMID))
-	if err := os.WriteFile(patchFile, buf.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(patchFile, rendered, 0600); err != nil {
 		return "", fmt.Errorf("write patch file: %w", err)
 	}
 	defer func() { _ = os.Remove(patchFile) }()

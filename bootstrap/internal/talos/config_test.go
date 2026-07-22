@@ -1,6 +1,7 @@
 package talos
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -542,6 +543,130 @@ func TestResolveNodePatch(t *testing.T) {
 
 		result := resolveNodePatch(301, "", "")
 		assert.Empty(t, result)
+	})
+}
+
+func TestNodeConfigTemplateHash(t *testing.T) {
+	newSpec := func(role types.Role) *types.NodeSpec {
+		return &types.NodeSpec{
+			VMID:   201,
+			Name:   "talos-node-1",
+			Node:   "pve1",
+			CPU:    4,
+			Memory: 8192,
+			Disk:   50,
+			Role:   role,
+		}
+	}
+
+	t.Run("deterministic for identical inputs", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		nc := NewNodeConfig(cfg)
+
+		hash1, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+		assert.Len(t, hash1, 64)
+
+		hash2, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+		assert.Equal(t, hash1, hash2)
+	})
+
+	t.Run("differs between roles", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		nc := NewNodeConfig(cfg)
+
+		cpHash, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+		workerHash, err := nc.TemplateHash(newSpec(types.RoleWorker))
+		require.NoError(t, err)
+
+		assert.NotEqual(t, cpHash, workerHash)
+	})
+
+	t.Run("changes when role patch template changes", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		cfg.PatchDir = t.TempDir()
+		nc := NewNodeConfig(cfg)
+
+		patchPath := filepath.Join(cfg.PatchDir, "control-plane.yaml")
+		require.NoError(t, os.WriteFile(patchPath, []byte("cluster:\n  extraManifests:\n    - one\n"), 0644))
+		before, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(patchPath, []byte("cluster:\n  extraManifests: []\n"), 0644))
+		after, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+
+		assert.NotEqual(t, before, after)
+	})
+
+	t.Run("changes when template data changes", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		nc := NewNodeConfig(cfg)
+
+		before, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+
+		cfg.DefaultDisk = "vdb"
+		after, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+
+		assert.NotEqual(t, before, after)
+	})
+
+	t.Run("changes when per-node patch appears or changes", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		cfg.PatchDir = t.TempDir()
+		nc := NewNodeConfig(cfg)
+		spec := newSpec(types.RoleWorker)
+
+		without, err := nc.TemplateHash(spec)
+		require.NoError(t, err)
+
+		nodePatch := filepath.Join(cfg.PatchDir, fmt.Sprintf("node-%d.yaml", spec.VMID))
+		require.NoError(t, os.WriteFile(nodePatch, []byte("machine:\n  sysctls:\n    vm.max_map_count: 262144\n"), 0644))
+		withPatch, err := nc.TemplateHash(spec)
+		require.NoError(t, err)
+		assert.NotEqual(t, without, withPatch)
+
+		require.NoError(t, os.WriteFile(nodePatch, []byte("machine:\n  sysctls:\n    vm.max_map_count: 524288\n"), 0644))
+		changedPatch, err := nc.TemplateHash(spec)
+		require.NoError(t, err)
+		assert.NotEqual(t, withPatch, changedPatch)
+	})
+
+	t.Run("changes when base config changes", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		require.NoError(t, os.MkdirAll(cfg.SecretsDir, 0700))
+		nc := NewNodeConfig(cfg)
+
+		basePath := filepath.Join(cfg.SecretsDir, "worker.yaml")
+		require.NoError(t, os.WriteFile(basePath, []byte("version: v1alpha1\n"), 0600))
+		before, err := nc.TemplateHash(newSpec(types.RoleWorker))
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(basePath, []byte("version: v1alpha1\nregenerated: true\n"), 0600))
+		after, err := nc.TemplateHash(newSpec(types.RoleWorker))
+		require.NoError(t, err)
+
+		assert.NotEqual(t, before, after)
+	})
+
+	t.Run("unknown role errors", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		nc := NewNodeConfig(cfg)
+
+		_, err := nc.TemplateHash(newSpec(types.Role("unknown-role")))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown node role")
 	})
 }
 

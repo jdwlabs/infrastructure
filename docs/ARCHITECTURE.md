@@ -174,13 +174,14 @@ type NodeSpec struct {
 
 // NodeState - What we know is deployed
 type NodeState struct {
-    VMID       VMID      // Immutable identifier
-    IP         net.IP    // May change (DHCP)
-    ConfigHash string    // For drift detection
-    MAC        string    // For IP rediscovery
-    LastSeen   time.Time
-    Role       Role
-    RemovedAt  *time.Time // Audit trail
+    VMID         VMID      // Immutable identifier
+    IP           net.IP    // May change (DHCP)
+    ConfigHash   string    // Drift detection: rendered node YAML at last apply
+    TemplateHash string    // Drift detection: config-generation inputs (patch templates, base config) at last apply
+    MAC          string    // For IP rediscovery
+    LastSeen     time.Time
+    Role         Role
+    RemovedAt    *time.Time // Audit trail
 }
 
 // LiveNode - Current reality
