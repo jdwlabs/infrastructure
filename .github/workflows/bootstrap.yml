@@ -16,7 +16,7 @@ jobs:
         working-directory: bootstrap
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v6.5.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: bootstrap/go.mod
       # Test tooling: sops/age for the internal/secrets vault round-trips,
