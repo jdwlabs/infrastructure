@@ -10,6 +10,7 @@ ever committing plaintext.
 | --- | --- | --- |
 | Proxmox creds + cluster topology | `terraform/terraform.tfvars` | `terraform/terraform.tfvars.enc.yaml` |
 | Terraform state backend creds (MinIO) | env vars / `~/.aws/credentials` (manual) | `terraform/backend-credentials.enc.yaml` |
+| MinIO TLS server cert + internal CA keys | uploaded to TrueNAS (manual) | `terraform/backend-tls.enc.yaml` |
 | Talos secrets bundle (cluster PKI, tokens) | `clusters/<name>/secrets/secrets.yaml` | `clusters/<name>/vault/secrets.enc.yaml` |
 | Talos client config | `clusters/<name>/secrets/talosconfig` | `clusters/<name>/vault/talosconfig.enc.yaml` |
 | Reconciler state | `clusters/<name>/state/bootstrap-state.json` | `clusters/<name>/vault/bootstrap-state.enc.yaml` |
@@ -91,11 +92,20 @@ otherwise unrecoverable.
 ## Terraform remote state backend credentials
 
 Terraform state lives in an S3-compatible MinIO bucket on the TrueNAS host
-(`http://192.168.1.205:9000`, bucket `terraform-state`, native lockfile locking).
+(`https://192.168.1.205:9000`, bucket `terraform-state`, native lockfile locking).
 The backend block in `terraform/providers.tf` carries no credentials — Terraform
 resolves them through the standard AWS chain. The canonical copy of the access
 key is `terraform/backend-credentials.enc.yaml` (same SOPS/age vault flow, but
 hydrated manually — `talops` does not manage this file).
+
+The endpoint is TLS-only, serving a certificate issued by an internal CA. The
+public CA certificate is committed in plaintext as `terraform/minio-ca.crt` and
+wired into the backend via `custom_ca_bundle`, so `terraform init`/`plan` needs
+no per-machine trust setup. Other S3 clients (`mc`, `rclone`, `aws s3`) reach
+the same endpoint by exporting `AWS_CA_BUNDLE=terraform/minio-ca.crt` or the
+tool's equivalent. The server cert/key and the CA private key are vaulted in
+`terraform/backend-tls.enc.yaml`; cert rotation and the TrueNAS-side setup are
+covered by `scenarios/minio-tls-state-backend.md`.
 
 Setting up a new machine:
 
