@@ -23,8 +23,13 @@ terraform {
     key    = "infrastructure/terraform.tfstate"
     region = "us-east-1"
     endpoints = {
-      s3 = "http://192.168.1.205:9000"
+      s3 = "https://192.168.1.205:9000"
     }
+    # MinIO serves a cert issued by the internal CA committed alongside this
+    # file (private halves vaulted in backend-tls.enc.yaml). The relative path
+    # resolves against the process working directory — talops and manual runs
+    # both execute terraform from this directory. AWS_CA_BUNDLE overrides it.
+    custom_ca_bundle            = "minio-ca.crt"
     use_path_style              = true
     use_lockfile                = true
     skip_credentials_validation = true
