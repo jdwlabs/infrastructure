@@ -1,0 +1,21 @@
+# cp-01 (vmid 200, talos-oam-s4g, NIC MAC bc:24:11:70:10:ed).
+# DHCP lease flips on control-plane reboots have twice moved a CP to a new
+# address and broken the etcd peer mesh (peer URLs pin the old IP), taking the
+# API down. Pinning the node's current lease as a static address removes that
+# failure mode without any peer-URL churn — the IP below MUST stay equal to
+# the address the node holds when this patch is adopted.
+# The interface key matches the role template's eth0 entry so this strategically
+# merges over (and disables) its dhcp: true. Gateway and DNS are both the LAN
+# router at 192.168.1.254 — NOT .1; a .1 gateway takes the node off the network.
+machine:
+  network:
+    interfaces:
+      - interface: eth0
+        dhcp: false
+        addresses:
+          - 192.168.1.241/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 192.168.1.254
+    nameservers:
+      - 192.168.1.254
