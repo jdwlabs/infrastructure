@@ -122,6 +122,12 @@ variable "talos_worker_configuration" {
     cpu_cores = number
     memory    = number
     disk_size = number
+    # Dedicated Longhorn data disk (scsi1), GiB. Optional so nodes can be
+    # migrated one at a time; omit to keep a node on its root disk. The size
+    # doubles as the Talos disk-selector discriminator in the per-node machine
+    # patch (clusters/core/patches/node-<vmid>.yaml) — the two must agree or
+    # the selector matches nothing.
+    data_disk_size = optional(number)
   }))
 }
 

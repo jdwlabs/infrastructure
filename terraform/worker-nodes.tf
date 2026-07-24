@@ -35,6 +35,21 @@ resource "proxmox_virtual_environment_vm" "worker" {
     discard      = "on"
   }
 
+  # Dedicated Longhorn data disk. Only rendered when data_disk_size is set so
+  # the fleet can migrate node-by-node. Talos matches this disk by exact size
+  # (non-system virtio disk), so resizing it here without updating the
+  # per-node machine patch breaks the volume selector.
+  dynamic "disk" {
+    for_each = each.value.data_disk_size != null ? [each.value.data_disk_size] : []
+    content {
+      datastore_id = var.storage_pool
+      interface    = "scsi1"
+      size         = disk.value
+      iothread     = true
+      discard      = "on"
+    }
+  }
+
   network_device {
     bridge = "vmbr0"
     model  = "virtio"

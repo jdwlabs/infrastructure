@@ -1,0 +1,21 @@
+# worker-02 (vmid 301, pve2, talos-k3y-y3e). Longhorn replica data lives on
+# the EPHEMERAL (root) partition today, sharing space with container images
+# and logs: a growing replica erodes kubelet's nodefs eviction headroom, and
+# a Talos root wipe (upgrade --wipe, reinstall) destroys replica data. This
+# user volume moves Longhorn onto a dedicated second disk; Talos mounts it at
+# /var/mnt/longhorn (user volumes always mount at /var/mnt/<name>) and the
+# mount propagates into kubelet automatically — no extraMounts needed.
+# The selector keys on size: a non-system virtio disk of exactly 100 GiB.
+# The Proxmox data disk MUST therefore be created at exactly 100 GiB (the
+# root disk is 150 GiB, so the ranges cannot collide). The transport check
+# excludes Longhorn's own iSCSI volume attachments, which also appear as
+# disks on the node.
+apiVersion: v1alpha1
+kind: UserVolumeConfig
+name: longhorn
+provisioning:
+  diskSelector:
+    match: disk.transport == "virtio" && !system_disk && disk.size >= 99u * GiB && disk.size <= 101u * GiB
+  minSize: 99GiB
+  maxSize: 100GiB
+  grow: false
