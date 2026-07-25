@@ -46,14 +46,29 @@ TrueNAS.
 
 ## 3. Install the certs on TrueNAS
 
+Everything under `/mnt/storage` is `root:root` and `truenas_admin` (uid 950) has
+no write there, so the certs are staged in the home directory and moved with
+sudo. MinIO's data dir is root-owned too — the container runs as root, so the
+installed certs are root-owned to match. `ssh -t` is required for the sudo
+password prompt to render.
+
 ```bash
-ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 'mkdir -p /mnt/storage/minio-certs'
 scp -i ~/.ssh/id_ed25519_pve /tmp/minio-certs/public.crt /tmp/minio-certs/private.key \
-  truenas_admin@192.168.1.205:/mnt/storage/minio-certs/
-ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 \
-  'chmod 600 /mnt/storage/minio-certs/private.key && chmod 644 /mnt/storage/minio-certs/public.crt'
+  truenas_admin@192.168.1.205:~/
+ssh -t -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 '
+  sudo mkdir -p /mnt/storage/minio-certs &&
+  sudo mv ~/public.crt ~/private.key /mnt/storage/minio-certs/ &&
+  sudo chown root:root /mnt/storage/minio-certs/public.crt /mnt/storage/minio-certs/private.key &&
+  sudo chmod 600 /mnt/storage/minio-certs/private.key &&
+  sudo chmod 644 /mnt/storage/minio-certs/public.crt &&
+  sudo ls -l /mnt/storage/minio-certs
+'
 rm -rf /tmp/minio-certs
 ```
+
+The `&&` chain stops before anything moves if sudo fails. `sudo mv` (not `cp`)
+is what clears the staged key from the home directory — if the chain breaks
+partway, check `ls ~/private.key` on the host and remove it before retrying.
 
 ## 4. Update the custom app compose (TrueNAS UI)
 
