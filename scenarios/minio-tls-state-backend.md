@@ -44,7 +44,31 @@ sops decrypt --extract '["server_private_key"]' terraform/backend-tls.enc.yaml >
 Never `cat`/`source` the decrypted key; it goes straight to files and then to
 TrueNAS.
 
-## 3. Install the certs on TrueNAS
+## 3. Create the certs dataset
+
+The certs directory must be a **ZFS dataset**, not an ordinary directory. TrueNAS
+validates custom-app host paths against real datasets, and a path that is not one
+does not merely get rejected — the app silently discards the entire `volumes:`
+block on save, taking the working `/data` mount with it. Docker then honours the
+`VOLUME /data` declaration in the MinIO image by creating an anonymous volume,
+and MinIO initialises an empty backend against it. The service comes up healthy,
+serving nothing, and the scoped access key appears not to exist because MinIO's
+IAM database lives in `.minio.sys` on the unmounted volume.
+
+TrueNAS UI → **Datasets** → select `storage` → **Add Dataset**, name
+`minio-certs`, preset `Generic`, defaults otherwise.
+
+Confirm it is genuinely a dataset before going further — `ls` cannot tell a
+dataset mountpoint from a directory, so ask ZFS:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 'zfs list -o name,mountpoint | grep minio'
+```
+
+Both `storage/minio` and `storage/minio-certs` must appear. If `minio-certs` is
+absent, stop — the compose edit in step 5 will strip the mounts.
+
+## 4. Install the certs on TrueNAS
 
 Everything under `/mnt/storage` is `root:root` and `truenas_admin` (uid 950) has
 no write there, so the certs are staged in the home directory and moved with
@@ -56,7 +80,6 @@ password prompt to render.
 scp -i ~/.ssh/id_ed25519_pve /tmp/minio-certs/public.crt /tmp/minio-certs/private.key \
   truenas_admin@192.168.1.205:~/
 ssh -t -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 '
-  sudo mkdir -p /mnt/storage/minio-certs &&
   sudo mv ~/public.crt ~/private.key /mnt/storage/minio-certs/ &&
   sudo chown root:root /mnt/storage/minio-certs/public.crt /mnt/storage/minio-certs/private.key &&
   sudo chmod 600 /mnt/storage/minio-certs/private.key &&
@@ -70,12 +93,13 @@ The `&&` chain stops before anything moves if sudo fails. `sudo mv` (not `cp`)
 is what clears the staged key from the home directory — if the chain breaks
 partway, check `ls ~/private.key` on the host and remove it before retrying.
 
-## 4. Update the custom app compose (TrueNAS UI)
+## 5. Update the custom app compose (TrueNAS UI)
 
-TrueNAS UI → **Apps → minio → Edit**. Three changes to the compose YAML — add
-`--certs-dir /certs` to the command, mount the certs directory read-only, and
-switch the healthcheck to HTTPS (`-k` because the in-container check hits
-`localhost` before trust is established):
+TrueNAS UI → **Apps → minio → Edit**. Select the whole document and replace it —
+pasting into the existing text produces duplicate mapping keys and the save is
+rejected. Three changes: add `--certs-dir /certs` to the command, mount the certs
+dataset read-only, and relax the healthcheck's certificate verification (it hits
+`localhost` before any trust is established inside the container):
 
 ```yaml
 services:
@@ -90,7 +114,7 @@ services:
       - "9001:9001"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-kf", "https://localhost:9000/minio/health/live"]
+      test: ["CMD", "mc", "ready", "local", "--insecure"]
       interval: 30s
       retries: 3
       timeout: 10s
@@ -100,20 +124,46 @@ services:
 ```
 
 Leave the `environment` values exactly as they are. Save — TrueNAS recreates the
-container. If the healthcheck flaps with `curl` missing from the image, use
-`["CMD", "mc", "ready", "local", "--insecure"]` instead.
+container. `mc` ships in the image and the existing healthcheck already uses it;
+`--insecure` is the smallest change that keeps it working against the new TLS
+listener. A `curl`-based check is not a safe substitute — `curl` is not
+guaranteed to be present.
 
-## 5. Verify TLS from the workstation
+**Verify the mounts before trusting anything else.** A green app status and a
+passing healthcheck do not prove the volumes attached — `--insecure` passes
+either way, and MinIO serves a freshly formatted empty backend perfectly
+happily:
 
 ```bash
-curl --cacert terraform/minio-ca.crt -s -o /dev/null -w '%{http_code}\n' \
-  https://192.168.1.205:9000/minio/health/live        # expect 200
-openssl s_client -connect 192.168.1.205:9000 -CAfile terraform/minio-ca.crt </dev/null 2>/dev/null \
-  | openssl x509 -noout -issuer -ext subjectAltName    # expect the jdwlabs minio-state CA + IP SAN
-curl -s -o /dev/null -m 5 http://192.168.1.205:9000/minio/health/live || echo "plaintext refused (expected)"
+ssh -t -i ~/.ssh/id_ed25519_pve truenas_admin@192.168.1.205 '
+  C=$(sudo docker ps -q --filter name=minio)
+  sudo docker inspect -f "{{range .Mounts}}{{.Type}} | {{.Source}} -> {{.Destination}}{{println}}{{end}}" $C
+  sudo docker exec $C ls -l /certs
+  sudo docker logs --tail 30 $C 2>&1 | grep -iE "formatting|^API:"
+'
 ```
 
-## 6. Cut the repo over and re-initialize
+All four must hold: two **`bind`** lines (a `volume` type line means the mounts
+were stripped — revert immediately), `public.crt` + `private.key` visible under
+`/certs`, **no** `Formatting 1st pool` line, and `API: https://`.
+
+## 6. Verify TLS from the workstation
+
+```bash
+openssl s_client -connect 192.168.1.205:9000 -CAfile terraform/minio-ca.crt </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -ext subjectAltName   # expect CN=192.168.1.205, jdwlabs minio-state CA, IP SAN
+openssl s_client -connect 192.168.1.205:9000 -CAfile terraform/minio-ca.crt </dev/null 2>/dev/null \
+  | grep "Verify return code"                                  # expect 0 (ok)
+curl -s -o /dev/null -m 5 -w '%{http_code}\n' http://192.168.1.205:9000/minio/health/live  # expect 400 — plaintext refused
+```
+
+Use `openssl`, not `curl --cacert`, as the trust check on Windows. Git Bash ships
+a Schannel-backed curl that ignores a PEM passed to `--cacert` and consults the
+Windows certificate store instead, so it fails with exit 60 against a correctly
+served internal-CA certificate. Terraform is unaffected — it uses Go's TLS stack
+and reads `custom_ca_bundle` directly.
+
+## 7. Cut the repo over and re-initialize
 
 Merge the PR that flips `terraform/providers.tf` to `https://` +
 `custom_ca_bundle`, update the working copy, then re-init (the backend
@@ -127,7 +177,7 @@ terraform init -reconfigure
 Use `-reconfigure`, not `-migrate-state` — the state never moved; only the
 endpoint scheme changed.
 
-## 7. Verify state integrity post-cutover
+## 8. Verify state integrity post-cutover
 
 ```bash
 terraform state pull > /tmp/state-after.json
@@ -144,7 +194,11 @@ terraform plan -lock-timeout=30s
 Expect "No changes" (or only known drift) and no lock errors. Clean up
 `/tmp/state-*.json` afterwards.
 
-## 8. Update the vaulted endpoint reference
+Add `-refresh=false` if the provider refresh is slow — locking is still
+exercised, and a plan killed by an impatient timeout strands a lock that must
+then be cleared with `terraform force-unlock <id>`.
+
+## 9. Update the vaulted endpoint reference
 
 `terraform/backend-credentials.enc.yaml` records the endpoint alongside the
 access keys — keep it accurate:
@@ -178,8 +232,9 @@ paths are not mangled.)
 
 Then: update `server_certificate`/`server_private_key` in
 `terraform/backend-tls.enc.yaml` (`sops edit`, paste from `$tmp`), repeat steps
-3–5 to install and verify, and `rm -rf "$tmp"`. Clients keep working through the
-swap because the CA is unchanged — no re-init needed.
+4 and 6 to install and verify, and `rm -rf "$tmp"`. The dataset from step 3
+already exists, so it is not recreated. Clients keep working through the swap
+because the CA is unchanged — no re-init needed.
 
 ## Rollback
 
