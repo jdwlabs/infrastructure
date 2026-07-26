@@ -36,6 +36,13 @@ cluster:
       auto-compaction-retention: "1"
       heartbeat-interval: "500"
       election-timeout: "5000"
+      # Dedicated metrics-only listener. 2381 serves /metrics and /health and
+      # exposes no client API, so opening it does not widen access to the
+      # datastore the way exposing 2379 would. Without it etcd publishes
+      # metrics only behind the mTLS client port, which Prometheus cannot
+      # scrape — leaving the component whose degradation is cluster-fatal with
+      # no telemetry, and incident diagnosis reduced to reading apiserver logs.
+      listen-metrics-urls: http://0.0.0.0:2381
   apiServer:
     # Trust id_tokens from the platform Dex instance so Headlamp (OIDC
     # client "headlamp") can authenticate users against the API server.
@@ -67,6 +74,11 @@ cluster:
             namespaces:
               - longhorn-system
   controllerManager:
+    extraArgs:
+      # Talos binds this to 127.0.0.1, which makes :10257 unreachable from a
+      # Prometheus pod on any other node. Binding wider does not remove
+      # authn/authz — the port stays authenticated, it just becomes dialable.
+      bind-address: 0.0.0.0
     resources:
       requests:
         cpu: 100m
@@ -74,6 +86,8 @@ cluster:
       limits:
         memory: 512Mi
   scheduler:
+    extraArgs:
+      bind-address: 0.0.0.0
     resources:
       requests:
         cpu: 100m
