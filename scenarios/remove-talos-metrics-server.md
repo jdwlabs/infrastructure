@@ -40,7 +40,11 @@ copy stays until deleted by hand.
    from `--cluster`, `CLUSTER_NAME`, or `cluster_name` in `terraform.tfvars`
    and rewrites every YAML under `clusters/<name>/nodes/` from the current
    templates. Inspect a regenerated CP config and confirm
-   `cluster.extraManifests` lists only `kubelet-serving-cert-approver`.
+   `cluster.extraManifests` no longer lists `metrics-server`. The template now
+   carries no entries at all — `kubelet-serving-cert-approver` was removed
+   afterwards for the same reason, per
+   [remove-talos-cert-approver.md](remove-talos-cert-approver.md). On a cluster
+   that predates both removals, work that runbook as well.
    (A plain `talops reconcile` also detects the template change on its own —
    it compares the recorded template hash in `bootstrap-state.json` against
    the current template inputs, regenerates stale YAMLs, and lists the
