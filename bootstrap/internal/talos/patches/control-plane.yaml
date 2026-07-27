@@ -94,13 +94,16 @@ cluster:
         memory: 64Mi
       limits:
         memory: 256Mi
-  # metrics-server is deliberately absent: the platform GitOps release
-  # (platform-metrics-server, ns metrics-server) backs v1beta1.metrics.k8s.io.
-  # A second copy here would duplicate it in kube-system — Talos never
-  # garbage-collects removed extraManifests, so see
-  # scenarios/remove-talos-metrics-server.md when cleaning up older clusters.
-  extraManifests:
-    - https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml
+  # extraManifests is deliberately empty. Both workloads bootstrapped this way
+  # now ship as platform GitOps releases that pin an image tag, and each raw
+  # upstream URL served a rolling tag — so whatever a config apply happened to
+  # fetch decided what ran, on the schedule of someone else's push:
+  #   metrics-server                -> platform-metrics-server (backs v1beta1.metrics.k8s.io)
+  #   kubelet-serving-cert-approver -> platform-kubelet-serving-cert-approver
+  # Talos never garbage-collects a removed entry, so clusters built before each
+  # removal keep the originals until deleted by hand — see
+  # scenarios/remove-talos-metrics-server.md and
+  # scenarios/remove-talos-cert-approver.md.
   allowSchedulingOnControlPlanes: false
 ---
 # virtio_net leaves tx-checksum-ip-generic enabled on flannel's VXLAN link, so

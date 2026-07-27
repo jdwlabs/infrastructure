@@ -295,9 +295,8 @@ Pending.
 
 **Evidence** — `bootstrap/internal/talos/patches/control-plane.yaml`:
 
-> A second copy here would duplicate it in kube-system — Talos never
-> garbage-collects removed extraManifests, so see
-> `scenarios/remove-talos-metrics-server.md` when cleaning up older clusters.
+> Talos never garbage-collects a removed entry, so clusters built before each
+> removal keep the originals until deleted by hand.
 
 and [scenarios/remove-talos-metrics-server.md](../scenarios/remove-talos-metrics-server.md):
 
@@ -315,9 +314,17 @@ Consequence for upgrades in both directions:
   review that config change on its own first — do not discover a manifest
   change mid-upgrade.
 
-The current template carries exactly one entry
-(`kubelet-serving-cert-approver`); `metrics-server` was removed in commit
-`ace8290` and the kube-system orphan is cleaned up by hand per that runbook.
+The current template carries **no** `extraManifests` entries. Both former
+entries now ship as GitOps releases that pin an image tag, because each raw
+upstream URL served a rolling tag: `metrics-server` was removed in commit
+`ace8290`, and `kubelet-serving-cert-approver` afterwards. Their orphans are
+cleaned up by hand per
+[remove-talos-metrics-server.md](../scenarios/remove-talos-metrics-server.md)
+and
+[remove-talos-cert-approver.md](../scenarios/remove-talos-cert-approver.md).
+
+So an upgrade on this cluster has no manifest fetch bundled into it at all —
+which is the point. Adding an entry back reintroduces that coupling.
 
 ## Rollback and recovery
 
