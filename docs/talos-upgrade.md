@@ -291,28 +291,51 @@ Note the corollary from the same commit: workers on pve2/3/4 were cut 6G →
 pods, so the drain during their upgrade is the one most likely to leave pods
 Pending.
 
-### Removed extraManifests are never garbage-collected
+### extraManifests, orphans, and the manifest sync
 
-**Evidence** — `bootstrap/internal/talos/patches/control-plane.yaml`:
+Removing an entry does not delete what it created, so orphans survive an
+upgrade untouched — that much has held on this cluster, and it is why
+[remove-talos-metrics-server.md](../scenarios/remove-talos-metrics-server.md)
+and [remove-talos-cert-approver.md](../scenarios/remove-talos-cert-approver.md)
+exist.
 
-> Talos never garbage-collects a removed entry, so clusters built before each
-> removal keep the originals until deleted by hand.
+Do not generalise that into "Talos never garbage-collects", which is what an
+earlier draft of this section said. Talos 1.13 records every applied bootstrap
+manifest in `kube-system/talos-bootstrap-manifests-inventory` and prunes
+entries missing from the desired set by default. The reason orphans have
+survived here is narrower: the manifest sync runs on `talosctl upgrade-k8s`,
+which has not been run on this cluster since either removal. The inventory is
+correspondingly stale — 46 days old, still listing the `kube-system`
+metrics-server objects deleted by hand after `ace8290`.
 
-and [scenarios/remove-talos-metrics-server.md](../scenarios/remove-talos-metrics-server.md):
+Whether that prune would in fact delete a removed entry's objects is
+**unverified**. The cost of being wrong is asymmetric: the inventory lists
+Namespaces, and pruning a Namespace cascades to every object inside it,
+including ones a GitOps release owns. Pass `--manifests-no-prune` on the first
+`upgrade-k8s` after any `extraManifests` removal, then check the inventory
+before trusting prune again:
 
-> The extraManifests entry has been removed from the template. Talos does NOT
-> garbage-collect resources created by removed extraManifests — the
-> kube-system copy stays until deleted by hand.
+```bash
+kubectl -n kube-system get cm talos-bootstrap-manifests-inventory \
+  -o jsonpath='{.data}' | tr ',' '\n'
+```
+
+Keys are `<namespace>_<name>_<group>_<Kind>`, cluster-scoped objects leading
+with `_`. Removed entries have caught up once their keys are gone.
 
 Consequence for upgrades in both directions:
 
-- An upgrade will **not** clean up anything a previous `extraManifests` entry
-  created. If the template changed since the cluster was built, expect
-  orphans to survive the upgrade untouched.
+- An OS upgrade will **not** clean up anything a previous `extraManifests`
+  entry created. If the template changed since the cluster was built, expect
+  orphans to survive it untouched.
 - Conversely, a **newly added** `extraManifests` entry does apply on the
   control planes. If an upgrade is bundled with a template change, apply and
   review that config change on its own first — do not discover a manifest
   change mid-upgrade.
+- `upgrade-k8s` re-applies every entry as its final stage. An entry whose
+  objects a GitOps release has since taken over can fail that stage on an
+  immutable field and abort the command *after* the control-plane and kubelet
+  updates have already landed. Dry-run it before every Kubernetes upgrade.
 
 The current template carries **no** `extraManifests` entries. Both former
 entries now ship as GitOps releases that pin an image tag, because each raw
