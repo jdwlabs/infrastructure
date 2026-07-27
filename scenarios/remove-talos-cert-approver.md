@@ -181,6 +181,19 @@ ServiceMonitor, both rendered by the chart.
   plus the two ClusterRoles, the ClusterRoleBinding, and the RoleBinding.
 - ArgoCD app `platform-kubelet-serving-cert-approver` stays Synced + Healthy.
 - Next `talops status` run shows no config drift.
+- After the first real `upgrade-k8s`, the inventory has dropped these keys —
+  until then prune is still working from a stale desired set:
+
+  ```bash
+  kubectl -n kube-system get cm talos-bootstrap-manifests-inventory \
+    -o jsonpath='{.data}' | tr ',' '\n' | grep -i cert-approver
+  ```
+
+  Expect four keys before (`__Namespace`, the two `ClusterRole`s, the
+  `ClusterRoleBinding`) plus the namespaced `Service`, `ServiceAccount`,
+  `Deployment` and `RoleBinding`, and none after. The `__Namespace` key is the
+  one that matters: it is the only entry whose prune would cascade to objects
+  the GitOps release owns.
 
 ## Abort criteria
 

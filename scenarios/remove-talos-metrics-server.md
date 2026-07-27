@@ -18,9 +18,61 @@ The cluster runs two metrics-servers:
   `https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`.
   It consumes ~200Mi of requests and is referenced by nothing.
 
-The extraManifests entry has been removed from the template. Talos does NOT
-garbage-collect resources created by removed extraManifests — the kube-system
-copy stays until deleted by hand.
+The extraManifests entry has been removed from the template. Removing it does
+not delete what it created, so the kube-system copy stayed until deleted by
+hand. Do not generalise that into "Talos never garbage-collects" — see the
+inventory caveat below.
+
+### Status: the object cleanup is DONE; the inventory is not
+
+The kube-system copy is gone — `kubectl -n kube-system get deploy,svc,sa -l
+k8s-app=metrics-server` returns nothing, and `deployment/metrics-server`
+NotFound. The APIService stayed `Available=True`, backed by
+`metrics-server/platform-metrics-server`. Steps 1–4 below are kept as the
+record of how it was done, and for any cluster that predates the removal.
+
+What is **not** finished is `kube-system/talos-bootstrap-manifests-inventory`.
+Talos 1.13 records every applied bootstrap manifest there and prunes entries
+missing from the desired set by default. That sync runs on `talosctl
+upgrade-k8s`, which has not run on this cluster since the removal — so the
+inventory is stale and still lists the deleted objects:
+
+```
+kube-system_metrics-server_apps_Deployment
+kube-system_metrics-server__Service
+kube-system_metrics-server__ServiceAccount
+kube-system_metrics-server-auth-reader_rbac.authorization.k8s.io_RoleBinding
+_system__metrics-server_rbac.authorization.k8s.io_ClusterRole
+_system__metrics-server_rbac.authorization.k8s.io_ClusterRoleBinding
+_metrics-server__system__auth-delegator_rbac.authorization.k8s.io_ClusterRoleBinding
+_system__aggregated-metrics-reader_rbac.authorization.k8s.io_ClusterRole
+_v1beta1.metrics.k8s.io_apiregistration.k8s.io_APIService
+```
+
+Most of those are already-deleted objects, where a prune is a no-op. **The last
+one is not.** `v1beta1.metrics.k8s.io` is live, `Available=True`, and owned by
+the platform release — while still carrying `talos` as a field manager:
+
+```
+$ kubectl get apiservice v1beta1.metrics.k8s.io --show-managed-fields -o json
+managers:  argocd-controller(Apply), talos(Update), kube-apiserver(Update)
+service:   metrics-server/platform-metrics-server
+tracking:  platform-metrics-server:apiregistration.k8s.io/APIService:metrics-server/v1beta1.metrics.k8s.io
+```
+
+So it is simultaneously in Talos's inventory and absent from Talos's desired
+set. If prune deletes it, `kubectl top` and any HPA reading metrics break until
+ArgoCD re-syncs it. Whether Talos's prune actually reaches removed-entry objects
+is unverified — but this is the object to watch, and the reason to pass
+`--manifests-no-prune` on the first `upgrade-k8s` after the removal rather than
+find out during an upgrade.
+
+Confirm the keys have drained before trusting prune again:
+
+```bash
+kubectl -n kube-system get cm talos-bootstrap-manifests-inventory \
+  -o jsonpath='{.data}' | tr ',' '\n' | grep -i metrics-server
+```
 
 ## Preconditions
 
