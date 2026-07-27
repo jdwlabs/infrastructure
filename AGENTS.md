@@ -73,6 +73,20 @@ Traceability lives in the commit message and PR description; comments
 should explain *why* the config is what it is so they stay meaningful
 after the ticket closes.
 
+## Tooling Traps
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| A node/object's owning controller is unclear from `kubectl get -o json` | `managedFields` (which manager set which field) is hidden by default | Add `--show-managed-fields` |
+
+## Verify Before You Start
+
+Ticket evidence more than ~a week old (or gathered in a different investigation) is a hypothesis, not ground truth. Before acting on it:
+
+- Re-confirm the ticket's premises against live state — don't build on a stale finding
+- State the scope you searched before claiming something is absent ("checked all N nodes", "every cluster in `clusters/`") — one sample is not the whole set
+- A disproved premise is a valuable result: record it on the ticket, don't quietly work around it
+
 ## Constraints
 
 - `terraform apply` is NEVER run autonomously — produce a plan, stop, and await human approval
