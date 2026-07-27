@@ -100,10 +100,16 @@ cluster:
   # fetch decided what ran, on the schedule of someone else's push:
   #   metrics-server                -> platform-metrics-server (backs v1beta1.metrics.k8s.io)
   #   kubelet-serving-cert-approver -> platform-kubelet-serving-cert-approver
-  # Talos never garbage-collects a removed entry, so clusters built before each
-  # removal keep the originals until deleted by hand — see
+  # Clusters built before each removal keep the originals — see
   # scenarios/remove-talos-metrics-server.md and
-  # scenarios/remove-talos-cert-approver.md.
+  # scenarios/remove-talos-cert-approver.md for the by-hand cleanup.
+  # Do not assume those leftovers are inert: 1.13 records every applied
+  # bootstrap manifest in kube-system/talos-bootstrap-manifests-inventory and
+  # prunes entries missing from the desired set by default, and the manifest
+  # sync runs on `talosctl upgrade-k8s`, not only at bootstrap. That inventory
+  # still lists the cert-approver Namespace on this cluster, so a prune there
+  # would cascade to everything the GitOps release owns inside it — pass
+  # --manifests-no-prune until the inventory has caught up.
   allowSchedulingOnControlPlanes: false
 ---
 # virtio_net leaves tx-checksum-ip-generic enabled on flannel's VXLAN link, so

@@ -23,14 +23,42 @@ same mutable-reference failure class as the servicediscovery outage, sitting in
 the path that approves kubelet **serving** certificates, so a surprise version
 change degrades metrics and log endpoints cluster-wide rather than one app.
 
-It is latent rather than active. What makes it worth closing now is that the
-trigger is scheduled: the control-plane metrics work applies machine config to
-these same nodes, and that apply is the event that would fetch whatever `main`
-points at by then.
+This is no longer latent. The entry actively blocks `talosctl upgrade-k8s`,
+which re-applies `cluster.extraManifests` as its final stage — so every
+Kubernetes upgrade fetches that rolling tag, not just a machine-config apply.
+The apply cannot succeed, because the two owners disagree on an immutable field:
 
-The extraManifests entry has been removed from the template. Talos does NOT
-garbage-collect resources created by removed extraManifests — the objects it
-created stay until deleted by hand.
+```
+$ talosctl upgrade-k8s --to 1.36.3 --dry-run
+error diffing manifests: apply dry run failed for
+  Deployment/kubelet-serving-cert-approver:
+  spec.selector: Invalid value:
+  {"matchLabels":{"app.kubernetes.io/instance":"kubelet-serving-cert-approver",...}}:
+  field is immutable
+```
+
+Upstream's static manifest sets `instance` to the bare name; the chart sets it
+to the Helm release name (`platform-kubelet-serving-cert-approver`). Pinning the
+URL to a release tag does **not** resolve this — no upstream tag will ever carry
+the release-name prefix. Removing the entry is the only fix that lands.
+
+### Removal is not automatically inert
+
+Talos does not delete these objects when the entry disappears from config, so
+the leftovers below still need deleting by hand. But "Talos never garbage-
+collects" is too strong for 1.13: it records every applied bootstrap manifest in
+`kube-system/talos-bootstrap-manifests-inventory` and prunes entries missing
+from the desired set by default, and that sync runs on `upgrade-k8s`.
+
+The inventory on this cluster is stale — 46 days old, still listing the
+`kube-system` metrics-server objects removed in `ace8290`, because `upgrade-k8s`
+has not run since. It also lists
+`_kubelet-serving-cert-approver__Namespace`. Whether Talos's prune would in fact
+delete a removed extraManifest's objects is **unverified here**; what is certain
+is that pruning that Namespace would cascade to everything the GitOps release
+owns inside it. Pass `--manifests-no-prune` on the first `upgrade-k8s` after
+this removal, and confirm the inventory has dropped these keys before relying on
+prune again.
 
 ### What each side actually owns
 
@@ -127,6 +155,16 @@ ServiceMonitor, both rendered by the chart.
    ```
 
    The matching EndpointSlice is garbage-collected with its Service.
+
+6. Confirm the manifest stage is unblocked before running a real Kubernetes
+   upgrade — this is what the removal was for:
+
+   ```bash
+   talosctl -n <cp-ip> upgrade-k8s --to <version> --dry-run
+   ```
+
+   It must reach `updating manifests (dry run)` without the immutable-selector
+   error. Run the real upgrade with `--manifests-no-prune` (see above).
 
 ## Post-checks
 
