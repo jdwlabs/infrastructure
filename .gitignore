@@ -30,3 +30,15 @@ logs/
 
 # Superpowers working docs (plans/specs are local scratch, not repo artifacts)
 docs/superpowers/
+
+# Terraform plan files embed resolved variable values, including ones sourced
+# from the vaulted tfvars. They are also point-in-time — applying a stale plan
+# diverges from real state — so they are never worth keeping.
+*.tfplan
+
+# etcd snapshots contain every Kubernetes Secret in plaintext.
+etcd-*.db
+*.snapshot.db
+
+# Agent-created git worktrees live inside the checkout.
+.claude/worktrees/
