@@ -35,9 +35,13 @@ func TestExtraManifestsArePinned(t *testing.T) {
 	assert.Emptyf(t, stale, "stale manifest-pin-allowlist.yaml entries (no longer match an unpinned URL): %v", stale)
 }
 
-// TestCheckAllExtraManifestPins_EmptySetIsClean locks in that patches carrying
-// no extraManifests at all pass the guard cleanly, so the check cannot regress
-// back into demanding at least one entry.
+// The live patches carry no extraManifests at all, so the empty case needs a
+// synthetic fixture to be exercised deliberately: the guard has to report it
+// as clean rather than as a missing-fixture failure.
+//
+// Every assertion here checks for absence, so a guard gutted to return nothing
+// would pass this too — the unpinned and stale cases below are what hold its
+// behaviour in place.
 func TestCheckAllExtraManifestPins_EmptySetIsClean(t *testing.T) {
 	withAllowlist(t, "exceptions: []\n")
 
