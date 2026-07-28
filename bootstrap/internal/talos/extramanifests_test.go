@@ -13,27 +13,25 @@ import (
 // with a reason. This runs under this package's normal `go test`, so no
 // separate CI job is needed — it is picked up by the existing bootstrap.yml
 // "test" job's `go test -race` step.
+//
+// Zero references is a legitimate end state — the patches deliberately ship an
+// empty extraManifests block — so this must not assert that the live config
+// contains any. TestExtractExtraManifests covers the extraction path against a
+// literal fixture instead; asserting it here would pin a test to an
+// operational fact that is allowed to change.
 func TestExtraManifestsArePinned(t *testing.T) {
 	sources := map[string]string{
 		"patches/control-plane.yaml": controlPlanePatchTemplate,
 		"patches/worker.yaml":        workerPatchTemplate,
 	}
 
-	refs, violations, stale, err := CheckAllExtraManifestPins(sources)
+	_, violations, stale, err := CheckAllExtraManifestPins(sources)
 	require.NoError(t, err)
 
 	for name, list := range violations {
 		assert.Emptyf(t, list, "%s: unpinned extraManifests URL with no allowlist entry: %v", name, list)
 	}
 	assert.Emptyf(t, stale, "stale manifest-pin-allowlist.yaml entries (no longer match an unpinned URL): %v", stale)
-
-	// Sanity check the fixtures actually exercised the extraction path —
-	// a check that silently finds zero references proves nothing.
-	total := 0
-	for _, list := range refs {
-		total += len(list)
-	}
-	assert.Greater(t, total, 0, "expected at least one cluster.extraManifests reference across the patch fixtures")
 }
 
 func TestExtractExtraManifests(t *testing.T) {

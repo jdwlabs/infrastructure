@@ -6,11 +6,7 @@
 # deliberate. An entry that no longer matches an actual unpinned URL in any
 # patch file is treated as stale and fails the check — remove it once the
 # reference is fixed or no longer exists.
-exceptions:
-  - url: https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml
-    reason: >-
-      pre-existing: this extraManifests URL predates this check and points at
-      an unpinned /main/ branch ref. It is a live, already-tracked violation;
-      remediation (repinning to a tag or commit SHA) is separate follow-up
-      work, not bundled with introducing this check. Recorded here rather
-      than silently ignored or hand-fixed as part of adding the check.
+#
+# Empty is the desired state: the patches ship no extraManifests at all, so
+# there is nothing left to except.
+exceptions: []
