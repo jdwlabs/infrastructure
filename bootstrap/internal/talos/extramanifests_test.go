@@ -16,9 +16,10 @@ import (
 //
 // Zero references is a legitimate end state — the patches deliberately ship an
 // empty extraManifests block — so this must not assert that the live config
-// contains any. TestExtractExtraManifests covers the extraction path against a
-// literal fixture instead; asserting it here would pin a test to an
-// operational fact that is allowed to change.
+// contains any. TestExtractExtraManifests and the TestCheckAllExtraManifestPins_*
+// cases cover the extraction and reporting paths against literal fixtures
+// instead; asserting it here would pin a test to an operational fact that is
+// allowed to change.
 func TestExtraManifestsArePinned(t *testing.T) {
 	sources := map[string]string{
 		"patches/control-plane.yaml": controlPlanePatchTemplate,
@@ -32,6 +33,86 @@ func TestExtraManifestsArePinned(t *testing.T) {
 		assert.Emptyf(t, list, "%s: unpinned extraManifests URL with no allowlist entry: %v", name, list)
 	}
 	assert.Emptyf(t, stale, "stale manifest-pin-allowlist.yaml entries (no longer match an unpinned URL): %v", stale)
+}
+
+// TestCheckAllExtraManifestPins_EmptySetIsClean locks in that patches carrying
+// no extraManifests at all pass the guard cleanly, so the check cannot regress
+// back into demanding at least one entry.
+func TestCheckAllExtraManifestPins_EmptySetIsClean(t *testing.T) {
+	withAllowlist(t, "exceptions: []\n")
+
+	sources := map[string]string{
+		"patches/control-plane.yaml": `cluster:
+  apiServer:
+    extraArgs:
+      bind-address: 0.0.0.0
+`,
+		"patches/worker.yaml": "machine:\n  type: worker\n",
+	}
+
+	refs, violations, stale, err := CheckAllExtraManifestPins(sources)
+	require.NoError(t, err)
+
+	for name, list := range refs {
+		assert.Emptyf(t, list, "%s: expected no extraManifests references", name)
+	}
+	for name, list := range violations {
+		assert.Emptyf(t, list, "%s: empty extraManifests must not be a violation: %v", name, list)
+	}
+	assert.Empty(t, stale, "an empty allowlist alongside an empty manifest set is not stale")
+}
+
+// TestCheckAllExtraManifestPins_UnpinnedStillFails proves tolerating the empty
+// set did not defang the guard: an unpinned entry with no allowlist cover is
+// still reported.
+func TestCheckAllExtraManifestPins_UnpinnedStillFails(t *testing.T) {
+	withAllowlist(t, "exceptions: []\n")
+
+	sources := map[string]string{
+		"patches/control-plane.yaml": `cluster:
+  extraManifests:
+    - https://raw.githubusercontent.com/owner/repo/main/deploy/install.yaml
+    - https://raw.githubusercontent.com/owner/repo2/v1.2.3/deploy/install.yaml
+`,
+	}
+
+	_, violations, stale, err := CheckAllExtraManifestPins(sources)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"https://raw.githubusercontent.com/owner/repo/main/deploy/install.yaml",
+	}, violations["patches/control-plane.yaml"])
+	assert.Empty(t, stale)
+}
+
+// TestCheckAllExtraManifestPins_StaleAllowlistEntryFails proves an allowlist
+// entry matching nothing is still rejected, including when the manifest set is
+// empty — that combination is exactly how the allowlist rots.
+func TestCheckAllExtraManifestPins_StaleAllowlistEntryFails(t *testing.T) {
+	withAllowlist(t, `exceptions:
+  - url: https://raw.githubusercontent.com/owner/gone/main/deploy/install.yaml
+    reason: no longer referenced by any patch
+`)
+
+	sources := map[string]string{
+		"patches/control-plane.yaml": "machine:\n  type: controlplane\n",
+	}
+
+	_, _, stale, err := CheckAllExtraManifestPins(sources)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"https://raw.githubusercontent.com/owner/gone/main/deploy/install.yaml",
+	}, stale)
+}
+
+// withAllowlist swaps the embedded allowlist for the duration of a test so the
+// guard's behaviour can be exercised independently of the live file's contents.
+func withAllowlist(t *testing.T, yaml string) {
+	t.Helper()
+	orig := manifestPinAllowlistYAML
+	t.Cleanup(func() { manifestPinAllowlistYAML = orig })
+	manifestPinAllowlistYAML = yaml
 }
 
 func TestExtractExtraManifests(t *testing.T) {
@@ -121,13 +202,11 @@ func TestCheckExtraManifestPins_CatchesViolation(t *testing.T) {
 }
 
 func TestLoadManifestPinAllowlist_RejectsMissingReason(t *testing.T) {
-	orig := manifestPinAllowlistYAML
-	defer func() { manifestPinAllowlistYAML = orig }()
-
-	manifestPinAllowlistYAML = `exceptions:
+	withAllowlist(t, `exceptions:
   - url: https://raw.githubusercontent.com/owner/repo/main/deploy/install.yaml
     reason: ""
-`
+`)
+
 	_, err := LoadManifestPinAllowlist()
 	assert.Error(t, err)
 }
