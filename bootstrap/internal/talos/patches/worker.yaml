@@ -18,7 +18,7 @@ machine:
   kubelet:
     extraArgs:
       rotate-server-certificates: "true"
-    # JDWLABS-57: only systemReserved.memory (384Mi Talos default) was set, with
+    # Previously only systemReserved.memory (384Mi Talos default) was set, with
     # no evictionHard — the kernel OOM killer fires before kubelet can soft-evict,
     # taking the Longhorn engine/iSCSI down with whatever pod triggered it.
     # kubeReserved/systemReserved carve out headroom; evictionHard gives kubelet
