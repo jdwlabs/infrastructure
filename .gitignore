@@ -33,12 +33,19 @@ docs/superpowers/
 
 # Terraform plan files embed resolved variable values, including ones sourced
 # from the vaulted tfvars. They are also point-in-time — applying a stale plan
-# diverges from real state — so they are never worth keeping.
+# diverges from real state — so they are never worth keeping. The extensionless
+# spellings come first because `-out=tfplan` is what this repo's own docs tell
+# you to run; terraform/.gitignore only catches those under terraform/.
+tfplan
+tfplan.*
+tfdestroy-plan
 *.tfplan
 
-# etcd snapshots contain every Kubernetes Secret in plaintext.
-etcd-*.db
-*.snapshot.db
+# etcd snapshots contain every Kubernetes Secret in plaintext, so this matches
+# the whole extension rather than the naming conventions we happen to have used
+# — `etcdctl snapshot save` defaults to a bare snapshot.db. No .db file has ever
+# been tracked here, so there is nothing legitimate to exclude.
+*.db
 
 # Agent-created git worktrees live inside the checkout.
 .claude/worktrees/
