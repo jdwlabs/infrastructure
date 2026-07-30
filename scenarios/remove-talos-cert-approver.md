@@ -1,8 +1,12 @@
 # Runbook: Remove the Talos-bundled kubelet-serving-cert-approver
 
-Status: PLANNED — every `talosctl apply-config` and `kubectl delete` in this
-runbook is executed by a human. The agent contract forbids autonomous cluster
-mutation.
+Status: the repo change is MERGED; the cluster work is PLANNED. The template
+change is on `main` — `cluster.extraManifests` is already absent from
+`bootstrap/internal/talos/patches/control-plane.yaml`. The live machine config
+on the three control planes still carries the entry, so everything from the
+apply onwards is outstanding. Every `talosctl apply-config` and `kubectl delete`
+in this runbook is executed by a human. The agent contract forbids autonomous
+cluster mutation.
 
 ## Why
 
@@ -63,7 +67,10 @@ prune again.
 ### What each side actually owns
 
 Field managers across the whole release, not one sampled object
-(`kubectl get <obj> --show-managed-fields`):
+(`kubectl get <obj> --show-managed-fields`). Nine objects, not eight: two
+RoleBindings share the name `events:kubelet-serving-cert-approver` in different
+namespaces, and only one of them is GitOps-owned — so the rows below are
+namespace-qualified.
 
 | Object | Managers |
 | --- | --- |
@@ -73,22 +80,30 @@ Field managers across the whole release, not one sampled object
 | `ClusterRole/certificates:kubelet-serving-cert-approver` | `argocd-controller(Apply)`, `talos(Update)`, `argocd-application-controller(Update)` |
 | `ClusterRole/events:kubelet-serving-cert-approver` | `argocd-controller(Apply)`, `talos(Update)`, `argocd-application-controller(Update)` |
 | `ClusterRoleBinding/kubelet-serving-cert-approver` | `argocd-controller(Apply)`, `talos(Update)`, `argocd-application-controller(Update)` |
-| `RoleBinding/events:kubelet-serving-cert-approver` | `argocd-controller(Apply)`, `argocd-application-controller(Update)` |
+| `RoleBinding/events:kubelet-serving-cert-approver` (ns `kubelet-serving-cert-approver`) | `argocd-controller(Apply)`, `argocd-application-controller(Update)` |
+| `RoleBinding/events:kubelet-serving-cert-approver` (ns `default`) | `talos(Update)` — **only owner** |
 | `Service/kubelet-serving-cert-approver` | `talos(Update)` — **only owner** |
 
 Talos writes with `operation: Update`, not `Apply`, so it never competed for
 server-side-apply co-ownership of the Deployment's image field. Every object the
 GitOps release renders is already owned by ArgoCD, which is why removing the
-entry hands over cleanly.
+entry hands over cleanly. The two rows above with `talos` as the **only** owner
+are the exceptions — the chart renders neither, so they are the objects this
+runbook has to delete by hand.
 
 The `Namespace` carries a `governance-platform` tracking id — it comes from the
 tenant envelope, not from this chart, which is why the chart sets
 `namespace.create: false`.
 
-### The Service is dead, not orphaned-but-working
+### The two orphans: a dead Service and a stale RBAC grant
 
-`Service/kubelet-serving-cert-approver` is the one object with no GitOps owner,
-and it has never routed traffic in this cluster:
+Two objects have no GitOps owner and survive the removal. Neither is inert
+enough to leave alone.
+
+#### The Service is dead, not orphaned-but-working
+
+`Service/kubelet-serving-cert-approver` has never routed traffic in this
+cluster:
 
 ```
 spec.selector:  app.kubernetes.io/instance: kubelet-serving-cert-approver
@@ -111,9 +126,32 @@ working one. Restoring cert-approver metrics is separate work and is ticketed �
 it needs a Service whose selector matches the chart's labels plus a
 ServiceMonitor, both rendered by the chart.
 
+#### The `default` RoleBinding is a grant nothing will ever reconcile
+
+Two RoleBindings carry the name `events:kubelet-serving-cert-approver`, and it
+is easy to check the wrong one — the release-namespace copy is ArgoCD-owned and
+fine, while upstream's static manifest also drops one in `default`:
+
+```
+$ kubectl get rolebinding -A | grep -i cert-approver
+default                         events:kubelet-serving-cert-approver   ClusterRole/events:kubelet-serving-cert-approver   67d
+kubelet-serving-cert-approver   events:kubelet-serving-cert-approver   ClusterRole/events:kubelet-serving-cert-approver   67d
+```
+
+The `default` copy has `talos(Update)` as its only manager, no
+`argocd.argoproj.io/tracking-id` annotation, and it binds the release's
+ServiceAccount to `ClusterRole/events:kubelet-serving-cert-approver`. ArgoCD
+tracks by that annotation and never prunes untracked resources even with
+`prune: true`, so once the extraManifests entry is gone nothing owns it, nothing
+recreates it, and nothing removes it — it just sits there as a live RBAC grant
+in a namespace the release has no business in. Delete it alongside the Service.
+
 ## Preconditions
 
 1. The talops change removing the extraManifests entry is merged to `main`.
+   **DONE** — the template on `main` carries no entries at all. What follows
+   still has to be run by hand; the merge changed the template, not the
+   running cluster.
 2. Platform release healthy: `kubectl -n kubelet-serving-cert-approver get deploy
    platform-kubelet-serving-cert-approver` shows Available, and the ArgoCD app
    `platform-kubelet-serving-cert-approver` is Synced + Healthy.
@@ -144,17 +182,23 @@ ServiceMonitor, both rendered by the chart.
    `talosctl -n <cp-ip> apply-config -f clusters/core/nodes/node-control-plane-<vmid>.yaml`
    — extraManifests is not a machine-section change; no reboot is expected.
    After each CP: `talosctl -n <cp-ip> etcd status` healthy before the next.
-5. **HUMAN**: delete the orphaned Service (Talos will not). Nothing else from
-   the upstream manifest needs deleting — every other object is owned and
-   continuously reconciled by the GitOps release, so deleting them would only
-   make ArgoCD recreate them:
+5. **HUMAN**: delete both orphans (Talos will not). These are the two objects
+   with `talos` as their only field manager — the chart renders neither, and
+   ArgoCD will not prune them because they carry no tracking-id annotation:
 
    ```bash
    kubectl -n kubelet-serving-cert-approver get svc kubelet-serving-cert-approver
    kubectl -n kubelet-serving-cert-approver delete svc kubelet-serving-cert-approver
+
+   kubectl -n default get rolebinding events:kubelet-serving-cert-approver
+   kubectl -n default delete rolebinding events:kubelet-serving-cert-approver
    ```
 
-   The matching EndpointSlice is garbage-collected with its Service.
+   Namespace matters on the second one: the identically named RoleBinding in
+   `kubelet-serving-cert-approver` is the chart's, and deleting it only makes
+   ArgoCD recreate it. Nothing else from the upstream manifest needs deleting —
+   every remaining object is owned and continuously reconciled by the GitOps
+   release. The Service's matching EndpointSlice is garbage-collected with it.
 
 6. Confirm the manifest stage is unblocked before running a real Kubernetes
    upgrade — this is what the removal was for:
@@ -164,7 +208,21 @@ ServiceMonitor, both rendered by the chart.
    ```
 
    It must reach `updating manifests (dry run)` without the immutable-selector
-   error. Run the real upgrade with `--manifests-no-prune` (see above).
+   error.
+
+7. **HUMAN**: the first real Kubernetes upgrade after this removal takes
+   `--manifests-no-prune` — mandatory, not advisory:
+
+   ```bash
+   talosctl -n <cp-ip> upgrade-k8s --to <version> --manifests-no-prune
+   ```
+
+   Without it the manifest sync prunes inventory entries missing from the
+   desired set, and `_kubelet-serving-cert-approver__Namespace` is one of them —
+   pruning a Namespace cascades to every object the GitOps release owns inside
+   it. The flag stays required until the inventory post-check below comes back
+   empty. `upgrade-k8s` runs the manifest stage **last**, so a failure here
+   arrives after the control plane and kubelets have already moved.
 
 ## Post-checks
 
@@ -175,10 +233,22 @@ ServiceMonitor, both rendered by the chart.
 - `kubectl get deploy kubelet-serving-cert-approver -n kubelet-serving-cert-approver
   -o jsonpath='{.spec.template.spec.containers[*].image}'` still reports the
   pinned `0.11.0`.
-- No `talos` field manager reappears on any object in the release after the
-  apply — check all of them, not a sample:
-  `kubectl get ns,sa,deploy,svc -n kubelet-serving-cert-approver --show-managed-fields -o json`
-  plus the two ClusterRoles, the ClusterRoleBinding, and the RoleBinding.
+- No `talos` field manager survives anywhere for this release after the apply —
+  check all nine objects, not a sample, and do not scope the sweep to the
+  release namespace. A namespace-scoped check passes while a `talos`-managed
+  object sits in `default`, which is exactly how the second orphan was missed:
+
+  ```bash
+  kubectl get sa,deploy,svc,rolebinding -n kubelet-serving-cert-approver --show-managed-fields -o json
+  kubectl get rolebinding events:kubelet-serving-cert-approver -n default --show-managed-fields -o json
+  kubectl get ns/kubelet-serving-cert-approver \
+    clusterrole/certificates:kubelet-serving-cert-approver \
+    clusterrole/events:kubelet-serving-cert-approver \
+    clusterrolebinding/kubelet-serving-cert-approver --show-managed-fields -o json
+  ```
+
+  Both deletions from step 5 should read back NotFound; every object that
+  remains should list `argocd-controller` and no `talos`.
 - ArgoCD app `platform-kubelet-serving-cert-approver` stays Synced + Healthy.
 - Next `talops status` run shows no config drift.
 - After the first real `upgrade-k8s`, the inventory has dropped these keys —
@@ -189,11 +259,15 @@ ServiceMonitor, both rendered by the chart.
     -o jsonpath='{.data}' | tr ',' '\n' | grep -i cert-approver
   ```
 
-  Expect four keys before (`__Namespace`, the two `ClusterRole`s, the
-  `ClusterRoleBinding`) plus the namespaced `Service`, `ServiceAccount`,
-  `Deployment` and `RoleBinding`, and none after. The `__Namespace` key is the
-  one that matters: it is the only entry whose prune would cascade to objects
-  the GitOps release owns.
+  Expect eight keys before and none after: four cluster-scoped
+  (`_kubelet-serving-cert-approver__Namespace`, the two `ClusterRole`s, the
+  `ClusterRoleBinding`), three in the release namespace (`Service`,
+  `ServiceAccount`, `Deployment`), and one keyed to `default` —
+  `default_events__kubelet-serving-cert-approver_rbac.authorization.k8s.io_RoleBinding`.
+  The inventory carries only the `default` RoleBinding, not the chart's copy in
+  the release namespace, which is a second way to tell the two apart. The
+  `__Namespace` key is the one that matters: it is the only entry whose prune
+  would cascade to objects the GitOps release owns.
 
 ## Abort criteria
 
@@ -204,3 +278,8 @@ ServiceMonitor, both rendered by the chart.
 - A `talos` field manager appears on an object after the apply → the entry was
   not actually removed from the config that got applied. Re-check the applied
   node YAML before deleting anything else.
+- Step 5 deleted the RoleBinding in the release namespace instead of the one in
+  `default` → recoverable, and not a reason to stop: hard-refresh and sync
+  `platform-kubelet-serving-cert-approver` to render it again, then delete the
+  `default` copy. The mistake is only silent in the other direction — leaving
+  the `default` copy behind, which nothing will ever report.
