@@ -63,9 +63,11 @@ tracking:  platform-metrics-server:apiregistration.k8s.io/APIService:metrics-ser
 So it is simultaneously in Talos's inventory and absent from Talos's desired
 set. If prune deletes it, `kubectl top` and any HPA reading metrics break until
 ArgoCD re-syncs it. Whether Talos's prune actually reaches removed-entry objects
-is unverified — but this is the object to watch, and the reason to pass
-`--manifests-no-prune` on the first `upgrade-k8s` after the removal rather than
-find out during an upgrade.
+is unverified — but this is the object to watch, and the reason the first
+`upgrade-k8s` after the removal must keep `--manifests-no-prune` rather than
+find out during an upgrade. Run it through `talops upgrade-k8s`, which applies
+that flag unless pruning is opted into with both `--allow-manifest-prune` and
+`--confirm-manifest-prune`.
 
 Confirm the keys have drained before trusting prune again:
 

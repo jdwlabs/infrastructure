@@ -26,7 +26,10 @@ func mockExecCmd(output string, exitCode int) *exec.Cmd {
 		// Escape single quotes by doubling them
 		escaped := strings.ReplaceAll(output, "'", "''")
 		psCmd := fmt.Sprintf("[Console]::Write('%s'); exit %d", escaped, exitCode)
-		return exec.Command("powershell", "-Command", psCmd)
+		// -NoProfile keeps the developer's shell profile from writing its own
+		// banner into the captured stdout, which any parser under test then
+		// sees as part of the payload.
+		return exec.Command("powershell", "-NoProfile", "-Command", psCmd)
 	}
 	// Unix: use printf for reliable output without trailing newline
 	return exec.Command("printf", "%s", output)

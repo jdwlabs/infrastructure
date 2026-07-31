@@ -201,28 +201,38 @@ in a namespace the release has no business in. Delete it alongside the Service.
    release. The Service's matching EndpointSlice is garbage-collected with it.
 
 6. Confirm the manifest stage is unblocked before running a real Kubernetes
-   upgrade — this is what the removal was for:
+   upgrade — this is what the removal was for. `talops upgrade-k8s` previews by
+   default and mutates nothing without `--apply`:
 
    ```bash
-   talosctl -n <cp-ip> upgrade-k8s --to <version> --dry-run
+   talops upgrade-k8s --to <version> --node <cp-ip>
    ```
 
    It must reach `updating manifests (dry run)` without the immutable-selector
-   error.
+   error. The report also lists the inventory keys a prune would delete; pass
+   `--desired-from <file>` to have it diff against a known desired set instead
+   of listing the whole inventory.
 
-7. **HUMAN**: the first real Kubernetes upgrade after this removal takes
-   `--manifests-no-prune` — mandatory, not advisory:
+7. **HUMAN**: run the first real Kubernetes upgrade after this removal through
+   the wrapper, which injects `--manifests-no-prune` for you:
 
    ```bash
-   talosctl -n <cp-ip> upgrade-k8s --to <version> --manifests-no-prune
+   talops upgrade-k8s --to <version> --node <cp-ip> --apply
    ```
 
+   The flag is no longer something to remember: `talops upgrade-k8s` applies it
+   unless pruning is opted into with **both** `--allow-manifest-prune` and
+   `--confirm-manifest-prune`, and refuses with exit 2 if only one is given.
    Without it the manifest sync prunes inventory entries missing from the
    desired set, and `_kubelet-serving-cert-approver__Namespace` is one of them —
    pruning a Namespace cascades to every object the GitOps release owns inside
-   it. The flag stays required until the inventory post-check below comes back
-   empty. `upgrade-k8s` runs the manifest stage **last**, so a failure here
-   arrives after the control plane and kubelets have already moved.
+   it. Keep the guard until the inventory post-check below comes back empty.
+   `upgrade-k8s` runs the manifest stage **last**, so a failure here arrives
+   after the control plane and kubelets have already moved.
+
+   Raw `talosctl upgrade-k8s` still works and is still unguarded — the wrapper
+   is the documented path precisely so the guarded one and the documented one
+   are the same one.
 
 ## Post-checks
 
