@@ -317,6 +317,35 @@ remains an added element rather than a redesign.
 - Reloads HAProxy gracefully
 - Health checks ensure traffic only routes to ready nodes
 
+**Inspecting and Converging the Load Balancer**:
+
+`talops haproxy` is the read/config-only surface over the layers above. It
+never provisions, destroys, or reconfigures the VM — that stays behind
+`talops infra plan` and a human `terraform apply`.
+
+| Command | Reads | Writes |
+|---|---|---|
+| `talops haproxy status` | VM (tfvars + Terraform state), SSH, service, config drift, per-backend health from the runtime socket | nothing |
+| `talops haproxy plan` | rendered vs. deployed config | nothing |
+| `talops haproxy apply` | as above | `/etc/haproxy/haproxy.cfg`, via the validated/auto-rollback path |
+
+Three properties are load-bearing:
+
+- **A layer that could not be read reports `unknown`, never a clean result.**
+  An unreachable host and a healthy one must not produce the same report.
+- **`status` names whether the address it targeted belongs to a VM this repo
+  can rebuild** (`source: terraform`), one declared but not yet applied
+  (`declared`), or one built outside it (`unmanaged`). That last value is the
+  honest answer for the hand-built load balancer, and it flips only when the
+  rebuild in `scenarios/haproxy-vm-rebuild.md` has actually happened.
+- **`--host` targets an address other than `haproxy_ip`.** A replacement is
+  verified on a temporary address before DNS, tfvars, or anything else moves.
+
+`apply` shares its install path with `reconcile`, so a fix to one is a fix to
+both, and it records the pushed config's hash in cluster state. That record is
+a hint about what talops last pushed — it cannot see a change made on the host,
+so drift is always confirmed against the live file when SSH is available.
+
 **Configuration Template**:
 
 The generated config includes two backend - one for the Kubernetes API and one for the Talos API:

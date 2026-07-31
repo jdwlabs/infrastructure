@@ -1,6 +1,11 @@
 # HAProxy VM Provisioning — Design
 
-Status: **proposed** (design only — no implementation yet)
+Status: **implemented, not yet applied.** Phases 1 and 2 are in the repo
+(`terraform/haproxy-node.tf`, its cloud-init template, and the `talops haproxy`
+command group). No `terraform apply` has run: the load balancer serving the
+cluster is still the hand-built one, and replacing it is the human-run
+`scenarios/haproxy-vm-rebuild.md`. Phase 3 (keepalived) remains unscheduled —
+see §7.
 
 Automating the provisioning of the HAProxy load-balancer VM that fronts the
 Kubernetes API, Talos API, and cluster ingress. Today the VM is the only piece
@@ -222,12 +227,15 @@ everything through `sudo`, so only `haproxy_login_user` in tfvars changes.
 
 No change to the reconcile flow. Additions:
 
-- `internal/haproxy`: add a `Status()` that reads backend health over SSH
-  from the stats socket (`echo "show stat" | socat /run/haproxy/admin.sock -`
-  → CSV → parse), and a `Diff()` that compares the freshly rendered config
-  against the deployed file's hash.
-- Record the deployed config hash in bootstrap-state so drift is detectable
-  without SSH round-trips when nothing changed.
+- `internal/haproxy`: `Stats()` reads backend health over SSH from the runtime
+  socket (`show stat` → CSV → parse) and `Diff()` compares the freshly rendered
+  config against the deployed file. Column positions come from the CSV header
+  rather than fixed indices — HAProxy inserts columns between releases, and a
+  misaligned `status` column would report health belonging to another field.
+- Record the pushed config hash in bootstrap-state. It is a hint about what
+  talops last pushed, not the deployed config: it cannot see an edit made on
+  the host, so drift is always confirmed against the live file when SSH is
+  available and reported as `unknown` when it is not.
 - New Cobra command group `talops haproxy` (below). VM *provisioning* is not
   a talops subcommand mutation — the VM is Terraform-managed, so
   `talops infra plan` / `infra deploy` (human-gated) covers it, and
@@ -337,26 +345,48 @@ and ARP settle), schedulable in a quiet window.
 | 3 (optional) | keepalived pair per 5.5 | VIP failover test: kill active VM, API+ingress recover < 5 s, `talops haproxy status` shows both instances |
 | Docs | ARCHITECTURE.md HAProxy section updated; `scenarios/haproxy-vm-rebuild.md` runbook | Runbook is a thin driver of the automated path |
 
-## 7. Open questions
+## 7. Open questions — resolved or deferred
 
-1. **HA pair now or later?** Is ~1 GiB RAM + one more managed VM worth
-   removing the ingress/API SPOF, given host RAM is already tight
-   (CP resize just rebalanced memory)? Phase 3 is designed but not scheduled.
-2. **Snippets datastore**: cloud-init user-data snippets cannot live on
-   `local-lvm`. Enable `snippets` content on each node's `local` dir storage,
-   or add it to the `truenas-vmdisks` NFS storage (cluster-wide, one place)?
-   NFS is tidier but couples LB rebuild to the NAS being up.
-3. **Placement**: which Proxmox host gets `haproxy-1` (and the phase 3 peer)?
-   Should it avoid hosts running CP VMs so one host failure cannot take a CP
-   *and* the LB?
-4. **SSH user cutover**: switching `haproxy_login_user` from `root` to
-   `haproxy-admin` changes a vaulted tfvars value at cutover time — bundle it
-   with the blue-green swap, or keep `root` in cloud-init for a smaller diff?
-5. **OS choice**: Ubuntu 24.04 (matches GPU VM precedent, larger image) vs
-   Debian 13 (smaller, HAProxy-current). Default assumption: Ubuntu 24.04
-   for consistency.
-6. **Should `talops up` provision the LB before the Talos VMs?** Bootstrap
-   ordering today assumes the LB already exists (SSH preflight). If the VM is
-   in the same Terraform config, `infra deploy` creates it in the same apply —
-   verify the reconcile preflight tolerates the ~60 s cloud-init window or
-   add a bounded wait.
+1. **HA pair now or later? — DEFERRED, owner: repo maintainer.** Not decided
+   here, because the input the decision needs does not exist yet: the rebuild
+   below has never been executed, so the single-VM outage window is estimated
+   rather than measured. Nothing in phases 1–2 forecloses the pair — the
+   tfvars list takes a second element, `net.ipv4.ip_nonlocal_bind` is already
+   set by cloud-init so a VIP bind needs no rebuild, and `--host` already
+   targets an instance by address rather than assuming one. Revisit once the
+   rebuild has run once and the real window is known.
+
+2. **Snippets datastore — RESOLVED, no work needed.** Every node's `local`
+   directory storage already advertises the `snippets` content type
+   (`content=backup,iso,vztmpl,snippets,import`), verified against live
+   Proxmox. The NFS option is rejected regardless: putting the snippet on the
+   NAS would make a load-balancer rebuild depend on the NAS being up, and a
+   rebuild is exactly the situation where that assumption is least safe.
+
+3. **Placement — RESOLVED: pve1.** Control planes sit on pve2, pve3, and pve4,
+   so the design's own sketch (`node_name = "pve3"`) contradicted its
+   requirement that one host failure must not take a control plane *and* the
+   load balancer. pve1 runs no control plane and already hosts the existing
+   load balancer. pve5 is the equivalent alternative for a future peer.
+
+4. **SSH user cutover — RESOLVED: bundle it with the swap.** Cloud-init creates
+   `haproxy-admin` and sets `disable_root: true`, so keeping `root` in tfvars
+   would leave the config push authenticating as a user the new VM does not
+   have. The runbook's cutover step changes `haproxy_login_user` in the same
+   tfvars edit as the address. Keeping `root` for a smaller diff was rejected:
+   it trades a one-line change for a root login on the host that fronts the
+   API.
+
+5. **OS choice — RESOLVED: Ubuntu 24.04.** It matches the GPU VM precedent, so
+   there is one cloud-image path in this repo rather than two. Image size is
+   not a constraint worth a second OS family for a 10 GiB single-purpose VM.
+
+6. **`talops up` ordering — DEFERRED, owner: repo maintainer.** Unchanged by
+   this work and deliberately not bundled: `talops up` is the full-cluster
+   bootstrap path, and adding a bounded wait to its HAProxy preflight is a
+   change to cluster bootstrap, not to load-balancer provisioning. Until then
+   the ordering is a documented sequence, not an automated one — the runbook
+   provisions and verifies the load balancer before anything depends on it.
+   The scope of the eventual fix is known: the reconcile preflight must
+   tolerate the ~60 s cloud-init window when the VM was created in the same
+   apply.

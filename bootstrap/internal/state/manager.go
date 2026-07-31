@@ -792,6 +792,13 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 		}
 	}
 
+	// Load-balancer VMs under Terraform management. Read even when empty:
+	// "no VM is declared" is what distinguishes the hand-built load balancer
+	// from a reproducible one, and that distinction is reported, not inferred.
+	if len(m.config.HAProxyVMs) == 0 {
+		m.config.HAProxyVMs = parseHAProxyVMs(content)
+	}
+
 	// Admin source-IP allowlist for HAProxy k8s/talos frontends
 	if len(m.config.AdminAllowedCIDRs) == 0 {
 		if v := parseTFVarsStringList(content, "admin_allowed_cidrs"); len(v) > 0 {
@@ -848,6 +855,26 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 	}
 
 	return nil
+}
+
+// parseHAProxyVMs reads the haproxy_vms list of objects from tfvars.
+// An entry without a vmid is skipped rather than recorded as VMID 0, which
+// would compare equal to every other malformed entry.
+func parseHAProxyVMs(content string) []types.HAProxyVM {
+	var vms []types.HAProxyVM
+	for _, block := range parseArrayBlocks(content, "haproxy_vms") {
+		vmid := extractIntField(block, "vmid")
+		if vmid == 0 {
+			continue
+		}
+		vms = append(vms, types.HAProxyVM{
+			Name: extractStringField(block, "vm_name"),
+			Node: extractStringField(block, "node_name"),
+			VMID: vmid,
+			IP:   strings.SplitN(extractStringField(block, "ip"), "/", 2)[0],
+		})
+	}
+	return vms
 }
 
 // extractSimpleStringField extracts a top-level string assignment from HCL/tfvars content.

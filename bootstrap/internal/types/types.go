@@ -106,6 +106,16 @@ const (
 	StatusRebooting  NodeStatus = "rebooting" // Transient state
 )
 
+// HAProxyVM is a load-balancer VM declared in the haproxy_vms tfvars list.
+// IP is the bare address; the CIDR suffix Terraform requires is stripped so it
+// compares directly against the address the config push targets.
+type HAProxyVM struct {
+	Name string `json:"vm_name"`
+	Node string `json:"node_name"`
+	VMID int    `json:"vmid"`
+	IP   string `json:"ip"`
+}
+
 // ClusterState is your bootstrap-state.json as a typed struct
 type ClusterState struct {
 	Timestamp            time.Time   `json:"timestamp"`
@@ -117,7 +127,11 @@ type ClusterState struct {
 	Workers              []NodeState `json:"workers"`
 	RemovedNodes         []NodeState `json:"removed_nodes,omitempty"` // Audit trail of previously removed nodes
 	HAProxyIP            net.IP      `json:"haproxy_ip"`
-	ControlPlaneEndpoint string      `json:"control_plane_endpoint"`
+	// Fingerprint of the config last pushed to HAProxy. A hint only — the
+	// authoritative answer is the file on the host, and this record cannot know
+	// about a change made outside talops.
+	HAProxyConfigHash    string `json:"haproxy_config_hash,omitempty"`
+	ControlPlaneEndpoint string `json:"control_plane_endpoint"`
 	KubernetesVersion    string      `json:"kubernetes_version"`
 	TalosVersion         string      `json:"talos_version"`
 }
@@ -169,6 +183,10 @@ type Config struct {
 	HAProxySSHKeyPath       string   `json:"haproxy_ssh_key_path"`
 	HAProxyStatsUser        string   `json:"haproxy_stats_username"`
 	HAProxyStatsPassword    string   `json:"haproxy_stats_password"`
+	// Load-balancer VMs declared in terraform.tfvars. Empty means no load
+	// balancer is under Terraform management, which is how the push target is
+	// told apart from a host built by hand outside this repo.
+	HAProxyVMs              []HAProxyVM `json:"haproxy_vms,omitempty"`
 	AdminAllowedCIDRs       []string `json:"admin_allowed_cidrs"`
 	KubernetesVersion       string   `json:"kubernetes_version"`
 	TalosVersion            string   `json:"talos_version"`
