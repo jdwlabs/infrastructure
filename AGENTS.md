@@ -104,7 +104,8 @@ Ticket evidence more than ~a week old (or gathered in a different investigation)
 - Read-only `kubectl get`, `kubectl describe`, `kubectl logs` are safe for investigation
 - Never modify `.tfstate` files directly — they are managed by the Terraform backend
 - Never commit decrypted plaintext secrets; only the encrypted `*.enc.yaml` vault is tracked
-- Never push to remote — stage and commit only
+- Never push to `main`, and never `git push --force` anywhere — a feature branch may be pushed so the change can go through a pull request, which is how every other repository here works and how changes actually reach `main`
+- Pushing a branch is not applying it: nothing in this repository takes effect until a human runs the `terraform apply` or `talosctl apply-config` that the merged change describes
 
 ## References
 
