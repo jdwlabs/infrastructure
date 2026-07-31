@@ -2,8 +2,9 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Renovate is the single owner of dependency updates for this repo; keep repository-level (UI) Dependabot disabled.",
-    "Covers: Go modules (bootstrap/), Terraform providers (bpg/proxmox), GitHub Actions pins, and Talos/talosctl/sops/age version pins via the custom regex managers below.",
-    "All Talos pins (tfvars, tfvars.example, CI talosctl install) are grouped into one PR so the cluster target version moves atomically. Talos upgrades are applied by a human runbook — the PR is a prompt, not an auto-rollout."
+    "Covers: Go modules (bootstrap/), Terraform providers (bpg/proxmox), GitHub Actions pins, and Talos/talosctl/sops/age/Kubernetes version pins via the custom regex managers below.",
+    "All Talos pins (tfvars, tfvars.example, CI talosctl install) are grouped into one PR so the cluster target version moves atomically. Talos upgrades are applied by a human runbook — the PR is a prompt, not an auto-rollout.",
+    "The Kubernetes pin is deliberately kept out of the Talos group. A Kubernetes bump is rolled out with `talosctl upgrade-k8s`, a separate human runbook from a Talos OS upgrade; grouping them would imply a coupling the rollout process does not have. Like the Talos PRs, a Kubernetes PR is a prompt, not an auto-rollout."
   ],
   "extends": ["github>jdwlabs/.github"],
   "postUpdateOptions": ["gomodTidy"],
@@ -17,6 +18,24 @@
       "description": "Keep every Talos version pin in a single PR",
       "matchDepNames": ["siderolabs/talos"],
       "groupName": "talos"
+    },
+    {
+      "description": [
+        "Kubernetes pins get a dedicated PR rather than the inherited org-wide non-major batch, so the cluster's Kubernetes target is never bumped as a side effect of reviewing an unrelated dependency batch.",
+        "allowedVersions rejects anything that is not a plain three-part release, keeping upstream alpha/beta/rc tags out of the PR stream without also suppressing new minors."
+      ],
+      "matchDepNames": ["kubernetes/kubernetes"],
+      "groupName": "kubernetes",
+      "allowedVersions": "/^v\\d+\\.\\d+\\.\\d+$/"
+    },
+    {
+      "description": "A new Kubernetes minor can exceed the range the pinned Talos version supports, while a patch inside the running minor is always safe. Splitting them keeps the bump that needs a compatibility check from riding along with one that does not.",
+      "matchDepNames": ["kubernetes/kubernetes"],
+      "matchUpdateTypes": ["minor", "major"],
+      "groupName": "kubernetes minor",
+      "prBodyNotes": [
+        "Before rolling this out, confirm the target release falls inside the Kubernetes range supported by the Talos version pinned in this repo (see that Talos release's notes). Apply with `talosctl upgrade-k8s`; bump `talos_version` first if the target is outside the supported range."
+      ]
     }
   ],
   "customManagers": [
@@ -60,6 +79,20 @@
       "managerFilePatterns": ["/^\\.github/workflows/bootstrap\\.yml$/"],
       "matchStrings": ["AGE_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
       "depNameTemplate": "FiloSottile/age",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": [
+        "kubernetes_version pin in Terraform tfvars and the scaling-test fixtures.",
+        "Scoped to tfvars deliberately: the identical assignment appears in bootstrap/ Go tests as a literal parser input, and bumping it there would break the assertions without changing any cluster."
+      ],
+      "managerFilePatterns": [
+        "/^terraform/terraform\\.tfvars(\\.example)?$/",
+        "/^scenarios/scaling_tests/.*\\.tfvars$/"
+      ],
+      "matchStrings": ["kubernetes_version\\s*=\\s*\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "kubernetes/kubernetes",
       "datasourceTemplate": "github-releases"
     }
   ]
