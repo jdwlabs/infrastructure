@@ -57,9 +57,14 @@ unprotected window during migration.
 
 Preconditions:
 
-- Interim `vxlan-offload-fix` DaemonSet is still deployed and healthy — it
-  applies the identical settings, so each node is protected before, during,
-  and after its config update.
+- The interim `vxlan-offload-fix` DaemonSet **no longer exists** — it was
+  retired from the platform repo once this rollout completed, and it is not
+  present on the cluster. The Talos `EthernetConfig` layer below is now the
+  only thing disabling the offload, so there is **no second safety net**: a
+  node whose `EthernetConfig` is removed or overridden is unprotected
+  immediately. Re-read this precondition before re-running the rollout — the
+  original text asserted the DaemonSet was still in place, which was true
+  only during the migration.
 - Rebuild `talops` so the embedded patch templates include the
   `EthernetConfig` documents: `cd bootstrap && go build -o build/ ./...`
   (or `build.bat`).
@@ -75,6 +80,7 @@ Order: workers first (smaller blast radius), then control planes one at a
 time with etcd health checks between each.
 
 1. `node-worker-300` → `node-worker-301` → `node-worker-302` → `node-worker-303`
+   → `node-worker-304`
 2. `node-control-plane-200` → `node-control-plane-201` → `node-control-plane-202`
    (after each: `talosctl -n <ip> etcd status` healthy before proceeding)
 
@@ -114,9 +120,15 @@ Per node:
    steps 2–3. This proves the settings re-land on the freshly recreated
    `flannel.1`.
 
-### DaemonSet removal (after full rollout)
+### DaemonSet removal (after full rollout) — already performed
 
-Only after all 7 nodes pass verification:
+This step has been completed: the DaemonSet is gone from the platform repo and
+from the cluster. The steps are kept because they are the procedure to re-run
+if the interim DaemonSet is ever reintroduced.
+
+Only after all 8 nodes pass verification (3 control plane + 5 workers; the
+count grew when the fifth worker was added, so a run that stops at 7 leaves a
+node unverified):
 
 1. Open a follow-up PR in the **platform** repo removing
    `tenants/platform/services/vxlan-offload-fix/` and its `tenant.yaml`
@@ -129,8 +141,21 @@ Only after all 7 nodes pass verification:
 
 ### Rollback
 
-The DaemonSet is independent of the Talos config and remains the safety net
-until the removal PR merges. To roll back the Talos layer itself, revert the
-patch-template commit, rebuild `talops`, regenerate configs, and re-apply
-per node (also a no-reboot change). If the DaemonSet was already removed,
-re-deploying it via ArgoCD revert restores protection within one sync.
+The DaemonSet is no longer a safety net — it has been removed, so the Talos
+layer is the only protection and a rollback of that layer leaves the node
+exposed until something re-applies the offload settings.
+
+To roll back the Talos layer itself, revert the patch-template commit, rebuild
+`talops`, regenerate configs, and re-apply per node (a no-reboot change).
+
+To restore protection quickly without the Talos layer, revert the platform
+commit that retired `tenants/platform/services/vxlan-offload-fix/` and let
+ArgoCD sync it back — roughly one sync interval. Verify the DaemonSet is
+actually `READY` on the affected node before treating protection as restored;
+its absence is what makes the Talos layer load-bearing today.
+
+Fastest per-node restore, if a single node is left with the offload enabled:
+re-apply that node's machine config, or set the offload back directly with
+`talosctl -n <node-ip> patch machineconfig` re-adding the `EthernetConfig`
+document. Confirm with `talosctl -n <node-ip> get ethernetstatus flannel.1`
+before declaring the node healthy.
