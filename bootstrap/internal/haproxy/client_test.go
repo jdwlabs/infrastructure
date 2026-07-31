@@ -224,6 +224,11 @@ type mockRunner struct {
 }
 
 func (m *mockRunner) runSSH(cmd string) error {
+	_, err := m.runSSHOutput(cmd)
+	return err
+}
+
+func (m *mockRunner) runSSHOutput(cmd string) (string, error) {
 	// Connect to mock server instead of real SSH
 	host := m.server.Host()
 	port := m.server.Port()
@@ -239,22 +244,22 @@ func (m *mockRunner) runSSH(cmd string) error {
 
 	conn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return fmt.Errorf("dial SSH: %w", err)
+		return "", fmt.Errorf("dial SSH: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	session, err := conn.NewSession()
 	if err != nil {
-		return fmt.Errorf("create SSH session: %w", err)
+		return "", fmt.Errorf("create SSH session: %w", err)
 	}
 	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(cmd)
 	if err != nil {
-		return fmt.Errorf("run SSH command: %w, output: %s", err, string(output))
+		return string(output), fmt.Errorf("run SSH command: %w, output: %s", err, string(output))
 	}
 
-	return nil
+	return string(output), nil
 }
 
 // createTestClient creates a client that uses the mock SSH server

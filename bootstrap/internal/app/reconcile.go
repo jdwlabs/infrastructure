@@ -254,7 +254,7 @@ func (app *App) RunReconcile(ctx context.Context) error {
 
 	if plan.IsEmpty() {
 		app.Logger.Info("no node changes required")
-		if err := app.updateHAProxy(ctx, cfg, deployed); err != nil {
+		if err := app.updateHAProxy(ctx, cfg, deployed, stateMgr); err != nil {
 			return err
 		}
 		return nil
@@ -780,7 +780,7 @@ func (app *App) executePlan(
 	// Phase 4: Update HAProxy config
 	// Always update when CPs exist - CP IPs may change during reboots (DHCP)
 	// even when no CP membership change occurred.
-	if err := app.updateHAProxy(ctx, cfg, deployed); err != nil {
+	if err := app.updateHAProxy(ctx, cfg, deployed, stateMgr); err != nil {
 		return err
 	}
 
@@ -1061,7 +1061,12 @@ func (app *App) executePlan(
 // updateHAProxy regenerates and pushes the HAPRoxy config for the current
 // deployed state. It is a no-op when no control planes exist. In dry-run mode
 // it logs the intent without making changes.
-func (app *App) updateHAProxy(ctx context.Context, cfg *types.Config, deployed *types.ClusterState) error {
+func (app *App) updateHAProxy(
+	ctx context.Context,
+	cfg *types.Config,
+	deployed *types.ClusterState,
+	stateMgr *state.Manager,
+) error {
 	if len(deployed.ControlPlanes) == 0 {
 		return nil
 	}
@@ -1071,17 +1076,41 @@ func (app *App) updateHAProxy(ctx context.Context, cfg *types.Config, deployed *
 		return nil
 	}
 
+	configStr, err := app.pushHAProxyConfig(ctx, cfg, deployed)
+	if err != nil {
+		return err
+	}
+
+	// Recorded on the same state object the caller saves, so a later reconcile
+	// can report what talops last pushed without an SSH round-trip.
+	deployed.HAProxyConfigHash = haproxy.Hash(configStr)
+	if stateMgr != nil {
+		if err := stateMgr.Save(ctx, deployed); err != nil {
+			app.Logger.Warn("could not record HAProxy config hash", zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// pushHAProxyConfig renders and installs the config through the validated,
+// auto-rollback path. Both reconcile and `talops haproxy apply` go through
+// this, so a fix to one is a fix to both.
+func (app *App) pushHAProxyConfig(
+	ctx context.Context,
+	cfg *types.Config,
+	deployed *types.ClusterState,
+) (string, error) {
 	haproxyConfig := haproxy.ConfigFromClusterState(cfg, deployed)
 	configStr, err := haproxyConfig.Generate()
 	if err != nil {
 		app.Logger.Error("failed to generate HAProxy", zap.Error(err))
-		return fmt.Errorf("generate HAProxy config: %w", err)
+		return "", fmt.Errorf("generate HAProxy config: %w", err)
 	}
 
 	haproxyClient := app.createHAProxyClient(cfg)
 	if haproxyClient == nil {
 		app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
-		return fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
+		return "", fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
 	}
 
 	if err := haproxyClient.Update(ctx, configStr); err != nil {
@@ -1089,9 +1118,9 @@ func (app *App) updateHAProxy(ctx context.Context, cfg *types.Config, deployed *
 			zap.String("host", cfg.HAProxyIP.String()),
 			zap.String("user", cfg.HAProxyLoginUser),
 			zap.Error(err))
-		return fmt.Errorf("HAProxy update failed: %w", err)
+		return "", fmt.Errorf("HAProxy update failed: %w", err)
 	}
-	return nil
+	return configStr, nil
 }
 
 // createHAProxyClient builds an HAProxy SSH client with the best available auth method.

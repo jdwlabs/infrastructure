@@ -20,9 +20,15 @@ func base64Encode(s string) string {
 	return base64.StdEncoding.EncodeToString([]byte(s))
 }
 
-// sshRunner defines the interface for SSH operations
+// sshRunner defines the interface for SSH operations.
+//
+// Read commands need the remote stdout, and they need it even when the command
+// exits non-zero: `systemctl is-active` reports "inactive" on stdout and exits
+// 3, so discarding output on error would turn a known state into an unknown
+// one.
 type sshRunner interface {
 	runSSH(cmd string) error
+	runSSHOutput(cmd string) (string, error)
 }
 
 // Client manages HAProxy configuration via SSH
@@ -228,25 +234,33 @@ func (c *Client) CheckConnectivity() error {
 }
 
 func (c *Client) runSSH(cmd string) error {
+	_, err := c.runSSHOutput(cmd)
+	return err
+}
+
+// runSSHOutput runs a command and returns its combined output. Output is
+// returned alongside the error when the command ran but exited non-zero, so a
+// caller that can interpret the output does not lose it.
+func (c *Client) runSSHOutput(cmd string) (string, error) {
 	addr := net.JoinHostPort(c.sshHost, c.sshPort)
 	conn, err := ssh.Dial("tcp", addr, c.sshConfig)
 	if err != nil {
-		return fmt.Errorf("dial SSH: %w", err)
+		return "", fmt.Errorf("dial SSH: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	session, err := conn.NewSession()
 	if err != nil {
-		return fmt.Errorf("create SSH session: %w", err)
+		return "", fmt.Errorf("create SSH session: %w", err)
 	}
 	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(cmd)
 	if err != nil {
-		return fmt.Errorf("run SSH command: %w, output: %s", err, string(output))
+		return string(output), fmt.Errorf("run SSH command: %w, output: %s", err, string(output))
 	}
 
-	return nil
+	return string(output), nil
 }
 
 // knownHostsCallback returns an ssh.HostKeyCallback. When insecure is true,

@@ -16,7 +16,7 @@ jdwlabs `infrastructure` defines the physical and virtual infrastructure for jdw
 ## Repository Structure
 
 - `terraform/` — flat Terraform config (providers, variables, control/worker node definitions)
-- `bootstrap/` — `talops` CLI: full cluster lifecycle (bootstrap, reconcile, status, reset, infra deploy/destroy, up/down, upgrade-k8s, secrets)
+- `bootstrap/` — `talops` CLI: full cluster lifecycle (bootstrap, reconcile, status, reset, infra deploy/destroy, haproxy status/plan/apply, up/down, upgrade-k8s, secrets)
 - `clusters/<name>/` — per-cluster runtime state created by `talops`. Plaintext working files (`secrets/`, `nodes/`, `state/`) are gitignored; the SOPS+age encrypted vault is the shared source of truth (see `docs/secrets.md`)
 - `scenarios/` — step-by-step runbooks for operational tasks, plus scaling-test fixtures
 - `docs/` — architecture and operations documentation

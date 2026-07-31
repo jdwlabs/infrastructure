@@ -23,6 +23,11 @@ package_update: true
 packages:
   - qemu-guest-agent
   - haproxy
+  # Backend health is read from HAProxy's runtime socket rather than its HTTP
+  # stats page, which would mean handling the credentials the config carries.
+  # Without a Unix-socket client installed, that read returns nothing and an
+  # unreadable load balancer looks like one with no backends.
+  - socat
 
 # No haproxy.cfg content here on purpose. The distro's placeholder config is
 # enough for the service to exist and hold its ports; the real config is

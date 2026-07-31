@@ -97,6 +97,7 @@ func Execute() error {
 		statusCmd(a),
 		resetCmd(a),
 		infraCmd(a),
+		haproxyCmd(a),
 		upCmd(a),
 		downCmd(a),
 		pruneNodesCmd(a),

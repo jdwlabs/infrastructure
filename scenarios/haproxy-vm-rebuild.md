@@ -105,17 +105,37 @@ after the soak period, not by `terraform destroy`.
 
 ## Verify before cutover
 
-1. Push a real config to the replacement and confirm the generated backends
-   land, using the standard validated/rollback path rather than a manual copy.
-2. Smoke-test the API through the new VM without changing DNS:
+Every command here targets the replacement by address, so nothing touches the
+load balancer still serving production.
+
+1. Confirm the new VM is the one Terraform built, and that the layers below it
+   answer:
+   ```bash
+   talops haproxy status --host <temp-ip>
+   ```
+   Expect `source: terraform`, `ssh: ok`, and `service: active`. `source:
+   unmanaged` means the address matches no `haproxy_vms` entry — you are
+   pointed at the wrong host. Backends are expected to be absent at this point:
+   cloud-init ships only the distro placeholder config.
+2. Review the config that would be pushed, then push it. This is the same
+   validated/rollback path reconcile uses — not a manual copy:
+   ```bash
+   talops haproxy plan  --host <temp-ip>
+   talops haproxy apply --host <temp-ip>
+   ```
+3. Smoke-test the API through the new VM without changing DNS:
    ```bash
    curl -sk --resolve cluster.jdwlabs.com:6443:<temp-ip> \
      https://cluster.jdwlabs.com:6443/version
    ```
    Expect a Kubernetes version document. A TLS error naming the API server's
    cert is still a pass for reachability; a connection refused is not.
-3. Confirm every control-plane backend is UP on the new instance's stats
-   endpoint before trusting it with traffic.
+4. Confirm every backend is up before trusting the replacement with traffic:
+   ```bash
+   talops haproxy status --host <temp-ip>
+   ```
+   The `backendsUp` line must read `N/N`. Anything less means a backend the
+   production load balancer is currently serving would go dark at cutover.
 
 ## Cut over
 
@@ -130,13 +150,19 @@ in a quiet window; DNS, `talosconfig`, and kubeconfig never change.
    (`192.168.1.199/24`), then plan and review. This is an in-place cloud-init
    change to the *new* VM only.
 3. Human applies, then reboot the new VM so cloud-init re-applies the address.
-4. Reconcile so the pushed config matches the cluster's live topology.
+4. Switch `haproxy_login_user` to the cloud-init admin user in the same tfvars
+   edit — the new VM has no `root` login. Then reconcile so the pushed config
+   matches the cluster's live topology.
 5. Confirm end to end:
    ```bash
+   talops haproxy status              # expect source: terraform, backendsUp: N/N
    kubectl get nodes                  # through cluster.jdwlabs.com
    talosctl -n <cp-ip> version        # Talos API through :50000
    curl -sI https://<an-ingress-host> # ingress through :80/:443
    ```
+   `talops haproxy status` reporting `source: terraform` against the production
+   address is the signal that this runbook has actually landed: until then the
+   load balancer is still the hand-built one.
 
 ## Abort criteria
 
@@ -168,3 +194,6 @@ Terraform action.
 - A single load balancer remains a single point of failure for the API and all
   ingress. The `haproxy_vms` list shape is what a keepalived VIP pair needs;
   adding the peer is a separate, scheduled change.
+- The hand-built load balancer has no `socat`, so `talops haproxy status`
+  reports backend health as unread against it. Cloud-init installs it, so the
+  gap closes with the replacement — no action needed on the old VM.
