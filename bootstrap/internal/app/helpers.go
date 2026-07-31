@@ -208,6 +208,15 @@ func (app *App) ConfigureTalosctl(deployed *types.ClusterState) {
 	}
 }
 
+// TalosctlRunner returns a runner that invokes talosctl through the audited
+// path, so a cluster mutation is recorded in the session audit log the same way
+// every other talosctl call is.
+func (app *App) TalosctlRunner() func([]string) ([]byte, error) {
+	return func(args []string) ([]byte, error) {
+		return app.execTalosctlAudited(args, "")
+	}
+}
+
 // execTalosctlAudited runs a talosctl command with audit logging if available
 func (app *App) execTalosctlAudited(args []string, envExtra string) ([]byte, error) {
 	if app.Session != nil && app.Session.AuditLog != nil {

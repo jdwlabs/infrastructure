@@ -311,9 +311,11 @@ metrics-server objects deleted by hand after `ace8290`.
 Whether that prune would in fact delete a removed entry's objects is
 **unverified**. The cost of being wrong is asymmetric: the inventory lists
 Namespaces, and pruning a Namespace cascades to every object inside it,
-including ones a GitOps release owns. Pass `--manifests-no-prune` on the first
-`upgrade-k8s` after any `extraManifests` removal, then check the inventory
-before trusting prune again:
+including ones a GitOps release owns. Run Kubernetes upgrades through
+`talops upgrade-k8s`, which injects `--manifests-no-prune` unless pruning is
+explicitly opted into twice, so the first `upgrade-k8s` after an
+`extraManifests` removal cannot silently prune. Then check the inventory before
+trusting prune again:
 
 ```bash
 kubectl -n kube-system get cm talos-bootstrap-manifests-inventory \
@@ -335,7 +337,9 @@ Consequence for upgrades in both directions:
 - `upgrade-k8s` re-applies every entry as its final stage. An entry whose
   objects a GitOps release has since taken over can fail that stage on an
   immutable field and abort the command *after* the control-plane and kubelet
-  updates have already landed. Dry-run it before every Kubernetes upgrade.
+  updates have already landed. Preview before every Kubernetes upgrade —
+  `talops upgrade-k8s --to <version> --node <cp-ip>` is a preview by default and
+  needs `--apply` to do anything.
 
 The current template carries **no** `extraManifests` entries. Both former
 entries now ship as GitOps releases that pin an image tag, because each raw

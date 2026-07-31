@@ -100,6 +100,7 @@ func Execute() error {
 		upCmd(a),
 		downCmd(a),
 		pruneNodesCmd(a),
+		upgradeK8sCmd(a),
 		secretsCmd(a),
 		versionCmd(version),
 	)
