@@ -76,3 +76,31 @@ talos_worker_configuration = [
 
 # GPU inference VM (AI-SRE local tier)
 gpu_vm_ssh_public_key = "ssh-ed25519 AAAA... you@host"
+
+# HAProxy load balancer VM(s)
+# Leave this list empty to provision nothing — a hand-built load balancer is
+# not represented in Terraform state, and an empty list keeps it that way.
+#
+# To provision a replacement, add an entry and review the plan before applying:
+# - Place it on a Proxmox host that runs no control-plane VM, so a single host
+#   failure cannot take a control-plane node and the load balancer together.
+# - Pick a vmid and an ip that are both free. Verify against the live cluster
+#   first; a colliding address takes out the API endpoint, not just the VM.
+# - Cut over to the production address only after the replacement is verified
+#   on a temporary one (see scenarios/haproxy-vm-rebuild.md).
+haproxy_vms = []
+
+# haproxy_vms = [
+#   {
+#     node_name = "pve1"
+#     vm_name   = "haproxy-1"
+#     vmid      = 110
+#     cpu_cores = 2
+#     memory    = 1024
+#     disk_size = 10
+#     ip        = "192.168.1.198/24"
+#   },
+# ]
+
+haproxy_gateway        = "192.168.1.254"
+haproxy_ssh_public_key = "ssh-ed25519 AAAA... you@host"

@@ -1,0 +1,43 @@
+#cloud-config
+# Day-0 only. Custom user-data fully replaces the Proxmox-generated cloud-init
+# config, so hostname and user creation must be carried here explicitly rather
+# than left to the provider's user_account block.
+hostname: ${hostname}
+fqdn: ${hostname}
+preserve_hostname: false
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+# Password auth stays off: the config-push path authenticates with the key
+# above and escalates through sudo.
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - haproxy
+
+# No haproxy.cfg content here on purpose. The distro's placeholder config is
+# enough for the service to exist and hold its ports; the real config is
+# rendered from live cluster state and pushed through the existing validated
+# install path with automatic rollback. A second config-rendering path here
+# would drift from the generator that owns it.
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - systemctl enable haproxy
+
+# The generated config binds the API frontends on this host's own address, and
+# a keepalived VIP peer would later bind an address this instance does not own
+# until it wins the election. Setting this now keeps that a config change
+# rather than a rebuild.
+write_files:
+  - path: /etc/sysctl.d/99-haproxy-nonlocal-bind.conf
+    content: |
+      net.ipv4.ip_nonlocal_bind = 1
