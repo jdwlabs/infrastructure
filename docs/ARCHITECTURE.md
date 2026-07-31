@@ -286,6 +286,31 @@ Control plane removal requires `--auto-approve` or interactive confirmation when
     └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
+**VM Provisioning**:
+
+The VM itself is declared in `terraform/haproxy-node.tf` — an Ubuntu cloud
+image plus a cloud-init snippet that creates the admin user, installs
+`haproxy` and `qemu-guest-agent`, and pins the static address. Two properties
+are deliberate:
+
+- `haproxy_vms` defaults to an empty list, so a checkout provisions no load
+  balancer until an operator adds an entry. The load balancer built by hand
+  before this config existed is **not** in Terraform state; it is replaced via
+  `scenarios/haproxy-vm-rebuild.md` rather than imported, because adopting it
+  would leave Terraform reconciling a cloud-init drive onto the live API
+  endpoint.
+- The address is always static CIDR, enforced by a variable validation. A
+  lease-dependent address on the host that DNS, every `talosconfig` endpoint,
+  and kubeconfig resolve to is the same failure class that has already taken
+  etcd down on the control-plane nodes.
+
+Cloud-init deliberately ships **no** `haproxy.cfg`. The distro placeholder is
+enough for the service to hold its ports; the real config arrives through the
+push path below, so there is only ever one config-rendering path.
+
+The list-of-objects shape is what a keepalived VIP pair would need, so HA
+remains an added element rather than a redesign.
+
 **Dynamic Reconfiguration**:
 - `talops` SSHs to HAProxy host
 - Generates new backend configuration using VMIDs as server names
