@@ -214,6 +214,7 @@ type Config struct {
 	DryRun           bool   `json:"dry_run"`
 	PlanMode         bool   `json:"plan_mode"`
 	SkipPreflight    bool   `json:"skip_preflight"`
+	AllowPartial     bool   `json:"allow_partial_discovery"` // Proceed when discovery finds fewer nodes than desired
 	ForceReconfigure bool   `json:"force_reconfigure"`
 	GenerateOnly     bool   `json:"generate_only"` // Regenerate node YAMLs without contacting nodes
 	LogLevel         string `json:"log_level"`

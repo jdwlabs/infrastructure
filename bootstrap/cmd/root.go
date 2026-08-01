@@ -70,6 +70,7 @@ func Execute() error {
 	rootCmd.PersistentFlags().BoolVarP(&cfg.AutoApprove, "auto-approve", "a", false, "Skip confirmations")
 	rootCmd.PersistentFlags().BoolVarP(&cfg.DryRun, "dry-run", "d", false, "Simulate only")
 	rootCmd.PersistentFlags().BoolVarP(&cfg.SkipPreflight, "skip-preflight", "s", false, "Skip connectivity checks")
+	rootCmd.PersistentFlags().BoolVar(&cfg.AllowPartial, "allow-partial-discovery", false, "Continue when discovery finds fewer nodes than desired (default: abort)")
 	rootCmd.PersistentFlags().StringVarP(&cfg.LogLevel, "log-level", "l", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().StringVarP(&cfg.ProxmoxSSHKeyPath, "ssh-key", "k", cfg.ProxmoxSSHKeyPath, "Path to SSH private key")
 	rootCmd.PersistentFlags().BoolVarP(&cfg.ForceReconfigure, "force-reconfigure", "f", false, "Force reconfigure all nodes")

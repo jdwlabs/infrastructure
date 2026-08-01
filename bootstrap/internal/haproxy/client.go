@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/sshutil"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -243,7 +244,13 @@ func (c *Client) runSSH(cmd string) error {
 // caller that can interpret the output does not lose it.
 func (c *Client) runSSHOutput(cmd string) (string, error) {
 	addr := net.JoinHostPort(c.sshHost, c.sshPort)
-	conn, err := ssh.Dial("tcp", addr, c.sshConfig)
+
+	// Resolved here rather than in NewClient so a keyscan performed between
+	// construction and the dial is picked up.
+	cfg := *c.sshConfig
+	cfg.HostKeyAlgorithms = sshutil.HostKeyAlgorithms(addr)
+
+	conn, err := ssh.Dial("tcp", addr, &cfg)
 	if err != nil {
 		return "", fmt.Errorf("dial SSH: %w", err)
 	}

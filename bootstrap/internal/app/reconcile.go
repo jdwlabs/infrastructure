@@ -173,7 +173,25 @@ func (app *App) RunReconcile(ctx context.Context) error {
 			app.Logger.Error("failed to discover VMs", zap.Error(err))
 			return fmt.Errorf("discover VMs: %w", err)
 		}
-		app.Logger.Info("discovered live state", zap.Int("found", len(live)))
+
+		// A short sweep must not render a full-confidence plan. Every node the
+		// scan missed is a node the plan treats as absent, so it proposes
+		// rewriting a config for a machine whose real state was never read --
+		// including, potentially, a control plane while etcd is at bare quorum.
+		if len(live) < len(vmids) {
+			app.Logger.Error("discovery found fewer nodes than desired",
+				zap.Int("found", len(live)),
+				zap.Int("desired", len(vmids)),
+				zap.Bool("allow_partial", cfg.AllowPartial))
+			if !cfg.AllowPartial {
+				return fmt.Errorf(
+					"discovery found %d of %d nodes: resolve the unreachable hosts (check SSH host keys with `ssh-keyscan -t rsa,ecdsa,ed25519 <host>` and the addresses in tfvars), or pass --allow-partial-discovery to plan against partial state",
+					len(live), len(vmids))
+			}
+			app.Logger.Warn("continuing against partial live state at operator request")
+		} else {
+			app.Logger.Info("discovered live state", zap.Int("found", len(live)))
+		}
 
 		for vmid, node := range live {
 			if node.IP != nil {
