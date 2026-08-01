@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/sshutil"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -64,7 +65,13 @@ func (s *Scanner) getConn(ip net.IP) (*ssh.Client, error) {
 		delete(s.connPool, addr)
 	}
 
-	c, err := ssh.Dial("tcp", addr, s.sshConfig)
+	// One Scanner dials every Proxmox host, but the trusted key types are a
+	// property of each host's known_hosts entry, so the algorithm list has to be
+	// resolved per dial rather than baked into the shared config.
+	cfg := *s.sshConfig
+	cfg.HostKeyAlgorithms = sshutil.HostKeyAlgorithms(addr)
+
+	c, err := ssh.Dial("tcp", addr, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
