@@ -42,10 +42,16 @@ update-initramfs -u -k all
 systemctl reboot
 ```
 
-**pve5 comes back on a different DHCP IP after a reboot** (observed: `.204` →
-`.169`). Re-derive it live (`pvesh get /cluster/status` from another node) —
-don't assume the old IP still applies to SSH access, though existing VM/mapping
-config keyed by node name is unaffected.
+**pve5 is static at `192.168.1.169`** (`iface vmbr0 inet static`), so a reboot
+returns it to the same address. The `.204` → `.169` move recorded here earlier
+was the one-time switch to that static config, not recurring DHCP churn — do
+not expect the address to wander on the next reboot.
+
+It is still worth re-deriving live (`pvesh get /cluster/status` from another
+node) before relying on it for SSH: the address is static on the host but sits
+inside the DHCP pool, so it is pinned only against reboots, not against the
+gateway leasing it elsewhere. `docs/host-addressing.md` covers that gap. VM and
+mapping config keyed by node name is unaffected either way.
 
 Verify after reboot: `lspci -k -s 01:00.0 | grep "in use"` → `vfio-pci`.
 
