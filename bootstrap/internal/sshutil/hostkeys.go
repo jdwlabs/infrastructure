@@ -9,16 +9,22 @@ import (
 	"github.com/skeema/knownhosts"
 )
 
-// HostKeyAlgorithms returns the host-key algorithms trusted for addr in the
-// user's known_hosts file, most preferred first, for use as
-// ssh.ClientConfig.HostKeyAlgorithms.
+// HostKeyAlgorithms returns the host-key algorithms addr is trusted under in
+// known_hosts, for use as ssh.ClientConfig.HostKeyAlgorithms. Only trusted types
+// are returned -- a known host will not negotiate a type it has no entry for.
 //
-// Without this, Go negotiates from its own default preference order, which is
-// independent of what the host is actually trusted under. A host keyscanned for
-// only one key type then presents a key of a different type, the callback finds
-// no matching entry, and the dial fails as "knownhosts: key mismatch" -- the
-// wording for a changed host key, so it reads as a compromise rather than as an
-// incomplete known_hosts entry.
+// Without this, Go negotiates from its own default order, which is independent
+// of what the host is actually trusted under. A host keyscanned for only one key
+// type then presents a key of a different type, the callback finds no matching
+// entry, and the dial fails as "knownhosts: key mismatch" -- the wording for a
+// changed host key, so it reads as a compromise rather than as an incomplete
+// known_hosts entry.
+//
+// The trade-off is deliberate: a host that legitimately rotates to a new key
+// type now fails during negotiation rather than reaching the callback. That is
+// the intended direction, because the alternative is the silent partial sweep
+// this exists to prevent -- re-running ssh-keyscan is the recovery, and it is
+// the same action the operator would take either way.
 //
 // addr must carry the port ("host:22"), matching the form ssh.Dial is given.
 //
