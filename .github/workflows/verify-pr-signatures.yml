@@ -1,0 +1,15 @@
+name: Verify PR Signatures
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Enforced on the branch rather than on main: GitHub rebuilds every commit
+  # server-side when it rebase-merges and signs none of the results, so the
+  # author's signature is verifiable exactly once — before the merge rewrites
+  # it. Reads the API only; no checkout, no secret.
+  signatures:
+    uses: jdwlabs/.github/.github/workflows/verify-pr-signatures.yml@main
