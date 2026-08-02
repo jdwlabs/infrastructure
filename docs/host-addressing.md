@@ -59,6 +59,73 @@ existing vLLM inference VM sits deliberately at `192.168.1.50`, below that
 floor, and is the one host on this network whose address is genuinely
 unreachable by DHCP.
 
+## Reaching a host by name
+
+Every host already answers to a name on the LAN, and **the name is the better
+address to use** — not merely a convenience. This is easy to miss because
+nothing in this repository references it.
+
+The gateway at `192.168.1.254` publishes forward and reverse records for its
+DHCP clients under `attlocal.net`. Verified against that resolver directly:
+
+| Name | Resolves to | Reverse |
+| --- | --- | --- |
+| `pve1.attlocal.net` | 192.168.1.200 | `pve1.attlocal.net` |
+| `pve2.attlocal.net` | 192.168.1.201 | `pve2.attlocal.net` |
+| `pve3.attlocal.net` | 192.168.1.202 | `pve3.attlocal.net` |
+| `pve4.attlocal.net` | 192.168.1.203 | `pve4.attlocal.net` |
+| `pve5.attlocal.net` | 192.168.1.169 **and 192.168.1.204** | `.169` → `pve5.attlocal.net`, `.204` → `pve5` |
+
+The records only exist on that resolver. A client pointed at a public resolver
+gets `NXDOMAIN`, so this is a LAN-only path — which is the correct scope for a
+hypervisor management interface, and the reason no public record should be
+created for one.
+
+### The name matches the certificate; the address does not
+
+Each host serves a certificate on `:8006` whose subject is
+`CN=pve<n>.attlocal.net`, with `DNS:pve<n>` and `DNS:pve<n>.attlocal.net` in the
+subject alternative names. Browsing to `https://pve1.attlocal.net:8006` therefore
+produces a hostname *match*; browsing to `https://192.168.1.200:8006` produces a
+mismatch, because the only IP in that certificate is `192.168.1.233`.
+
+Either way the issuer is the Proxmox cluster's own CA, so a browser still warns
+until that CA is trusted once. The point is that the name removes a second,
+permanent warning that the address cannot.
+
+Those embedded addresses are also evidence in their own right. pve1-pve4 carry
+`.233`, `.222`, `.221` and `.223` — addresses none of them holds now. The
+certificates were minted when the hosts were there. **These four have already
+moved at least once under DHCP**; the risk described above is not hypothetical.
+pve5's certificate carries `192.168.1.169`, matching where it sits today,
+because it was reissued when the host was made static.
+
+### pve5's name is currently broken
+
+`pve5.attlocal.net` resolves to two addresses. `192.168.1.204` accepts no
+connection on `22` or `8006` — it is a leftover record from pve5's DHCP era that
+the gateway never retired. Clients that fall through to the second address
+recover after a connect timeout; clients that try only the first fail outright.
+Either way the name is unreliable in a way the address is not, which is the one
+place where preferring the name is currently the wrong advice.
+
+Clearing it is part of the same gateway visit as the reservations below: the
+stale lease has to be released there. Until then, prefer `192.168.1.169` for
+pve5 specifically, and the name for the other four.
+
+### Why the repository still uses addresses
+
+`talops` cannot accept a name today. `ProxmoxNodeIPs` is typed
+`map[string]net.IP`, and `ProxmoxSSHHost` is passed through `net.ParseIP`, which
+yields `nil` for a hostname rather than an error — so a name substituted into
+`proxmox_node_ips` or `proxmox_endpoint` would fail quietly rather than loudly.
+Changing that is a code change, not a configuration change.
+
+It would also buy less than it appears to. A DHCP-published name is derived from
+the lease, so it inherits exactly the instability the lease has. Pinning the
+addresses is what makes either form dependable; the name is what makes TLS
+correct once they are.
+
 ## Decision
 
 **Create DHCP reservations at the gateway for all five hosts, keyed by MAC,
@@ -108,6 +175,10 @@ On the BGW320-500 admin interface, under the LAN IP allocation settings, bind
 each MAC in the table above to the address listed beside it. All five, including
 pve5.
 
+While there, release the stale `192.168.1.204` lease so the gateway stops
+publishing it as a second address for `pve5.attlocal.net`. A reservation alone
+does not retract a record the gateway already holds.
+
 Verify afterwards, from any host that can reach the LAN:
 
 ```bash
@@ -123,6 +194,18 @@ done
 Each host answering on `:8006` with its own name in the certificate subject is
 the check that matters — it proves the address maps to the host the repo thinks
 it does, which a ping cannot.
+
+Then confirm each name resolves to exactly one address, which is what proves the
+stale `.204` record is gone:
+
+```bash
+for n in pve1 pve2 pve3 pve4 pve5; do
+  printf '%-20s %s\n' "$n.attlocal.net" \
+    "$(dig +short "$n.attlocal.net" @192.168.1.254 | tr '\n' ' ')"
+done   # expect exactly one address per host
+```
+
+Today that loop returns two addresses for `pve5` and one for each of the others.
 
 Then confirm the reconciler sees the whole fleet:
 

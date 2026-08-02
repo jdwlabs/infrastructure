@@ -6,8 +6,12 @@ secondary tier for Proxmox (ISOs, templates, backups, and live-migratable VMs) a
 for Kubernetes bulk/RWX workloads via `democratic-csi`.
 
 **TrueNAS address:** `192.168.1.205`  
-**Proxmox cluster:** `pve1`–`pve5` (`192.168.1.200`–`204`)  
+**Proxmox cluster:** `pve1`–`pve4` (`192.168.1.200`–`203`), `pve5` (`192.168.1.169`)  
 **Network:** 1GbE end-to-end — NFS is the only supported protocol here.
+
+The host addresses are not a contiguous range and `192.168.1.204` belongs to no
+host. See [../docs/host-addressing.md](../docs/host-addressing.md) before using
+any address here — the four DHCP hosts can move.
 
 ---
 
