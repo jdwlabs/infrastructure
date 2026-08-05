@@ -22,7 +22,9 @@ overrides `cluster.jdwlabs.com` to `192.168.1.199`. Public DNS resolves the same
 name to the WAN address, so **any machine without that override reaches the
 cluster through the router** and will lose access when the forward is removed.
 Treat a second LAN machine as the real test, not the workstation that already
-has the override.
+has the override. What that override is, why it is the only one of its kind that
+matters, and what it would take to retire it:
+[lan-name-resolution.md](lan-name-resolution.md).
 
 ## Topology that matters here
 
@@ -68,7 +70,12 @@ step 2; there is no export function.
 
 ### Step 1 — establish off-site access before removing it (optional, additive)
 
-Skip only if off-site administration is not wanted at all.
+Skip only if off-site *command-line* administration is not wanted at all. Note
+what this step does and does not restore: the Headlamp dashboard at
+`dashboard.jdwlabs.com` is public HTTPS on `443` behind OIDC and is unaffected
+by anything in this runbook, so browser-based cluster administration survives
+the lockdown on its own. What the removed forwards cost is `kubectl` and
+`talosctl` from off-LAN.
 
 The existing Tailscale tailnet does not include any cluster node or the HAProxy
 VM, so it is not yet an alternative path — it has to be extended first. Install
@@ -92,6 +99,9 @@ kubectl get --raw /version            # with cluster.jdwlabs.com -> 192.168.1.19
 **Rollback:** `sudo tailscale down` on the VM, and remove the machine from the
 tailnet. Additive only — it does not touch the API path, so a failure here
 leaves the cluster exactly as it was.
+
+Full procedure, including route approval, the auto-approver policy and the
+off-LAN verification set: [tailscale-subnet-router.md](tailscale-subnet-router.md).
 
 ### Step 2 — remove the WAN forwards for 6443 and 50000 (human, at the router)
 

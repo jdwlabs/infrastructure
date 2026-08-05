@@ -81,6 +81,10 @@ gets `NXDOMAIN`, so this is a LAN-only path — which is the correct scope for a
 hypervisor management interface, and the reason no public record should be
 created for one.
 
+This is a different mechanism from how `*.jdwlabs.com` names resolve on the LAN,
+which the same gateway cannot help with at all — see
+[lan-name-resolution.md](lan-name-resolution.md).
+
 ### The name matches the certificate; the address does not
 
 Each host serves a certificate on `:8006` whose subject is
