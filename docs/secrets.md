@@ -14,12 +14,20 @@ ever committing plaintext.
 | Talos secrets bundle (cluster PKI, tokens) | `clusters/<name>/secrets/secrets.yaml` | `clusters/<name>/vault/secrets.enc.yaml` |
 | Talos client config | `clusters/<name>/secrets/talosconfig` | `clusters/<name>/vault/talosconfig.enc.yaml` |
 | Reconciler state | `clusters/<name>/state/bootstrap-state.json` | `clusters/<name>/vault/bootstrap-state.enc.yaml` |
+| Vault root token + unseal key | k8s Secrets `vault-init`/`vault-unseal-keys` (namespace `vault`, in-cluster only) | `clusters/<name>/vault/vault-unseal.enc.yaml` (manual — see below) |
 
 The encrypted `*.enc.yaml` files are the **shared source of truth**. The plaintext copies
 are a regenerable local cache: `talops` decrypts them on demand and re-encrypts them when
 they change. Generated node/base machine configs are derived from the secrets bundle and are
 never stored in the vault. `kubeconfig` is merged into your normal `~/.kube/config` and is
 re-fetchable from the cluster, so it is not vaulted.
+
+The Vault unseal material is a deliberate exception: it isn't a `talops`-managed
+artifact (it's an in-cluster k8s Secret owned by `platform`'s bootstrap flow, not a
+local file talops generates), so it isn't hydrated/sealed automatically. It's captured
+by a standalone script instead — see `scenarios/vault-unseal-backup.md` for what it
+protects against (Vault can't back up the keys that unseal it) and the restore
+procedure.
 
 ## How it works
 
