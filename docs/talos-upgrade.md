@@ -418,8 +418,8 @@ Ordered cheapest to most invasive.
   operation with its own `--from`/`--to` and a `--dry-run` plan mode. Note
   that the talosctl client's default `--to` tracks the client's own bundled
   Kubernetes version and is **not** this cluster's target — always pass
-  `--to` explicitly from `kubernetes_version` in tfvars. No runbook for this
-  exists yet.
+  `--to` explicitly from `kubernetes_version` in tfvars. See
+  [k8s-upgrade.md](k8s-upgrade.md) for that runbook.
 - **Schematic changes.** Adding or removing a system extension changes the
   Image Factory schematic ID, not just the tag. Different change, different
   review.
