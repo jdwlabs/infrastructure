@@ -94,6 +94,13 @@ Recording this as a finding matters more than it looks. "Add an override on the
 router" is the first thing anyone will try, and it is a dead end on this
 hardware.
 
+This lines up with how the BGW320 family is reported to behave more broadly:
+its DNS settings pick which upstream resolver the gateway itself forwards to
+(or pass through, in IP-passthrough mode), not per-host records, and the
+gateway is reported to insert itself as a DNS proxy in front of whatever
+resolver a client is handed — even one assigned by a second DHCP server on the
+same LAN. That proxying behaviour is the risk to flag against option 2 below.
+
 ## Options, and the recommendation
 
 Ordered by how much new surface each one introduces.
@@ -115,6 +122,17 @@ happen automatically. That capability is unconfirmed and is the thing to check
 during the same gateway login as the reservation work. If it cannot, every
 client needs manual resolver configuration — which is the `hosts` file problem
 wearing a different hat, and option 1 is then strictly better.
+
+There is a second, sharper catch even if the DHCP option can be set: gateways
+in this family are reported to proxy DNS themselves rather than pass queries
+through to whatever resolver a client was handed, which would make the
+LAN resolver unreachable from ordinary DHCP clients regardless of what the
+DHCP option says. That is only checkable by testing end-to-end after standing
+the resolver up — a client accepting the DHCP option is not proof it is
+actually being queried. Confirm with `nslookup cluster.jdwlabs.com
+<lan-resolver-ip>` on the LAN resolver directly first, then repeat with no
+resolver argument on a client that only has the DHCP-assigned server, and
+compare the two answers.
 
 **3. Tailscale MagicDNS.** Once a subnet router is on the tailnet (see
 [tailscale-subnet-router.md](tailscale-subnet-router.md)), a split-DNS entry in
@@ -146,6 +164,34 @@ The ordering is the part that can go wrong.
 
 The service-name entries can be dropped at any point, independently — hairpin
 covers them.
+
+## Verification checklist
+
+Run once whichever option is implemented and serving `cluster.jdwlabs.com` on
+the LAN. All three checks are commands from a real client, not queries against
+a resolver in isolation — a resolver that answers when asked directly but
+isn't actually in the client's path proves nothing here.
+
+- [ ] `nslookup cluster.jdwlabs.com` **from a LAN client** (not the workstation
+      that held the `hosts` override) returns `192.168.1.199`. This only
+      passes once an actual resolver is serving the override — it will not
+      pass under option 1, where the name is still only in one machine's
+      `hosts` file. That is expected, not a failure of option 1; it is the
+      line between "the override travels with the client" and "the override
+      travels with the file."
+- [ ] `kubectl get nodes` returns all 8 nodes, run from a **second** LAN
+      machine that has never had a `cluster.jdwlabs.com` hosts entry. This is
+      the check that actually matters: it proves a machine with no manual
+      override reaches the apiserver, which is the whole point of the ticket.
+- [ ] `curl -k --resolve cluster.jdwlabs.com:6443:104.53.12.62
+      https://cluster.jdwlabs.com:6443/version` still reaches the public
+      WAN address, proving the LAN override is scoped to the LAN and hasn't
+      altered public resolution or ingress in the process.
+
+Do these from a machine that never held the override, in the order above, and
+only after the resolver is live — re-running them from the original
+workstation cannot distinguish a working resolver from that machine's own
+`hosts` file, per the method note above.
 
 ## Reaching the hypervisors by name
 
