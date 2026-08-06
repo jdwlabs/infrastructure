@@ -155,9 +155,20 @@ Per worker W (vmid V, node N, IP X, size S):
    (Longhorn requires scheduling off before eviction):
    `kubectl -n longhorn-system patch nodes.longhorn.io N --type merge -p '{"spec":{"disks":{"<default-disk-key>":{"allowScheduling":false,"evictionRequested":true}}}}'`
 
-   **If N is worker-01 (300), worker-02 (301), or worker-05 (304):** this
-   node holds the sole replica of a `longhorn-single` Vault volume
-   (`numberOfReplicas: 1`). Evicting that replica normally means moving its
+   **Before this step, re-derive which nodes currently hold a Vault
+   single-replica volume** — the Vault PVC → node table above is a
+   2026-08-04 snapshot, and step 3 itself relocates Vault pods, so by the
+   time you reach a later worker the mapping has moved. For each of
+   `data-platform-vault-0/1/2`, find its Longhorn volume name from the PVC
+   (`kubectl -n <vault-namespace> get pvc data-platform-vault-<N> -o
+   jsonpath='{.spec.volumeName}'`), then find that volume's replica node
+   (`kubectl -n longhorn-system get replicas.longhorn.io -l
+   longhornvolume=<volume-name> -o jsonpath='{.items[0].spec.nodeID}'`).
+   Treat whichever nodes this returns as "holds a Vault single-replica
+   volume" for this pass, not the original three.
+
+   **If N now holds the sole replica of a `longhorn-single` Vault volume**
+   (`numberOfReplicas: 1`): evicting that replica normally means moving its
    only copy while it is live, and `dataLocality: best-effort` will then try
    to pull a fresh replica back onto whichever node the Vault pod lands on —
    fighting the eviction. Do not evict a Vault single-replica volume this
@@ -165,6 +176,9 @@ Per worker W (vmid V, node N, IP X, size S):
    StatefulSet reschedules it onto another node first (Raft tolerates one
    member down); only request eviction of the old disk once the Vault pod
    and its PVC have moved off N and `platform-vault` is back to 3/3 Ready.
+   Re-run the re-derive query afterward to confirm the replica didn't land
+   on another not-yet-migrated node — if it did, that node now carries the
+   same constraint before you touch it.
 4. Wait until the old disk carries zero replicas and every volume is healthy
    again — abort criteria below if this stalls:
    `kubectl -n longhorn-system get nodes.longhorn.io N -o jsonpath='{.status.diskStatus.<default-disk-key>.scheduledReplica}'`
