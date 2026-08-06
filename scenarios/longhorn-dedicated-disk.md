@@ -60,44 +60,66 @@ shows `transport: virtio`, Longhorn attachments show `iscsi`).
 disk (evict → remove). Longhorn settings live in the platform repo; nothing
 in this repo changes Longhorn itself.
 
-## Live state (verified 2026-07-24 — always re-derive before applying)
+## Live state (verified 2026-07-24, replica counts and Vault ownership
+reconfirmed 2026-08-04 — always re-derive before applying)
 
-Cluster: 14 volumes, 132 Gi provisioned, ~31.5 Gi actual data, 3 replicas
-each. Settings: over-provisioning 150%, minimal-available 20%, default-disk
-reserve 30%. Control planes run **zero** Longhorn components (no
-`nodes.longhorn.io` CRs, no manager/instance-manager pods on CPs — verified
-live), so vmids 200–202 are exempt from this runbook.
+Cluster: 14 volumes, 132 Gi provisioned, 24.1 Gi actual data (36 replicas
+total, up to 3 per volume). Settings: over-provisioning 150%,
+minimal-available 20%, default-disk reserve 30%. Control planes run **zero**
+Longhorn components (no `nodes.longhorn.io` CRs, no manager/instance-manager
+pods on CPs — verified live), so vmids 200–202 are exempt from this runbook.
 
 | VM (vmid) | Host | K8s node | IP | Root disk | LH max | Reserved | Scheduled | Replicas | New disk |
 |-----------|------|----------|----|-----------|--------|----------|-----------|----------|----------|
-| worker-01 (300) | pve1 | talos-4h8-zy6 | 192.168.1.87 | 300 GiB | 297.7 Gi | 89.3 Gi | 122.0 Gi | 13 | **200 GiB** |
-| worker-02 (301) | pve2 | talos-k3y-y3e | 192.168.1.165 | 150 GiB | 147.8 Gi | 44.3 Gi | 25.0 Gi | 1 | **100 GiB** |
-| worker-03 (302) | pve3 | talos-2qd-v0u | 192.168.1.78 | 150 GiB | 147.8 Gi | 44.3 Gi | 92.0 Gi | 10 | **100 GiB** |
-| worker-04 (303) | pve4 | talos-g1i-e3h | 192.168.1.130 | 150 GiB | 147.8 Gi | 44.3 Gi | 89.0 Gi | 11 | **100 GiB** |
-| worker-05 (304) | pve5 | talos-lx0-6a4 | 192.168.1.163 | 300 GiB | 297.7 Gi | 89.3 Gi | 73.0 Gi | 6 | **200 GiB** |
+| worker-01 (300) | pve1 | talos-4h8-zy6 | 192.168.1.87 | 300 GiB | 297.7 Gi | 89.3 Gi | 86.0 Gi | 8 | **200 GiB** |
+| worker-02 (301) | pve2 | talos-k3y-y3e | 192.168.1.165 | 150 GiB | 147.8 Gi | 44.3 Gi | 35.0 Gi | 2 | **100 GiB** |
+| worker-03 (302) | pve3 | talos-2qd-v0u | 192.168.1.78 | 150 GiB | 147.8 Gi | 44.3 Gi | 46.0 Gi | 5 | **100 GiB** |
+| worker-04 (303) | pve4 | talos-g1i-e3h | 192.168.1.130 | 150 GiB | 147.8 Gi | 44.3 Gi | 77.0 Gi | 10 | **100 GiB** |
+| worker-05 (304) | pve5 | talos-lx0-6a4 | 192.168.1.163 | 300 GiB | 297.7 Gi | 89.3 Gi | 92.0 Gi | 11 | **200 GiB** |
 
 Sizing: new schedulable capacity per node (reserve 0 on a dedicated disk) is
 100/200 Gi vs today's effective 103.5/208.4 Gi (max − 30% reserve) — near
-parity, sized against 132 Gi provisioned / ~32 Gi actual with headroom.
+parity, sized against 132 Gi provisioned / ~24 Gi actual with headroom.
 Disks are thin-provisioned on `local-lvm`, so host allocation grows with
-actual data, not disk size.
+actual data, not disk size. Worker-04 is the tightest fit at 77.0 Gi
+scheduled against a 150 Gi allowance (51%) — still comfortable, but re-check
+this node's headroom live rather than assuming it holds.
+
+**Vault single-replica volumes.** `platform-vault` (3/3 Ready) uses
+`storageClass: longhorn-single` (`numberOfReplicas: 1`,
+`dataLocality: best-effort`), so each of its three PVCs has exactly one
+replica, and that replica currently sits on a different worker:
+
+| Vault PVC | Sole replica on | Worker |
+|-----------|------------------|--------|
+| `data-platform-vault-0` | talos-4h8-zy6 | worker-01 (300) |
+| `data-platform-vault-1` | talos-lx0-6a4 | worker-05 (304) |
+| `data-platform-vault-2` | talos-k3y-y3e | worker-02 (301) |
+
+This affects three of the five workers and drives both the node order below
+and the eviction handling in step 3.
 
 ## Preconditions — hard gates, all must pass
 
 1. **All volumes healthy.** `kubectl -n longhorn-system get volumes.longhorn.io`
-   — every volume `robustness: healthy`, no rebuilds in flight. As of the
-   live capture, `pvc-a0152d45…` and `pvc-df6c5715…` showed `unknown`
-   (detached volumes report this) — confirm they are intentionally detached
-   before starting; eviction of detached-volume replicas is slower and must
-   be watched to completion.
+   — every volume `robustness: healthy`, no rebuilds in flight, none
+   `detached`/`unknown`. (The two detached volumes noted in the 2026-07-24
+   capture, `pvc-a0152d45…` and `pvc-df6c5715…`, were Vault-cutover debris
+   removed under a separate ticket; as of 2026-08-04 there are zero detached
+   volumes cluster-wide. Re-verify this is still true rather than trusting
+   the count — if a detached volume exists at runbook time, treat it the
+   same as the 2026-07-24 gate: confirm intent before including its node in
+   the eviction plan.)
 2. **Eviction headroom.** The node being migrated must fit its scheduled
-   replicas on the other four. Free scheduling capacity
-   `= (max − reserved) × 150% − scheduled`; live: 4h8 190.6 Gi,
-   k3y 130.3 Gi, 2qd 63.3 Gi, g1i 66.3 Gi, lx0 239.6 Gi. Worst case
-   (worker-01, 122 Gi scheduled) fits with room to spare, but each evicted
-   replica must land on a node not already holding a sibling — with 3
-   replicas across 5 nodes there are always exactly 2 candidates, so
-   re-check this gate live before every node, not once.
+   replicas on the other four. Free scheduling capacity per node
+   `= (max − reserved) × 150% − scheduled`; using the 2026-08-04 table:
+   4h8 226.6 Gi, k3y 120.3 Gi, 2qd 109.3 Gi, g1i 78.3 Gi, lx0 220.6 Gi. Every
+   node's own scheduled volume fits within the combined free capacity of the
+   other four, worker-04 (g1i) being the tightest single node at 78.3 Gi
+   free against its own 77.0 Gi scheduled. Each evicted replica must also
+   land on a node not already holding a sibling — with up to 3 replicas
+   across 5 nodes there are always at least 2 candidates — so re-check this
+   gate live before every node, not once.
 3. **Proxmox thin-pool space.** On the target host, confirm `local-lvm` can
    absorb the new disk's worst case (`pvesm status` / `lvs` — pve2–4 run
    tighter than pve1/5).
@@ -110,9 +132,18 @@ actual data, not disk size.
 
 ## Sequence — one worker at a time
 
-Order: **worker-02 (301) first** — 1 replica, cheapest pilot — then
-302 → 303 → 300 → 304. Never touch two workers in the same pass; wait for
-full health between nodes.
+Order: **worker-03 (302) → worker-04 (303) → worker-02 (301) → worker-01
+(300) → worker-05 (304)**. The two Vault-free workers go first so the
+procedure is proven before it touches a node holding a Vault volume's sole
+replica. Never touch two workers in the same pass; wait for full health
+between nodes.
+
+Superseded rationale: an earlier draft of this runbook ordered worker-02
+first as "1 replica, cheapest pilot." That was true against the 2026-07-24
+snapshot; by 2026-08-04 worker-02 holds 2 replicas including a Vault
+single-replica volume, so it is no longer either the cheapest or the safest
+starting point. Kept here as a reminder to re-check ordering assumptions
+against current state, not just current disk sizes.
 
 Per worker W (vmid V, node N, IP X, size S):
 
@@ -123,6 +154,17 @@ Per worker W (vmid V, node N, IP X, size S):
 3. **HUMAN** — disable scheduling on the old disk, then request eviction
    (Longhorn requires scheduling off before eviction):
    `kubectl -n longhorn-system patch nodes.longhorn.io N --type merge -p '{"spec":{"disks":{"<default-disk-key>":{"allowScheduling":false,"evictionRequested":true}}}}'`
+
+   **If N is worker-01 (300), worker-02 (301), or worker-05 (304):** this
+   node holds the sole replica of a `longhorn-single` Vault volume
+   (`numberOfReplicas: 1`). Evicting that replica normally means moving its
+   only copy while it is live, and `dataLocality: best-effort` will then try
+   to pull a fresh replica back onto whichever node the Vault pod lands on —
+   fighting the eviction. Do not evict a Vault single-replica volume this
+   way. Instead: cordon N, then delete the Vault pod pinned to N so the
+   StatefulSet reschedules it onto another node first (Raft tolerates one
+   member down); only request eviction of the old disk once the Vault pod
+   and its PVC have moved off N and `platform-vault` is back to 3/3 Ready.
 4. Wait until the old disk carries zero replicas and every volume is healthy
    again — abort criteria below if this stalls:
    `kubectl -n longhorn-system get nodes.longhorn.io N -o jsonpath='{.status.diskStatus.<default-disk-key>.scheduledReplica}'`
@@ -141,8 +183,12 @@ Per worker W (vmid V, node N, IP X, size S):
    — a new volume document applies without reboot. If talosctl reports a
    reboot is required anyway: `kubectl cordon N`, `kubectl drain N
    --ignore-daemonsets --delete-emptydir-data --timeout=5m`, reboot, wait
-   Ready, `kubectl uncordon N` — the node holds no replicas at this point,
-   so the reboot risks nothing in Longhorn.
+   Ready, `kubectl uncordon N` — the node holds no replicas at this point
+   (step 4 confirmed the old disk is empty), so the reboot risks nothing in
+   Longhorn. Note `node-drain-policy: block-if-contains-last-replica` is
+   cluster-wide: it would block this drain on any node still holding a
+   last-replica volume, which is exactly why step 3/4 must fully clear
+   replicas (Vault included) before this point is reached.
 9. Verify the volume: `talosctl -n X get volumestatus u-longhorn` (phase
    `ready`, size ≈ S — if the partition came out smaller than expected,
    stop before letting Longhorn schedule onto it),
@@ -186,6 +232,26 @@ Per worker W (vmid V, node N, IP X, size S):
   footprint (`kubectl -n longhorn-system get nodes.longhorn.io` used to be
   the measure; now compare EPHEMERAL usage via `talosctl -n X get
   volumestatus` / node exporter).
+
+## Sequencing against other Longhorn/Talos work
+
+Two other pieces of in-flight work drain and reboot the same five workers.
+Doing that once instead of three times is strictly better:
+
+- Any workers still running the Longhorn v1.11.1 engine image should
+  live-upgrade to the current engine first — detaching a volume during this
+  runbook's per-node cycle then retires the stale instance-manager/
+  engine-image pods for that node as a side effect.
+- If a Talos v1.13.x point upgrade is imminent, combine it with this
+  rollout's per-node reboot rather than draining the same node twice.
+
+Neither is a hard blocker on starting this runbook — they only change
+whether a given node's maintenance window does one job or two.
+
+This runbook does not conflict with the DIY-NAS / holistic storage
+architecture work: dedicated local disks remain correct for Longhorn's
+replicated block storage even once a NAS is online for RWX/bulk/backup
+tiers, so this migration can proceed independently.
 
 ## Follow-ups (separate changes, different repos)
 
