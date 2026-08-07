@@ -10,7 +10,8 @@ router, or any Talos machine config, so no step in it can produce a lockout.
 For the sequential checklist a human runs to execute this — exact commands
 in order, the four Definition-of-Done verification checks, and where to
 paste each one's output — see
-[tailscale-subnet-router-runbook.md](tailscale-subnet-router-runbook.md).
+[tailscale-subnet-router.md](../scenarios/tailscale-subnet-router.md) (in
+`scenarios/`, alongside this repo's other execution runbooks).
 This doc stays the reference for rationale and rollback detail; that one is
 the execution copy.
 

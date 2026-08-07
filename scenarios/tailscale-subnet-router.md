@@ -7,7 +7,7 @@ checklist — no agent has SSH, console, or network access to run any of it.
 For the *why* behind each step (why the HAProxy VM, why `--accept-dns=false`,
 why route approval is manual, the tailnet-policy auto-approver, and rebuild
 parity once `haproxy-node.tf` provisions this VM) see
-[tailscale-subnet-router.md](tailscale-subnet-router.md), which this
+[tailscale-subnet-router.md](../docs/tailscale-subnet-router.md), which this
 checklist follows exactly. Read that doc first if anything here is unclear;
 don't duplicate its rationale into ticket comments — link back to it instead.
 
@@ -19,8 +19,11 @@ don't duplicate its rationale into ticket comments — link back to it instead.
   LAN (a phone hotspot is enough), with **no** local `hosts` entry or
   `--server` override shortcutting `cluster.jdwlabs.com` — that's the device
   every verification command below runs from
-- The WAN IP to sweep in the final check (same one used in
-  [api-exposure-lockdown.md](api-exposure-lockdown.md))
+- The WAN IP to sweep in the final check (`104.53.12.62`, same one used in
+  [tailscale-subnet-router.md](../docs/tailscale-subnet-router.md))
+- If the off-LAN device is Linux, subnet routes aren't accepted by default —
+  run `sudo tailscale set --accept-routes` on it first (Windows/macOS/Android/
+  iOS accept them automatically)
 
 ## Step 1 — Install Tailscale and advertise the route
 
@@ -55,7 +58,7 @@ leaves the machine on the tailnet otherwise untouched.
 
 (Optional, for surviving reinstalls without repeating this click — the
 tailnet policy `autoApprovers` change described in
-[tailscale-subnet-router.md, Step 2](tailscale-subnet-router.md#step-2--approve-the-route-human-in-the-admin-console).)
+[tailscale-subnet-router.md, Step 2](../docs/tailscale-subnet-router.md#step-2--approve-the-route-human-in-the-admin-console).)
 
 ## Step 3 — Verify off-LAN and capture evidence
 
@@ -65,15 +68,19 @@ for the cluster. Paste each command's output as a comment on JDWLABS-284.
 
 ### 3a — Route is advertised and active
 
+Plain `tailscale status` doesn't print routes — approved routes only show up
+under `--json`:
+
 ```bash
-tailscale status
+tailscale status --json | jq '.Peer[] | select(.PrimaryRoutes) | {name: .HostName, online: .Online, routes: .PrimaryRoutes}'
 ```
 
-Expect the HAProxy VM listed, online, with `192.168.1.0/24` shown as an
-active subnet route (not just advertised).
+Expect one entry: the HAProxy VM, `online: true`, `routes` containing
+`192.168.1.0/24`. An empty result means the route isn't approved yet (back to
+Step 2) or isn't accepted on this device (see the Linux prerequisite above).
 
 ```
-paste `tailscale status` output here as a comment on JDWLABS-284
+paste the jq output here as a comment on JDWLABS-284
 ```
 
 ### 3b — kubectl reaches the cluster through the tailnet, not a hosts shortcut
@@ -88,7 +95,7 @@ kubectl get nodes
 
 Expect all 8 nodes listed, `Ready`. If `kubectl` can't resolve
 `cluster.jdwlabs.com` at all, that's DNS, not the router — see
-[lan-name-resolution.md](lan-name-resolution.md); a temporary
+[lan-name-resolution.md](../docs/lan-name-resolution.md); a temporary
 `--server https://192.168.1.199:6443` is an acceptable substitute for this
 check and doesn't need a hosts entry.
 
@@ -141,11 +148,11 @@ router, not a requirement to close this ticket — it's a distinct,
 independently reversible change to the only administrative path into the
 cluster, with its own rollback discipline.
 
-Full steps: [tailscale-subnet-router.md, Step 4](tailscale-subnet-router.md#step-4-separate-decision--arm-the-source-cidr-allowlist).
+Full steps: [tailscale-subnet-router.md, Step 4](../docs/tailscale-subnet-router.md#step-4-separate-decision--arm-the-source-cidr-allowlist).
 In short: `admin_allowed_cidrs = ["192.168.1.0/24", "100.64.0.0/10"]` in
 `terraform/terraform.tfvars`, then `talops reconcile`, rehearsed against
 `ADMIN_ALLOWED_CIDRS` and with `haproxy.cfg` copied aside first per
-[api-exposure-lockdown.md](api-exposure-lockdown.md).
+[api-exposure-lockdown.md](../docs/api-exposure-lockdown.md).
 
 ## Closing the ticket
 
