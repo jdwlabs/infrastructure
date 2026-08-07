@@ -1,7 +1,9 @@
 # RAM Expansion Decision — Three Undersized Workers (Phase 4)
 
 Status: DECISION — rebalance now, defer hardware purchase. No purchase made, no
-`terraform apply` performed or proposed by this doc.
+`terraform apply` performed or proposed by this doc. Time-boxed to market
+conditions retrieved 2026-08-07 — re-check pricing before acting if reading
+this more than a few weeks later.
 
 Scope: Phase 4 of the cluster memory-efficiency epic (JDWLABS-154), covering
 JDWLABS-304's buy-vs-rebalance question for the three smallest workers in the
@@ -34,12 +36,16 @@ worker, with **1.4–1.7G free** at the hypervisor level at the time of that
 capture. `cp-memory-resize.md`'s own Option A (CP 4G→6G / worker 6G→4G on
 these same three hosts) is a straight *reallocation* within that 13G ceiling,
 not an increase — it takes memory the worker would otherwise have and gives
-it to the CP. Whether that plan has actually been applied is itself worth
-re-verifying live (its header still reads "Status: PLANNED" at the time of
-writing); either way, there is no headroom left on these three hosts to grow
-the worker's allocatable share without either adding physical RAM or moving
-work off the node entirely. That is the buy-vs-rebalance choice this doc
-addresses.
+it to the CP. The worker-side half of that reallocation (6G→4G) has already
+happened: this doc's own live figure of 3.80 Gi worker capacity matches the
+post-Option-A 4G target, and `scenarios/pve5-worker-rebalance.md`
+(2026-07-21) independently records these three workers at 4Gi. `cp-memory-resize.md`'s
+header still reads "Status: PLANNED" — that's stale on the worker side at
+least; whether the CP side of the same reallocation has landed is the part
+still worth re-verifying live. Either way, there is no headroom left on
+these three hosts to grow the worker's allocatable share without either
+adding physical RAM or moving work off the node entirely. That is the
+buy-vs-rebalance choice this doc addresses.
 
 ## Option 1 — buy DIMMs
 
@@ -70,21 +76,31 @@ to an ongoing, AI-driven DRAM shortage: DRAM manufacturers (Samsung, SK
 Hynix, Micron) have reallocated the large majority of wafer capacity toward
 HBM for AI accelerators — HBM consumes roughly 3x the wafer capacity per bit
 of standard DRAM, and the shift has been described as a structural capacity
-decision, not a temporary bottleneck. DDR5 contract prices rose 90–95% in Q1
-2026 alone (the largest single-quarter increase on record), and multiple
-industry trackers put current retail levels at:
+decision, not a temporary bottleneck ([Wccftech][wccftech-shortage]). DDR5
+contract prices rose sharply in Q1 2026 — [Wccftech][wccftech-shortage] and
+[TechRadar Pro][techradar-ddr5] both report a single-quarter increase in the
+60–95% range depending on segment and source, without full agreement on the
+exact figure; treat "roughly doubled in one quarter" as the safe summary
+rather than either specific number. Current retail levels, per
+[Tom's Hardware's price tracker][toms-hardware-index] and
+[rampricesusa.com][rampricesusa]:
 
 - **DDR4, 16GB module**: ~$50–80 (up sharply from pre-shortage pricing)
 - **DDR4, 32GB kit (2×16GB)**: ~$150–200 new (was $50–90 as recently as
-  October 2025); reported **used/second-hand kits that sold for ~$50 in
-  2025 now go for ~$125+ in 2026** — the shortage has erased most of the
-  usual new-vs-used discount, undermining the ticket's premise that
-  second-hand sourcing is a materially cheaper path right now
+  October 2025); [rampricesusa.com][rampricesusa] and
+  [techfuelhq.com][techfuelhq] both report **used/second-hand kits that sold
+  for ~$50 in 2025 now going for ~$125+ in 2026** — the shortage has eroded
+  most of the usual new-vs-used discount, undermining the ticket's premise
+  that second-hand sourcing is a materially cheaper path right now
 - **DDR5, 32GB kit**: ~$400–550 (some listings to $650); ~$12–14/GB retail
+  ([techfuelhq.com][techfuelhq])
 
-Analysts do not expect relief soon — projections in the sources below range
-from "into 2028" to one manufacturer (SK Hynix) warning the shortage could
-persist past 2030.
+Analysts do not expect relief soon — [Wccftech][wccftech-shortage] and
+[tech-insider.org][tech-insider] both cite a multi-year outlook, with one
+manufacturer (SK Hynix) quoted as warning the shortage could persist past
+2030. Treat both the specific percentages and the recovery timeline as
+current-as-of-retrieval market commentary, not settled fact — re-check
+before acting on this doc if more than a few weeks have passed.
 
 ### Cost estimate for these 3 hosts
 
@@ -126,7 +142,9 @@ loki,kube-prometheus-stack}/values.yaml`).
    the scheduler has nowhere else to satisfy the `required` rule.
 2. **Longhorn is node-anchored, not just pod-anchored.** Every worker,
    including the three small ones, carries `workload.jdwlabs.io/worker: "true"`
-   (`tenants/platform/services/longhorn/values.yaml`), and Longhorn's own
+   (applied by this repo's shared Talos worker patch,
+   `bootstrap/internal/talos/patches/worker.yaml`; `longhorn/values.yaml` in
+   the platform repo only consumes it as a nodeSelector), and Longhorn's own
    DaemonSets run on all of them by design. More importantly, Longhorn
    replica *data* lives on whichever node holds it; moving a Longhorn-backed
    workload's pod doesn't relocate its volume — that needs a separate
@@ -138,13 +156,23 @@ loki,kube-prometheus-stack}/values.yaml`).
    names this exact gap (its gate 6) as a hard precondition before retiring
    any more of the small workers, and it was never implemented.
 4. **The broader "move to pve5, retire the small workers" strategy was
-   already evaluated and explicitly deferred.** `scenarios/pve5-worker-rebalance.md`
-   is marked **Status: DEFERRED (2026-07-21)** — "the worker-capacity problem
-   this plan targeted was resolved by right-sizing... kept as reference for
-   a future genuine worker-capacity need." Nothing found in this session
-   overturns that call: the CNPG hard-anti-affinity and missing zone labels
-   that made full retirement risky then are unchanged today. This doc does
-   **not** recommend reopening that runbook.
+   already evaluated and explicitly deferred, for a different reason than
+   the CNPG/Longhorn constraints above.** `scenarios/pve5-worker-rebalance.md`
+   is marked **Status: DEFERRED (2026-07-21)** — its own stated reason is
+   "the worker-capacity problem this plan targeted was resolved by
+   right-sizing" plus pve5 being earmarked for a future GPU/AI node, not a
+   CNPG-specific risk assessment (that runbook makes no mention of CNPG or
+   Postgres at all; its own blocking concern, gate 6, is the missing
+   `topology.kubernetes.io/zone` labels this doc also confirms are still
+   unset). This doc's own analysis above independently reaches a similar
+   "don't fully evacuate" conclusion via the CNPG anti-affinity constraint —
+   that reasoning is this doc's, not a restatement of the runbook's. Worth
+   noting in tension: that deferral's premise was "capacity problem
+   resolved," yet this doc opens with a node at 86.3% req:alloc — resolved
+   in the sense of placement headroom existing elsewhere (pve5), not in the
+   sense that no node runs hot; the two are consistent once framed as
+   placement, not aggregate capacity. This doc does **not** recommend
+   reopening that runbook.
 
 ### What *is* available: partial, soft rebalance
 
@@ -160,16 +188,26 @@ no `terraform apply`, no node retirement, and is trivially reversible. It is
 bounded by the same two constraints above — it cannot touch CNPG or move
 Longhorn-backed data — but is otherwise unclaimed headroom.
 
+One caveat for whoever files the follow-up `platform` ticket: `workload.jdwlabs.io/monitoring`
+has no source-of-truth definition in either repo — a full-repo search found
+only the 3 values.yaml consumers, no place that applies the label to the
+pve5 node itself (unlike `workload.jdwlabs.io/worker`, which the shared
+Talos patch defines). A soft `nodeAffinity` against a label nobody applies
+fails silently (schedules anywhere, no error, no event) — worth codifying
+the label's origin, or a future pve5 rebuild would silently void every
+preference that depends on it.
+
 ## Recommendation
 
 **Rebalance now (placement), defer hardware purchase — explicitly time-boxed
 to current market conditions, not a permanent verdict.**
 
-1. Do not buy DIMMs at this time. Current DDR4/DDR5 pricing runs at roughly
-   2–5x the pre-2025-shortage baseline, with no relief expected before 2028
-   at the earliest per the sources below. A ticket scoped as "cost cheap RAM
-   expansion" cannot be satisfied by buying into the worst pricing point in a
-   multi-year trend.
+1. Do not buy DIMMs at this time. Per the DDR4 kit figures in the table
+   above, current pricing runs at roughly 1.7–4x pre-shortage levels
+   ($150–200 new / $125+ used vs. a $50–90 baseline as recently as October
+   2025), with no relief expected before 2028 at the earliest per the
+   sources below. A ticket scoped as "cost cheap RAM expansion" cannot be
+   satisfied by buying into the worst pricing point in a multi-year trend.
 2. Extend the existing soft-nodeAffinity pattern (Grafana/Loki/
    kube-prometheus-stack → pve5) to the movable, non-CNPG, non-Longhorn-
    anchored workloads currently scheduled on `talos-k3y-y3e`,
@@ -204,23 +242,39 @@ to current market conditions, not a permanent verdict.**
   totals in `scenarios/cp-memory-resize.md` being consistent with
   small-form-factor consumer/business desktop hardware typical of homelab
   fleets — a plausible inference, not a confirmed fact.
-- **Whether `scenarios/cp-memory-resize.md`'s Option A has actually been
-  applied.** Its own header still reads "Status: PLANNED." If it has been
-  applied, it already reassigned worker memory to the CP on these same three
-  hosts, tightening the exact number this ticket is about — re-verify the
-  live CP/worker memory split before scoping any follow-up work.
+- **Whether `scenarios/cp-memory-resize.md`'s Option A has been applied on
+  the CP side.** The worker-side half (6G→4G) is already reflected in this
+  doc's own 3.80 Gi capacity figure and corroborated by
+  `scenarios/pve5-worker-rebalance.md`'s independent 4Gi record — that part
+  is not in question. Whether the CP side (4G→6G) landed too is still worth
+  re-verifying live; its header still reads "Status: PLANNED."
 
 ## Sources — RAM pricing (retrieved 2026-08-07)
 
-- [RAM price tracking 2026 — lowest price on DDR5 and DDR4 memory of all capacities (Tom's Hardware)](https://www.tomshardware.com/pc-components/ram/ram-price-index-2026-lowest-price-on-ddr5-and-ddr4-memory-of-all-capacities)
-- [SODIMM RAM Prices 2026: Buy Now or Wait? DDR4 Price Trends (Honeybee-Technologies)](https://honeybee-technologies.com/blogs/news/sodimm-ram-prices-2026-buy-now-wait)
-- [16GB RAM Prices 2026 | DDR4 & DDR5 16GB Module Price Tracker (rampricesusa.com)](https://rampricesusa.com/16gb-ram-prices)
-- [DDR5 RAM Prices July 2026: 32GB, 64GB & Per-GB Kit Costs (techfuelhq.com)](https://techfuelhq.com/articles/ddr5-ram-buying-guide-2025/)
-- [2026 could well be the year of the $500 32GB DDR5 memory module (TechRadar Pro)](https://www.techradar.com/pro/2026-could-well-be-the-usd500-32gb-ddr5-memory-module-experts-predict-ddr-will-go-up-by-60-percent-in-q1-2026-alone)
-- [RAM Shortage 2026 Explained: Why AI Is Causing a DDR5 Crisis & When It Ends (Wccftech)](https://wccftech.com/roundup/memory-crisis/)
-- [RAM Prices Could Double by End of 2026 as AI Consumes DRAM Faster Than It Can Be Made (abit.ee)](https://abit.ee/en/ddr-ram/ram-ddr5-dram-hbm-prices-ai-shortage-2026-en)
-- [2026 Memory Chip Shortage: SK Hynix Warns It May Last Past 2030 (tech-insider.org)](https://tech-insider.org/memory-chip-shortage-2026-ai-consumer-electronics/)
-- [The 2026 Memory Chip Shortage: Why Server RAM Prices Have Doubled and When It Ends (datacenterdisk.com)](https://datacenterdisk.com/news/memory-chip-shortage-2026-server-ram-prices)
+Independent trade-press sources, cited inline above by these labels:
+
+- [toms-hardware-index]: [RAM price tracking 2026 — lowest price on DDR5 and DDR4 memory of all capacities (Tom's Hardware)](https://www.tomshardware.com/pc-components/ram/ram-price-index-2026-lowest-price-on-ddr5-and-ddr4-memory-of-all-capacities)
+- [wccftech-shortage]: [RAM Shortage 2026 Explained: Why AI Is Causing a DDR5 Crisis & When It Ends (Wccftech)](https://wccftech.com/roundup/memory-crisis/)
+- [rampricesusa]: [16GB RAM Prices 2026 | DDR4 & DDR5 16GB Module Price Tracker (rampricesusa.com)](https://rampricesusa.com/16gb-ram-prices)
+- [techfuelhq]: [DDR5 RAM Prices July 2026: 32GB, 64GB & Per-GB Kit Costs (techfuelhq.com)](https://techfuelhq.com/articles/ddr5-ram-buying-guide-2025/)
+- [tech-insider]: [2026 Memory Chip Shortage: SK Hynix Warns It May Last Past 2030 (tech-insider.org)](https://tech-insider.org/memory-chip-shortage-2026-ai-consumer-electronics/)
+- [techradar-ddr5]: [2026 could well be the year of the $500 32GB DDR5 memory module (TechRadar Pro)](https://www.techradar.com/pro/2026-could-well-be-the-usd500-32gb-ddr5-memory-module-experts-predict-ddr-will-go-up-by-60-percent-in-q1-2026-alone)
+  — **link returned 404 on re-check at edit time**; kept only because its
+  headline figure (a 60% Q1-2026 prediction) is corroborated by Wccftech's
+  independent number in the same range. Re-verify or drop entirely before
+  trusting this doc's pricing claims beyond a few weeks from 2026-08-07.
+
+Checked and excluded from the numbers above, kept here only as a record of
+what was found and why it wasn't used:
+
+- `abit.ee` — connection timed out at both 20s and 45s during review
+  (inconclusive: possibly geo-blocked rather than dead, but unverifiable and
+  not relied on for any figure in this doc).
+- `honeybee-technologies.com` (a SODIMM retailer's own blog) and
+  `datacenterdisk.com` — low-authority or directly conflicted (a memory
+  vendor answering "buy now or wait?" is not an independent source);
+  excluded rather than cited, even though both were in the original search
+  results.
 
 ## Related
 
