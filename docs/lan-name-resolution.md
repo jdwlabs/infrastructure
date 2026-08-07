@@ -134,6 +134,14 @@ actually being queried. Confirm with `nslookup cluster.jdwlabs.com
 resolver argument on a client that only has the DHCP-assigned server, and
 compare the two answers.
 
+Distributed via DHCP, option 2 also becomes the resolver for every name for
+every LAN client, not just `cluster.jdwlabs.com` — a materially bigger new
+failure domain than "if it's down, `kubectl` was already down." If it goes
+down, all LAN clients lose all DNS. Mitigate by handing out `192.168.1.254`
+as the secondary DNS server in the same DHCP option (client failover is slow
+and inconsistent, so this is a mitigation, not a fix), or by scoping the
+resolver to admin machines only via static config instead of DHCP.
+
 **3. Tailscale MagicDNS.** Once a subnet router is on the tailnet (see
 [tailscale-subnet-router.md](tailscale-subnet-router.md)), a split-DNS entry in
 the tailnet policy can serve `cluster.jdwlabs.com` to tailnet members. This is
@@ -141,10 +149,19 @@ the only option that also fixes the name **off**-LAN, which neither of the
 others touch. It covers only devices on the tailnet, so it complements option 1
 or 2 rather than replacing them.
 
+A tailnet member sitting on the LAN then has two authorities for
+`cluster.jdwlabs.com` (MagicDNS and whichever of option 1/2 is live) that can
+disagree, and a device that roams off-LAN with a cached LAN answer can fail
+silently until the cache clears. Separately, any client with DNS-over-HTTPS
+enabled bypasses the LAN resolver entirely under option 2 — the same
+gateway-proxying failure mode above, but client-side and just as invisible to
+a single-machine checklist run.
+
 **Recommended: option 1 now, option 3 alongside the subnet router, and option 2
-only if the gateway turns out to be able to advertise a custom DNS server.**
-Standing up a resolver that clients cannot be pointed at automatically buys
-nothing over the `hosts` line it replaces.
+only if the gateway turns out to be able to advertise a custom DNS server, and
+only after confirming both catches above.** Standing up a resolver that
+clients cannot be pointed at automatically buys nothing over the `hosts` line
+it replaces.
 
 ## Order of work
 
@@ -168,8 +185,9 @@ covers them.
 ## Verification checklist
 
 Run once whichever option is implemented and serving `cluster.jdwlabs.com` on
-the LAN. All three checks are commands from a real client, not queries against
-a resolver in isolation — a resolver that answers when asked directly but
+the LAN. Each check either runs against a real client or, for the two public/
+WAN checks, queries an external resolver or the WAN address directly — a
+resolver that answers when asked directly but
 isn't actually in the client's path proves nothing here.
 
 - [ ] `nslookup cluster.jdwlabs.com` **from a LAN client** (not the workstation
@@ -183,10 +201,21 @@ isn't actually in the client's path proves nothing here.
       machine that has never had a `cluster.jdwlabs.com` hosts entry. This is
       the check that actually matters: it proves a machine with no manual
       override reaches the apiserver, which is the whole point of the ticket.
-- [ ] `curl -k --resolve cluster.jdwlabs.com:6443:104.53.12.62
-      https://cluster.jdwlabs.com:6443/version` still reaches the public
-      WAN address, proving the LAN override is scoped to the LAN and hasn't
-      altered public resolution or ingress in the process.
+- [ ] `nslookup cluster.jdwlabs.com 8.8.8.8` (or `dig @1.1.1.1
+      cluster.jdwlabs.com`) returns `104.53.12.62`, proving public resolution
+      is unchanged. `--resolve` below pins the address in curl's own cache and
+      consults no resolver at all, so it cannot stand in for this check.
+- [ ] `curl -o /dev/null -w "%{http_code} remote=%{remote_ip}" --resolve
+      alertmanager.jdwlabs.com:443:104.53.12.62
+      https://alertmanager.jdwlabs.com/` returns `200 remote=104.53.12.62`,
+      proving the WAN path and ingress still serve the site. Use port `443`,
+      not `6443` — the Kubernetes apiserver's WAN forward was deliberately
+      removed (see above), so a `6443` check against the WAN address always
+      returns `000` and can never pass.
+- [ ] Re-run the `nslookup`/`kubectl get nodes` checks above from the original
+      workstation **after** removing its `cluster.jdwlabs.com` hosts entry
+      (Order of work step 4) — the pre-removal state on that machine cannot
+      distinguish a working resolver from its own `hosts` file.
 
 Do these from a machine that never held the override, in the order above, and
 only after the resolver is live — re-running them from the original
