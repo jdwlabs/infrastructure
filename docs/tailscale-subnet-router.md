@@ -7,6 +7,13 @@ Nothing here is applied automatically. Every step is manual and lists its own
 rollback. The whole procedure is additive — it does not touch the API path, the
 router, or any Talos machine config, so no step in it can produce a lockout.
 
+For the sequential checklist a human runs to execute this — exact commands
+in order, the four Definition-of-Done verification checks, and where to
+paste each one's output — see
+[tailscale-subnet-router-runbook.md](tailscale-subnet-router-runbook.md).
+This doc stays the reference for rationale and rollback detail; that one is
+the execution copy.
+
 ## Why a subnet router, and why on the HAProxy VM
 
 The public forwards for `6443` and `50000` were removed deliberately. Re-adding
