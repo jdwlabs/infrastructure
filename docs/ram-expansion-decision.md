@@ -76,31 +76,36 @@ to an ongoing, AI-driven DRAM shortage: DRAM manufacturers (Samsung, SK
 Hynix, Micron) have reallocated the large majority of wafer capacity toward
 HBM for AI accelerators — HBM consumes roughly 3x the wafer capacity per bit
 of standard DRAM, and the shift has been described as a structural capacity
-decision, not a temporary bottleneck ([Wccftech][wccftech-shortage]). DDR5
-contract prices rose sharply in Q1 2026 — [Wccftech][wccftech-shortage] and
-[TechRadar Pro][techradar-ddr5] both report a single-quarter increase in the
-60–95% range depending on segment and source, without full agreement on the
-exact figure; treat "roughly doubled in one quarter" as the safe summary
-rather than either specific number. Current retail levels, per
-[Tom's Hardware's price tracker][toms-hardware-index] and
-[rampricesusa.com][rampricesusa]:
+decision, not a temporary bottleneck ([Wccftech](https://wccftech.com/roundup/memory-crisis/)).
+DDR5 contract prices rose sharply in Q1 2026 —
+[Wccftech](https://wccftech.com/roundup/memory-crisis/) and
+[TechRadar Pro](https://www.techradar.com/pro/2026-could-well-be-the-usd500-32gb-ddr5-memory-module-experts-predict-ddr-will-go-up-by-60-percent-in-q1-2026-alone)
+both report a single-quarter increase in the 60–95% range depending on
+segment and source, without full agreement on the exact figure; treat
+"roughly doubled in one quarter" as the safe summary rather than either
+specific number. Current retail levels, per
+[Tom's Hardware's price tracker](https://www.tomshardware.com/pc-components/ram/ram-price-index-2026-lowest-price-on-ddr5-and-ddr4-memory-of-all-capacities)
+and [rampricesusa.com](https://rampricesusa.com/16gb-ram-prices):
 
 - **DDR4, 16GB module**: ~$50–80 (up sharply from pre-shortage pricing)
 - **DDR4, 32GB kit (2×16GB)**: ~$150–200 new (was $50–90 as recently as
-  October 2025); [rampricesusa.com][rampricesusa] and
-  [techfuelhq.com][techfuelhq] both report **used/second-hand kits that sold
-  for ~$50 in 2025 now going for ~$125+ in 2026** — the shortage has eroded
-  most of the usual new-vs-used discount, undermining the ticket's premise
-  that second-hand sourcing is a materially cheaper path right now
+  October 2025); [rampricesusa.com](https://rampricesusa.com/16gb-ram-prices)
+  and [techfuelhq.com](https://techfuelhq.com/articles/ddr5-ram-buying-guide-2025/)
+  both report **used/second-hand kits that sold for ~$50 in 2025 now going
+  for ~$125+ in 2026** — the shortage has eroded most of the usual
+  new-vs-used discount, undermining the ticket's premise that second-hand
+  sourcing is a materially cheaper path right now
 - **DDR5, 32GB kit**: ~$400–550 (some listings to $650); ~$12–14/GB retail
-  ([techfuelhq.com][techfuelhq])
+  ([techfuelhq.com](https://techfuelhq.com/articles/ddr5-ram-buying-guide-2025/))
 
-Analysts do not expect relief soon — [Wccftech][wccftech-shortage] and
-[tech-insider.org][tech-insider] both cite a multi-year outlook, with one
-manufacturer (SK Hynix) quoted as warning the shortage could persist past
-2030. Treat both the specific percentages and the recovery timeline as
-current-as-of-retrieval market commentary, not settled fact — re-check
-before acting on this doc if more than a few weeks have passed.
+Analysts do not expect relief soon —
+[Wccftech](https://wccftech.com/roundup/memory-crisis/) and
+[tech-insider.org](https://tech-insider.org/memory-chip-shortage-2026-ai-consumer-electronics/)
+both cite a multi-year outlook, with one manufacturer (SK Hynix) quoted as
+warning the shortage could persist past 2030. Treat both the specific
+percentages and the recovery timeline as current-as-of-retrieval market
+commentary, not settled fact — re-check before acting on this doc if more
+than a few weeks have passed.
 
 ### Cost estimate for these 3 hosts
 
@@ -251,14 +256,14 @@ to current market conditions, not a permanent verdict.**
 
 ## Sources — RAM pricing (retrieved 2026-08-07)
 
-Independent trade-press sources, cited inline above by these labels:
+Independent trade-press sources, cited inline above:
 
-- [toms-hardware-index]: [RAM price tracking 2026 — lowest price on DDR5 and DDR4 memory of all capacities (Tom's Hardware)](https://www.tomshardware.com/pc-components/ram/ram-price-index-2026-lowest-price-on-ddr5-and-ddr4-memory-of-all-capacities)
-- [wccftech-shortage]: [RAM Shortage 2026 Explained: Why AI Is Causing a DDR5 Crisis & When It Ends (Wccftech)](https://wccftech.com/roundup/memory-crisis/)
-- [rampricesusa]: [16GB RAM Prices 2026 | DDR4 & DDR5 16GB Module Price Tracker (rampricesusa.com)](https://rampricesusa.com/16gb-ram-prices)
-- [techfuelhq]: [DDR5 RAM Prices July 2026: 32GB, 64GB & Per-GB Kit Costs (techfuelhq.com)](https://techfuelhq.com/articles/ddr5-ram-buying-guide-2025/)
-- [tech-insider]: [2026 Memory Chip Shortage: SK Hynix Warns It May Last Past 2030 (tech-insider.org)](https://tech-insider.org/memory-chip-shortage-2026-ai-consumer-electronics/)
-- [techradar-ddr5]: [2026 could well be the year of the $500 32GB DDR5 memory module (TechRadar Pro)](https://www.techradar.com/pro/2026-could-well-be-the-usd500-32gb-ddr5-memory-module-experts-predict-ddr-will-go-up-by-60-percent-in-q1-2026-alone)
+- [RAM price tracking 2026 — lowest price on DDR5 and DDR4 memory of all capacities (Tom's Hardware)](https://www.tomshardware.com/pc-components/ram/ram-price-index-2026-lowest-price-on-ddr5-and-ddr4-memory-of-all-capacities)
+- [RAM Shortage 2026 Explained: Why AI Is Causing a DDR5 Crisis & When It Ends (Wccftech)](https://wccftech.com/roundup/memory-crisis/)
+- [16GB RAM Prices 2026 | DDR4 & DDR5 16GB Module Price Tracker (rampricesusa.com)](https://rampricesusa.com/16gb-ram-prices)
+- [DDR5 RAM Prices July 2026: 32GB, 64GB & Per-GB Kit Costs (techfuelhq.com)](https://techfuelhq.com/articles/ddr5-ram-buying-guide-2025/)
+- [2026 Memory Chip Shortage: SK Hynix Warns It May Last Past 2030 (tech-insider.org)](https://tech-insider.org/memory-chip-shortage-2026-ai-consumer-electronics/)
+- [2026 could well be the year of the $500 32GB DDR5 memory module (TechRadar Pro)](https://www.techradar.com/pro/2026-could-well-be-the-usd500-32gb-ddr5-memory-module-experts-predict-ddr-will-go-up-by-60-percent-in-q1-2026-alone)
   — **link returned 404 on re-check at edit time**; kept only because its
   headline figure (a 60% Q1-2026 prediction) is corroborated by Wccftech's
   independent number in the same range. Re-verify or drop entirely before
