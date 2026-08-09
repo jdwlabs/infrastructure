@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/logging"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed patches/control-plane.yaml
@@ -205,6 +207,58 @@ func baseConfigFileName(role types.Role) (string, error) {
 	}
 }
 
+// baseConfigVersions is the subset of a talosctl-generated base config that
+// carries the version pins Generate needs to compare against cfg. Both
+// fields are populated by every role (control-plane and worker), unlike
+// cluster.apiServer/controllerManager/proxy/scheduler which talosctl only
+// emits uncommented for control planes.
+type baseConfigVersions struct {
+	Machine struct {
+		Kubelet struct {
+			Image string `yaml:"image"`
+		} `yaml:"kubelet"`
+		Install struct {
+			Image string `yaml:"image"`
+		} `yaml:"install"`
+	} `yaml:"machine"`
+}
+
+// imageTag returns the tag portion of an image reference (text after the
+// last colon), or "" if the reference carries no tag.
+func imageTag(image string) string {
+	idx := strings.LastIndex(image, ":")
+	if idx == -1 {
+		return ""
+	}
+	return image[idx+1:]
+}
+
+// baseConfigStale reports whether an existing base config was generated
+// against different kubernetes/talos version pins than cfg currently holds.
+// talosctl writes the --kubernetes-version and --install-image flags
+// verbatim into machine.kubelet.image (as the image tag) and
+// machine.install.image, so comparing those against cfg's current pins
+// detects drift without re-invoking talosctl.
+func (nc *NodeConfig) baseConfigStale(baseConfig string) (bool, error) {
+	data, err := os.ReadFile(baseConfig)
+	if err != nil {
+		return false, fmt.Errorf("read base config: %w", err)
+	}
+
+	var versions baseConfigVersions
+	if err := yaml.Unmarshal(data, &versions); err != nil {
+		return false, fmt.Errorf("parse base config %s: %w", baseConfig, err)
+	}
+
+	if kubeletTag := imageTag(versions.Machine.Kubelet.Image); kubeletTag != "" && kubeletTag != nc.cfg.KubernetesVersion {
+		return true, nil
+	}
+	if installImage := versions.Machine.Install.Image; installImage != "" && installImage != nc.cfg.InstallerImage {
+		return true, nil
+	}
+	return false, nil
+}
+
 // renderRolePatch resolves the role patch template through the override chain
 // and renders it with this node's template data.
 func (nc *NodeConfig) renderRolePatch(spec *types.NodeSpec) ([]byte, error) {
@@ -287,9 +341,22 @@ func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, 
 		return "", err
 	}
 
-	// Ensure base configs exists
+	// Ensure base configs exist and match the current version pins - a base
+	// config left over from before a kubernetes/talos version bump would
+	// otherwise have every node patch applied on top of its stale kube-*
+	// image tags with no error or warning.
 	baseConfig := filepath.Join(nc.cfg.SecretsDir, baseConfigName)
+	regenerate := false
 	if _, err := os.Stat(baseConfig); os.IsNotExist(err) {
+		regenerate = true
+	} else if err != nil {
+		return "", fmt.Errorf("stat base config: %w", err)
+	} else if stale, err := nc.baseConfigStale(baseConfig); err != nil {
+		return "", fmt.Errorf("check base config version: %w", err)
+	} else {
+		regenerate = stale
+	}
+	if regenerate {
 		if err := nc.GenerateBaseConfigs(); err != nil {
 			return "", fmt.Errorf("cannot generate base configs: %w", err)
 		}

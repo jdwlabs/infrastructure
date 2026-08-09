@@ -138,6 +138,123 @@ func TestNodeConfigGenerate_Worker(t *testing.T) {
 	assert.NotContains(t, contentStr, "allowSchedulingOnControlPlanes")
 }
 
+func TestImageTag(t *testing.T) {
+	assert.Equal(t, "v1.36.3", imageTag("registry.k8s.io/kube-apiserver:v1.36.3"))
+	assert.Equal(t, "v1.36.3", imageTag("ghcr.io/siderolabs/kubelet:v1.36.3"))
+	assert.Equal(t, "", imageTag("registry.k8s.io/kube-apiserver"))
+}
+
+func TestNodeConfigBaseConfigStale(t *testing.T) {
+	// Mirrors the subset of a talosctl-generated base config Generate reads:
+	// machine.kubelet.image carries the kubernetes version as its tag,
+	// machine.install.image is written verbatim from --install-image.
+	fixture := func(kubernetesVersion, installerImage string) string {
+		return fmt.Sprintf(
+			"machine:\n  kubelet:\n    image: ghcr.io/siderolabs/kubelet:%s\n  install:\n    image: %s\n",
+			kubernetesVersion, installerImage,
+		)
+	}
+
+	t.Run("matches current pins", func(t *testing.T) {
+		cfg := types.TestConfig()
+		nc := NewNodeConfig(cfg)
+
+		baseConfig := filepath.Join(t.TempDir(), "control-plane.yaml")
+		require.NoError(t, os.WriteFile(baseConfig, []byte(fixture(cfg.KubernetesVersion, cfg.InstallerImage)), 0600))
+
+		stale, err := nc.baseConfigStale(baseConfig)
+		require.NoError(t, err)
+		assert.False(t, stale)
+	})
+
+	t.Run("kubernetes version bump against an existing base config", func(t *testing.T) {
+		cfg := types.TestConfig()
+		nc := NewNodeConfig(cfg)
+
+		baseConfig := filepath.Join(t.TempDir(), "control-plane.yaml")
+		require.NoError(t, os.WriteFile(baseConfig, []byte(fixture("v1.35.1", cfg.InstallerImage)), 0600))
+
+		cfg.KubernetesVersion = "v1.36.3"
+		stale, err := nc.baseConfigStale(baseConfig)
+		require.NoError(t, err)
+		assert.True(t, stale, "kubernetes version drift against the existing base config should be detected")
+	})
+
+	t.Run("talos/install image bump against an existing base config", func(t *testing.T) {
+		cfg := types.TestConfig()
+		nc := NewNodeConfig(cfg)
+
+		baseConfig := filepath.Join(t.TempDir(), "control-plane.yaml")
+		require.NoError(t, os.WriteFile(baseConfig, []byte(fixture(cfg.KubernetesVersion, "factory.talos.dev/nocloud-installer/test:v1.12.3")), 0600))
+
+		cfg.InstallerImage = "factory.talos.dev/nocloud-installer/test:v1.13.0"
+		stale, err := nc.baseConfigStale(baseConfig)
+		require.NoError(t, err)
+		assert.True(t, stale, "installer image drift against the existing base config should be detected")
+	})
+
+	t.Run("unreadable base config errors", func(t *testing.T) {
+		cfg := types.TestConfig()
+		nc := NewNodeConfig(cfg)
+
+		_, err := nc.baseConfigStale(filepath.Join(t.TempDir(), "missing.yaml"))
+		require.Error(t, err)
+	})
+}
+
+// TestNodeConfigGenerate_RegeneratesOnVersionBump reproduces JDWLABS-321 end
+// to end: a base config already on disk from a prior run, then a version
+// bump with no base config deletion in between (the exact reconcile flow -
+// generate once, bump terraform.tfvars, reconcile again). Before the fix,
+// Generate() only regenerated base configs when the file was missing, so the
+// second call silently kept applying patches on the stale base.
+func TestNodeConfigGenerate_RegeneratesOnVersionBump(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping talosctl-dependent test on Windows - patch paths use Unix conventions")
+	}
+	if os.Getenv("SKIP_TALOSCTL") != "" {
+		t.Skip("Skipping talosctl-dependent test")
+	}
+
+	cfg := types.TestConfig()
+	cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+	nc := NewNodeConfig(cfg)
+
+	spec := &types.NodeSpec{
+		VMID: 201,
+		Name: "talos-cp-1",
+		Role: types.RoleControlPlane,
+	}
+	tmpDir := t.TempDir()
+
+	_, err := nc.Generate(spec, tmpDir)
+	if err != nil {
+		t.Skipf("talosctl not available or base configs missing: %v", err)
+	}
+
+	baseConfigPath := filepath.Join(cfg.SecretsDir, "control-plane.yaml")
+	before, err := os.ReadFile(baseConfigPath)
+	require.NoError(t, err)
+	require.Contains(t, string(before), fmt.Sprintf("kubelet:%s", cfg.KubernetesVersion))
+
+	// Bump the version pin the way a real terraform.tfvars edit would, with
+	// the base configs from the prior run still on disk.
+	cfg.KubernetesVersion = "v1.36.3"
+
+	nodeOutputPath := filepath.Join(tmpDir, "node-control-plane-201.yaml")
+	_, err = nc.Generate(spec, tmpDir)
+	require.NoError(t, err)
+
+	after, err := os.ReadFile(baseConfigPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(after), "kubelet:v1.36.3", "base config should be regenerated with the bumped kubernetes version")
+	assert.NotContains(t, string(after), fmt.Sprintf("kubelet:%s", "v1.35.1"))
+
+	nodeConfig, err := os.ReadFile(nodeOutputPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(nodeConfig), "kube-apiserver:v1.36.3", "regenerated node config should carry the bumped kubernetes version")
+}
+
 func TestNodeConfigGenerate_UnknownRole(t *testing.T) {
 	cfg := types.TestConfig()
 	nc := NewNodeConfig(cfg)
