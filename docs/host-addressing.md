@@ -35,23 +35,27 @@ independently against the certificate each Proxmox host serves on `:8006`.
 | pve2 | 192.168.1.201 | DHCP lease, no reservation | `84:47:09:63:06:4e` |
 | pve3 | 192.168.1.202 | DHCP lease, no reservation | `84:47:09:63:61:31` |
 | pve4 | 192.168.1.203 | DHCP lease, no reservation | `84:47:09:62:ff:cd` |
-| pve5 | 192.168.1.169 | `inet static` on the host | `bc:fc:e7:ea:23:de` |
+| pve5 | 192.168.1.204 | DHCP lease with a gateway-side Fixed Allocation | `bc:fc:e7:ea:23:de` |
 
 The gateway, DHCP server and DNS server are all `192.168.1.254` — an AT&T
 BGW320-500, identified from the vendor option in pve1's lease. Lease time is
 86400s, so a DHCP-held address is only guaranteed for a day at a time.
 
-**Both shapes above are unpinned, for different reasons.**
+**pve5's addressing changed since this document was first written.** It was
+originally `inet static` on the host at `192.168.1.169`, inside the DHCP pool
+— a duplicate-address collision waiting to happen, and it happened: a 2026-08-06
+IP collision took down pmxcfs and cascaded into a full 5-node corosync quorum
+outage. Recovery moved pve5 off host-static entirely and onto plain
+`iface vmbr0 inet dhcp` (confirmed live via SSH — `/etc/network/interfaces` has
+no static block), with a gateway-side Fixed Allocation now pinning it to
+`.204`. `.169` is dead: it accepts no connection on `22` or `8006`.
 
-pve1-pve4 hold their addresses purely at the gateway's discretion. Nothing
-stops a renewal landing somewhere else.
-
-pve5 is static on the host, which survives reboots — but `192.168.1.169` sits
-**inside the DHCP pool**. Static-on-host tells the host what to use; it does not
-tell the gateway to stop handing that address to anything else. The pool has
-already issued `.169` once: reconciler logs from an earlier run show it leased
-to a Talos worker VM. A static host inside the pool is a duplicate-address
-collision waiting for the right lease.
+**All five hosts are now DHCP-held, and only pve5 has a gateway reservation.**
+pve1-pve4 hold their addresses purely at the gateway's discretion — nothing
+stops a renewal landing somewhere else. pve5 has the fixed allocation this
+document's own Decision section (below) recommends extending to the other
+four; it just arrived at that state via an outage rather than the planned
+route.
 
 The pool is observed to span roughly `.64`-`.253` — the BGW320-500 default, and
 consistent with every address the reconciler has ever seen a VM receive. The
@@ -74,7 +78,7 @@ DHCP clients under `attlocal.net`. Verified against that resolver directly:
 | `pve2.attlocal.net` | 192.168.1.201 | `pve2.attlocal.net` |
 | `pve3.attlocal.net` | 192.168.1.202 | `pve3.attlocal.net` |
 | `pve4.attlocal.net` | 192.168.1.203 | `pve4.attlocal.net` |
-| `pve5.attlocal.net` | 192.168.1.169 **and 192.168.1.204** | `.169` → `pve5.attlocal.net`, `.204` → `pve5` |
+| `pve5.attlocal.net` | 192.168.1.204 **and 192.168.1.169** | `.204` → `pve5.attlocal.net`, `.169` → `pve5` |
 
 The records only exist on that resolver. A client pointed at a public resolver
 gets `NXDOMAIN`, so this is a LAN-only path — which is the correct scope for a
@@ -99,22 +103,25 @@ permanent warning that the address cannot.
 
 Those embedded addresses are also evidence in their own right. pve1-pve4 carry
 `.233`, `.222`, `.221` and `.223` — addresses none of them holds now. The
-certificates were minted when the hosts were there. **These four have already
-moved at least once under DHCP**; the risk described above is not hypothetical.
-pve5's certificate carries `192.168.1.169`, matching where it sits today,
-because it was reissued when the host was made static.
+certificates were minted when the hosts were there. **All five hosts have now
+moved at least once under DHCP**; the risk described above is not hypothetical
+for any of them. pve5's certificate still carries `192.168.1.169` (verified
+live, `openssl s_client` against `.204:8006`) — the address it held under its
+old host-static config, from before the 2026-08-06 outage moved it onto plain
+DHCP. Unlike pve1-pve4, the cert has not been reissued since, so it now
+mismatches pve5's live address the same way theirs do.
 
 ### pve5's name is currently broken
 
-`pve5.attlocal.net` resolves to two addresses. `192.168.1.204` accepts no
-connection on `22` or `8006` — it is a leftover record from pve5's DHCP era that
-the gateway never retired. Clients that fall through to the second address
-recover after a connect timeout; clients that try only the first fail outright.
-Either way the name is unreliable in a way the address is not, which is the one
-place where preferring the name is currently the wrong advice.
+`pve5.attlocal.net` resolves to two addresses. `192.168.1.169` accepts no
+connection on `22` or `8006` — it is a leftover record from before the outage
+that the gateway never retired. Clients that fall through to the second
+address recover after a connect timeout; clients that try only the first fail
+outright. Either way the name is unreliable in a way the address is not, which
+is the one place where preferring the name is currently the wrong advice.
 
 Clearing it is part of the same gateway visit as the reservations below: the
-stale lease has to be released there. Until then, prefer `192.168.1.169` for
+stale lease has to be released there. Until then, prefer `192.168.1.204` for
 pve5 specifically, and the name for the other four.
 
 ### Why the repository still uses addresses
@@ -132,25 +139,24 @@ correct once they are.
 
 ## Decision
 
-**Create DHCP reservations at the gateway for all five hosts, keyed by MAC,
-pinning each to the address it holds today. Leave pve5's static configuration in
-place, and reserve `.169` to match it.**
+**Create DHCP reservations at the gateway for pve1-pve4, keyed by MAC, pinning
+each to the address it holds today. pve5 already has one, at `.204`, put in
+place during the 2026-08-06 outage recovery — extend the same treatment to the
+remaining four rather than inventing a different mechanism for them.**
 
 Reservations are what actually pins an address, because they act on the
-component that hands addresses out. Host-static config is a statement of intent
-that the gateway never sees.
+component that hands addresses out. This is also, incidentally, what pve5's
+outage recovery already proved: the previous approach — host-static config
+inside the DHCP pool — is what caused that outage in the first place. A
+reservation avoids repeating it, because it acts on the gateway rather than
+asserting an intent the gateway never sees.
 
-Keeping pve5 static *and* reserved is deliberate rather than redundant: the
-static config keeps pve5 addressable if the gateway is rebuilt or its
-reservation table is lost, and the reservation stops the pool leasing `.169` out
-from under it. They must agree — a reservation for a different address than the
-host's static config produces a host the gateway believes is somewhere it is
-not.
-
-Reservations were chosen over converting pve1-pve4 to host-static because the
-addresses in question are inside the pool. Making four more hosts static inside
-the pool would spread pve5's collision exposure to the whole cluster while
-looking like a fix.
+Reservations were chosen over host-static configuration for pve1-pve4 for the
+same reason pve5 was moved off it: the addresses in question are inside the
+pool, and host-static config there doesn't stop the pool leasing the same
+address to something else — it just makes the eventual collision worse,
+because the host insists on an address the gateway may have already handed
+elsewhere.
 
 ### The alternative, and why it is not the first move
 
@@ -176,10 +182,11 @@ with console access available, not as a same-sitting change.
 There is no API, no Terraform resource and no `talops` path to it.
 
 On the BGW320-500 admin interface, under the LAN IP allocation settings, bind
-each MAC in the table above to the address listed beside it. All five, including
-pve5.
+each MAC in the table above to the address listed beside it, for pve1-pve4.
+pve5 already has its reservation from the 2026-08-06 recovery — confirm it is
+still present rather than recreating it.
 
-While there, release the stale `192.168.1.204` lease so the gateway stops
+While there, release the stale `192.168.1.169` lease so the gateway stops
 publishing it as a second address for `pve5.attlocal.net`. A reservation alone
 does not retract a record the gateway already holds.
 
@@ -187,7 +194,7 @@ Verify afterwards, from any host that can reach the LAN:
 
 ```bash
 for h in pve1:192.168.1.200 pve2:192.168.1.201 pve3:192.168.1.202 \
-         pve4:192.168.1.203 pve5:192.168.1.169; do
+         pve4:192.168.1.203 pve5:192.168.1.204; do
   name=${h%%:*}; ip=${h##*:}
   echo | openssl s_client -connect "$ip":8006 2>/dev/null \
     | openssl x509 -noout -subject | grep -q "CN=$name" \
@@ -200,7 +207,7 @@ the check that matters — it proves the address maps to the host the repo think
 it does, which a ping cannot.
 
 Then confirm each name resolves to exactly one address, which is what proves the
-stale `.204` record is gone:
+stale `.169` record is gone:
 
 ```bash
 for n in pve1 pve2 pve3 pve4 pve5; do
