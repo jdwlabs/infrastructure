@@ -34,16 +34,14 @@ either (a) use the primary key from the same disk, which doesn't test
 anything, or (b) fail at the Vault-unseal step with no backup to recover.
 
 **Do not run this drill until both `JDWLABS-66` and `JDWLABS-305` are
-closed.** `JDWLABS-136`'s Jira "blocked by" links currently only list
-`JDWLABS-132/133/135` (all Done) — that link set is stale relative to the
-dependency `JDWLABS-305` itself declares in prose. Whoever picks up this
-ticket should add `JDWLABS-66` and `JDWLABS-305` as formal blockers so the
-board reflects reality.
+closed.**
 
 ## Why a real clean machine
 
 This drill cannot be meaningfully executed from a machine that already has
-cluster access, an existing `~/.config/sops/age/keys.txt`, or a populated
+cluster access, an existing SOPS age key (`~/.config/sops/age/keys.txt` on
+Linux/macOS, `%APPDATA%\sops\age\keys.txt` on Windows — check both; the
+primary workstation this was drafted on is Windows), or a populated
 `~/.kube/config` / `~/.talos/`. The entire point is to prove recovery from
 *zero* prior state using only: the break-glass age key, the git remotes, and
 whatever a human can retrieve from wherever the break-glass key and any
@@ -69,31 +67,42 @@ duration and a per-step timestamp in the results log (template below).
    tenant-level secrets are in scope). No special access needed; both are
    plain `git clone` of public-to-org repos.
 2. **Install prerequisites** — `sops`, `age`, `talosctl`, `kubectl`,
-   `terraform`, `talops` (build from `infrastructure/bootstrap/` or fetch a
-   release, per `infrastructure/AGENTS.md`).
+   `terraform`, `talops`. Build `talops` from source (`cd bootstrap && make
+   build`, per `infrastructure/README.md`) rather than a prebuilt release —
+   the latest tagged release lags HEAD by roughly 2.5 months, and a stale
+   binary matters here if it carries outdated patch templates.
 3. **Install the break-glass age key** — retrieve the private key from its
    offline store (per the relocated location `JDWLABS-305` establishes) and
-   place it at `~/.config/sops/age/keys.txt` (or set `SOPS_AGE_KEY_FILE`).
-   This is the one step that intentionally uses material the primary
-   workstation does not hold.
+   place it at `~/.config/sops/age/keys.txt` (`%APPDATA%\sops\age\keys.txt`
+   on Windows), or set `SOPS_AGE_KEY_FILE`. This is the one step that
+   intentionally uses material the primary workstation does not hold.
+   Before proceeding, derive the public key from the installed private key
+   (`age-keygen -y <path>`) and confirm it equals
+   `age1ucm8z6jwu0cxk757whhjxvqnv9nf6egfaeltjc8ulxf9f8clpcnqggjv55` — the
+   recorded break-glass recipient in `.sops.yaml` — and that no primary
+   device key is also present on this machine. Skipping this check means a
+   later successful decrypt proves nothing about which key actually did the
+   work.
 4. **Hydrate the Talos secrets vault** — from `infrastructure/`, run
    `talops secrets hydrate` (or `talops secrets status` first to confirm the
    break-glass key is recognized as a valid recipient). Confirm
    `clusters/core/secrets/secrets.yaml` and `clusters/core/secrets/talosconfig`
    materialize.
-5. **Verify Talos access** — `talosctl --talosconfig clusters/core/secrets/talosconfig health`
-   against the cluster's real endpoint (see `infrastructure/docs/host-addressing.md`
-   for node IPs — this doc is plaintext/non-secret).
+5. **Verify Talos access** — `talosctl --talosconfig clusters/core/secrets/talosconfig health`.
+   No separate node-IP lookup is needed: the hydrated `talosconfig` already
+   carries the cluster's real endpoint and node addresses, baked in by
+   `talops` at generation time.
 6. **Regenerate/merge kubeconfig** — `talosctl kubeconfig` using the
    hydrated `talosconfig`; confirm `kubectl get nodes` returns Ready nodes
    for all control-plane and worker nodes.
 7. **Recover Vault unseal material** — decrypt
-   `clusters/core/vault/vault-unseal.enc.yaml` per the restore procedure in
-   `scenarios/vault-unseal-backup.md` §Restore, using the break-glass key.
-   Confirm the recovered root token authenticates against the live Vault and
-   the unseal key matches Vault's current seal status
-   (`vault status` — read-only, via `platformctl` per `platform/AGENTS.md`'s
-   binary contract, not raw `vault`).
+   `clusters/core/vault/vault-unseal.enc.yaml` using the break-glass key, per
+   `scenarios/vault-unseal-backup.md` §Restore **step 1 only (decrypt)** —
+   the rest of that section performs live mutations (`kubectl apply`,
+   `vault operator unseal`) that are out of scope for this read-only drill.
+   Confirm the recovered root token and unseal key are well-formed and match
+   Vault's current seal status, checked read-only:
+   `kubectl -n vault exec platform-vault-0 -- vault status`.
 8. **Verify Terraform state access** — decrypt
    `terraform/backend-credentials.enc.yaml`, export the MinIO credentials,
    run `terraform init` / `terraform plan` (plan only — never `apply` from
@@ -120,16 +129,9 @@ Fill in during the actual drill run — this table is empty until then.
 | 8. Verify Terraform state access | | | | |
 | **Total duration** | | | | |
 
-Every gap found gets its own ticket (per `JDWLABS-136`'s DoD) rather than a
-note buried in this table — the table is for triage, not the permanent
-record.
+Every gap found gets its own ticket rather than a note buried in this
+table — the table is for triage, not the permanent record.
 
-## Definition of done (from JDWLABS-136)
-
-- [ ] `kubectl get nodes` + `talosctl health` + Vault unseal succeed from a
-      genuinely clean machine, primary workstation untouched throughout
-- [ ] Drill duration and every gap found are documented and ticketed
-
-Neither can be checked off by this document. This runbook only removes the
-"what do I actually do" ambiguity for whoever runs the drill once
-`JDWLABS-66` and `JDWLABS-305` close.
+This runbook only removes the "what do I actually do" ambiguity for
+whoever runs the drill once `JDWLABS-66` and `JDWLABS-305` close; it
+cannot itself prove clean-machine recoverability until someone does.
