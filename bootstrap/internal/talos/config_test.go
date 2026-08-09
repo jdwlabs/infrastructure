@@ -193,6 +193,21 @@ func TestNodeConfigBaseConfigStale(t *testing.T) {
 		assert.True(t, stale, "installer image drift against the existing base config should be detected")
 	})
 
+	t.Run("truncated base config missing a version field is treated as stale, not fresh", func(t *testing.T) {
+		cfg := types.TestConfig()
+		nc := NewNodeConfig(cfg)
+
+		baseConfig := filepath.Join(t.TempDir(), "control-plane.yaml")
+		// GenerateBaseConfigs writes non-atomically, so an interrupted run can
+		// leave a file like this behind - present and parseable YAML, but cut
+		// off before machine.install.image landed.
+		require.NoError(t, os.WriteFile(baseConfig, []byte("machine:\n  kubelet:\n    image: ghcr.io/siderolabs/kubelet:"+cfg.KubernetesVersion+"\n"), 0600))
+
+		stale, err := nc.baseConfigStale(baseConfig)
+		require.NoError(t, err)
+		assert.True(t, stale, "a base config that can't be trusted must not be treated as current")
+	})
+
 	t.Run("unreadable base config errors", func(t *testing.T) {
 		cfg := types.TestConfig()
 		nc := NewNodeConfig(cfg)
@@ -202,12 +217,15 @@ func TestNodeConfigBaseConfigStale(t *testing.T) {
 	})
 }
 
-// TestNodeConfigGenerate_RegeneratesOnVersionBump reproduces JDWLABS-321 end
+// TestNodeConfigGenerate_RegeneratesOnVersionBump exercises Generate() end
 // to end: a base config already on disk from a prior run, then a version
-// bump with no base config deletion in between (the exact reconcile flow -
-// generate once, bump terraform.tfvars, reconcile again). Before the fix,
-// Generate() only regenerated base configs when the file was missing, so the
-// second call silently kept applying patches on the stale base.
+// bump with no base config deletion in between. Before the fix, Generate()
+// only regenerated base configs when the file was missing, so a second call
+// silently kept applying patches on the stale base. This complements the
+// hash-level coverage in TestNodeConfigTemplateHash, which is what actually
+// gates whether Generate() gets called during a reconcile in the first
+// place - a version bump has to change TemplateHash's output on its own for
+// that gate to fire, or Generate() (and this regeneration) is never reached.
 func TestNodeConfigGenerate_RegeneratesOnVersionBump(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Skipping talosctl-dependent test on Windows - patch paths use Unix conventions")
@@ -734,6 +752,26 @@ func TestNodeConfigTemplateHash(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotEqual(t, before, after)
+	})
+
+	t.Run("changes when a version pin changes, even with no base config on disk yet", func(t *testing.T) {
+		cfg := types.TestConfig()
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
+		nc := NewNodeConfig(cfg)
+
+		before, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+
+		cfg.KubernetesVersion = "v1.99.0"
+		afterK8s, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+		assert.NotEqual(t, before, afterK8s, "kubernetes_version bump must change the hash on its own")
+
+		cfg.KubernetesVersion = types.TestConfig().KubernetesVersion
+		cfg.TalosVersion = "v1.99.0"
+		afterTalos, err := nc.TemplateHash(newSpec(types.RoleControlPlane))
+		require.NoError(t, err)
+		assert.NotEqual(t, before, afterTalos, "talos_version bump must change the hash on its own")
 	})
 
 	t.Run("changes when per-node patch appears or changes", func(t *testing.T) {
