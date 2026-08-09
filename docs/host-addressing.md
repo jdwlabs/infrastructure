@@ -35,7 +35,7 @@ independently against the certificate each Proxmox host serves on `:8006`.
 | pve2 | 192.168.1.201 | DHCP lease, no reservation | `84:47:09:63:06:4e` |
 | pve3 | 192.168.1.202 | DHCP lease, no reservation | `84:47:09:63:61:31` |
 | pve4 | 192.168.1.203 | DHCP lease, no reservation | `84:47:09:62:ff:cd` |
-| pve5 | 192.168.1.204 | DHCP lease with a gateway-side Fixed Allocation | `bc:fc:e7:ea:23:de` |
+| pve5 | 192.168.1.204 | DHCP lease; Fixed Allocation set during 2026-08-06 recovery (gateway-side, unverifiable from the host) | `bc:fc:e7:ea:23:de` |
 
 The gateway, DHCP server and DNS server are all `192.168.1.254` — an AT&T
 BGW320-500, identified from the vendor option in pve1's lease. Lease time is
@@ -78,7 +78,7 @@ DHCP clients under `attlocal.net`. Verified against that resolver directly:
 | `pve2.attlocal.net` | 192.168.1.201 | `pve2.attlocal.net` |
 | `pve3.attlocal.net` | 192.168.1.202 | `pve3.attlocal.net` |
 | `pve4.attlocal.net` | 192.168.1.203 | `pve4.attlocal.net` |
-| `pve5.attlocal.net` | 192.168.1.204 **and 192.168.1.169** | `.204` → `pve5.attlocal.net`, `.169` → `pve5` |
+| `pve5.attlocal.net` | 192.168.1.204 **and 192.168.1.169**, round-robin | both → `pve5` / `pve5.attlocal.net` |
 
 The records only exist on that resolver. A client pointed at a public resolver
 gets `NXDOMAIN`, so this is a LAN-only path — which is the correct scope for a
