@@ -97,6 +97,7 @@ Generate one extra age key, store its **private** half offline (password manager
 token), and keep it as a permanent recipient. If every device key is lost, the vault is
 otherwise unrecoverable.
 
+<<<<<<< HEAD
 "Offline" means the private key file does not persist on the same disk as any device that
 holds a primary recipient key — a copy sitting in another directory of the same workstation's
 drive is not offline, it's just a second copy that a single disk failure, ransomware event, or
