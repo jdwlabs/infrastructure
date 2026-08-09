@@ -97,6 +97,30 @@ Generate one extra age key, store its **private** half offline (password manager
 token), and keep it as a permanent recipient. If every device key is lost, the vault is
 otherwise unrecoverable.
 
+"Offline" means the private key file does not persist on the same disk as any device that
+holds a primary recipient key — a copy sitting in another directory of the same workstation's
+drive is not offline, it's just a second copy that a single disk failure, ransomware event, or
+device theft destroys along with the primary. Acceptable homes: a password manager entry,
+a hardware security token, a printed/paper backup in a physical safe, or a second device that
+is not itself a routine operator workstation.
+
+**Relocating an already-generated recovery key** (no need to re-key the vault — the public
+recipient in `.sops.yaml` doesn't change):
+
+1. Move the private key file to its offline destination (password manager attachment, hardware
+   token import, printed copy in a safe, or a second physically separate device).
+2. Delete the plaintext copy from this workstation's disk once the offline copy is confirmed
+   readable. Confirm with a listing (`ls`/`Test-Path`), not by opening the file, and check for
+   OS trash/recycle-bin and editor swap/backup copies left behind by whatever moved it.
+3. Dry-run the recovery path from an environment that does **not** have the primary device key:
+   point `SOPS_AGE_KEY_FILE` at the relocated key only and decrypt a committed `.enc.yaml`:
+   ```bash
+   SOPS_AGE_KEY_FILE=/path/to/relocated/recovery.key sops -d clusters/<name>/vault/talosconfig.enc.yaml >/dev/null
+   ```
+   A clean exit confirms the offline copy is usable without the primary key on that machine.
+4. Once relocation and the dry-run are both confirmed, update this section and the `.sops.yaml`
+   recipient comment to stop describing the offline location as aspirational.
+
 ## Terraform remote state backend credentials
 
 Terraform state lives in an S3-compatible MinIO bucket on the TrueNAS host
