@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
@@ -165,6 +166,19 @@ func TestNodeConfigBaseConfigStale(t *testing.T) {
 		stale, err := nc.baseConfigStale(baseConfig)
 		require.NoError(t, err)
 		assert.False(t, stale)
+	})
+
+	t.Run("unprefixed kubernetes_version pin matches its v-prefixed image tag", func(t *testing.T) {
+		cfg := types.TestConfig()
+		nc := NewNodeConfig(cfg)
+
+		baseConfig := filepath.Join(t.TempDir(), "control-plane.yaml")
+		require.NoError(t, os.WriteFile(baseConfig, []byte(fixture(cfg.KubernetesVersion, cfg.InstallerImage)), 0600))
+
+		cfg.KubernetesVersion = strings.TrimPrefix(cfg.KubernetesVersion, "v")
+		stale, err := nc.baseConfigStale(baseConfig)
+		require.NoError(t, err)
+		assert.False(t, stale, "a pin missing the v prefix must not read as permanently stale")
 	})
 
 	t.Run("kubernetes version bump against an existing base config", func(t *testing.T) {

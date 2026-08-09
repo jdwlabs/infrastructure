@@ -234,11 +234,18 @@ func imageTag(image string) string {
 }
 
 // baseConfigStale reports whether an existing base config was generated
-// against different kubernetes/talos version pins than cfg currently holds.
+// against different kubernetes/install-image pins than cfg currently holds.
 // talosctl writes the --kubernetes-version and --install-image flags
 // verbatim into machine.kubelet.image (as the image tag) and
 // machine.install.image, so comparing those against cfg's current pins
 // detects drift without re-invoking talosctl.
+//
+// This does not independently detect a talos_version-only bump: talos_version
+// has no comparable verbatim field in the rendered base config, only
+// installer_image does, and in this repo's tfvars the two are always bumped
+// together (installer_image embeds the talos version as its tag). A
+// talos_version bump with installer_image left unchanged would pass this
+// check undetected.
 func (nc *NodeConfig) baseConfigStale(baseConfig string) (bool, error) {
 	data, err := os.ReadFile(baseConfig)
 	if err != nil {
@@ -250,6 +257,11 @@ func (nc *NodeConfig) baseConfigStale(baseConfig string) (bool, error) {
 		return false, fmt.Errorf("parse base config %s: %w", baseConfig, err)
 	}
 
+	// talosctl normalizes an unprefixed version pin (e.g. "1.36.3") to "v1.36.3"
+	// in the rendered image tag - compare normalized on both sides so a pin
+	// missing the "v" doesn't latch this permanently stale.
+	normalizeVersion := func(v string) string { return "v" + strings.TrimPrefix(v, "v") }
+
 	kubeletTag := imageTag(versions.Machine.Kubelet.Image)
 	installImage := versions.Machine.Install.Image
 	if kubeletTag == "" || installImage == "" {
@@ -258,7 +270,7 @@ func (nc *NodeConfig) baseConfigStale(baseConfig string) (bool, error) {
 		// can leave a short file behind that would otherwise read as fresh.
 		return true, nil
 	}
-	if kubeletTag != nc.cfg.KubernetesVersion {
+	if kubeletTag != normalizeVersion(nc.cfg.KubernetesVersion) {
 		return true, nil
 	}
 	if installImage != nc.cfg.InstallerImage {
