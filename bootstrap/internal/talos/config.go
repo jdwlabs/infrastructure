@@ -250,10 +250,18 @@ func (nc *NodeConfig) baseConfigStale(baseConfig string) (bool, error) {
 		return false, fmt.Errorf("parse base config %s: %w", baseConfig, err)
 	}
 
-	if kubeletTag := imageTag(versions.Machine.Kubelet.Image); kubeletTag != "" && kubeletTag != nc.cfg.KubernetesVersion {
+	kubeletTag := imageTag(versions.Machine.Kubelet.Image)
+	installImage := versions.Machine.Install.Image
+	if kubeletTag == "" || installImage == "" {
+		// A base config missing either field can't be trusted either way -
+		// GenerateBaseConfigs writes non-atomically, so an interrupted run
+		// can leave a short file behind that would otherwise read as fresh.
 		return true, nil
 	}
-	if installImage := versions.Machine.Install.Image; installImage != "" && installImage != nc.cfg.InstallerImage {
+	if kubeletTag != nc.cfg.KubernetesVersion {
+		return true, nil
+	}
+	if installImage != nc.cfg.InstallerImage {
 		return true, nil
 	}
 	return false, nil
@@ -289,7 +297,13 @@ func (nc *NodeConfig) renderRolePatch(spec *types.NodeSpec) ([]byte, error) {
 
 // TemplateHash computes a SHA256 over the inputs that determine a node's
 // rendered config: the role patch template rendered with this node's data,
-// the optional per-node patch, and the base config the patches apply to.
+// the optional per-node patch, the base config the patches apply to, and
+// cfg's own version pins. The version pins are hashed directly from cfg
+// rather than left to show up only once the base config is regenerated -
+// a version bump must change this hash on its own, otherwise the reconcile
+// gate that calls this (comparing it against the last-recorded hash) sees
+// no difference, skips the node, and Generate - along with its base-config
+// staleness check - is never invoked at all.
 // A change in any input means the node YAML on disk is stale and must be
 // regenerated. Missing per-node patch and base config hash as empty sections,
 // so the hash stays comparable across those states.
@@ -321,8 +335,10 @@ func (nc *NodeConfig) TemplateHash(spec *types.NodeSpec) (string, error) {
 		baseConfig = nil
 	}
 
+	versionPins := []byte(nc.cfg.KubernetesVersion + "\x00" + nc.cfg.TalosVersion + "\x00" + nc.cfg.InstallerImage)
+
 	h := sha256.New()
-	for _, section := range [][]byte{rendered, nodePatch, baseConfig} {
+	for _, section := range [][]byte{rendered, nodePatch, baseConfig, versionPins} {
 		// Length-prefix each section so boundaries stay unambiguous
 		var lenBuf [8]byte
 		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(section)))
