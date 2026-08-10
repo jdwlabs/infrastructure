@@ -31,11 +31,11 @@ independently against the certificate each Proxmox host serves on `:8006`.
 
 | Host | Address | How it is held | vmbr0 MAC |
 | --- | --- | --- | --- |
-| pve1 | 192.168.1.200 | DHCP lease, no reservation | `84:47:09:35:75:1f` |
-| pve2 | 192.168.1.201 | DHCP lease, no reservation | `84:47:09:63:06:4e` |
-| pve3 | 192.168.1.202 | DHCP lease, no reservation | `84:47:09:63:61:31` |
-| pve4 | 192.168.1.203 | DHCP lease, no reservation | `84:47:09:62:ff:cd` |
-| pve5 | 192.168.1.204 | DHCP lease; Fixed Allocation set during 2026-08-06 recovery (gateway-side, unverifiable from the host) | `bc:fc:e7:ea:23:de` |
+| pve1 | 192.168.1.200 | Fixed Allocation (confirmed live on the gateway UI 2026-08-09) | `84:47:09:35:75:1f` |
+| pve2 | 192.168.1.201 | Fixed Allocation (confirmed live on the gateway UI 2026-08-09) | `84:47:09:63:06:4e` |
+| pve3 | 192.168.1.202 | Fixed Allocation (confirmed live on the gateway UI 2026-08-09) | `84:47:09:63:61:31` |
+| pve4 | 192.168.1.203 | Fixed Allocation (confirmed live on the gateway UI 2026-08-09) | `84:47:09:62:ff:cd` |
+| pve5 | 192.168.1.204 | Fixed Allocation, set during 2026-08-06 recovery, confirmed live on the gateway UI 2026-08-09 | `bc:fc:e7:ea:23:de` |
 
 The gateway, DHCP server and DNS server are all `192.168.1.254` — an AT&T
 BGW320-500, identified from the vendor option in pve1's lease. Lease time is
@@ -50,12 +50,23 @@ outage. Recovery moved pve5 off host-static entirely and onto plain
 no static block), with a gateway-side Fixed Allocation now pinning it to
 `.204`. `.169` is dead: it accepts no connection on `22` or `8006`.
 
-**All five hosts are now DHCP-held, and only pve5 has a gateway reservation.**
-pve1-pve4 hold their addresses purely at the gateway's discretion — nothing
-stops a renewal landing somewhere else. pve5 has the fixed allocation this
-document's own Decision section (below) recommends extending to the other
-four; it just arrived at that state via an outage rather than the planned
-route.
+**Correction (2026-08-09): all five hosts already have gateway Fixed
+Allocation reservations, not just pve5.** This document originally claimed
+pve1-pve4 held their addresses at the gateway's discretion with no
+reservation — checked live against the gateway's IP Allocation page and that
+was stale; all five show `Fixed Allocation`. The Decision section below (its
+core recommendation — reservations over host-static config) was already
+carried out at some point after this document was written; it just never got
+updated here. Nothing left to do on this front.
+
+What's still live: `pve5.attlocal.net` round-robins between `.204` and the
+dead `.169` at the gateway's DNS layer, and — separately, more seriously —
+pve1/pve2's Proxmox cluster filesystem (pmxcfs) still has `.169` cached as
+pve5's address, breaking inter-node API proxying to pve5. Neither is fixable
+from the gateway's IP Allocation or Device List UI (no stale-lease entry
+exists in either table to remove). The DNS symptom has a workaround
+(`/etc/hosts` pins on pve1-pve4); the pmxcfs one is the real blocker and has
+its own runbook: `scenarios/pve-stale-node-ip-corosync.md`.
 
 The pool is observed to span roughly `.64`-`.253` — the BGW320-500 default, and
 consistent with every address the reconciler has ever seen a VM receive. The
@@ -139,8 +150,9 @@ correct once they are.
 
 ## Decision
 
-**Create DHCP reservations at the gateway for pve1-pve4, keyed by MAC, pinning
-each to the address it holds today. pve5 already has one, at `.204`, put in
+**(Done — see "The human step" below.) Create DHCP reservations at the
+gateway for pve1-pve4, keyed by MAC, pinning each to the address it holds
+today. pve5 already has one, at `.204`, put in
 place during the 2026-08-06 outage recovery — extend the same treatment to the
 remaining four rather than inventing a different mechanism for them.**
 
@@ -177,18 +189,18 @@ with console access available, not as a same-sitting change.
 
 ## The human step
 
-**Creating the reservations is a manual change on the gateway at
-`192.168.1.254`, and it is the only part of this an agent cannot perform.**
-There is no API, no Terraform resource and no `talops` path to it.
+**Done as of 2026-08-09** — all five hosts confirmed with Fixed Allocation on
+the gateway's IP Allocation page (`192.168.1.254`). No further reservation
+work needed here.
 
-On the BGW320-500 admin interface, under the LAN IP allocation settings, bind
-each MAC in the table above to the address listed beside it, for pve1-pve4.
-pve5 already has its reservation from the 2026-08-06 recovery — confirm it is
-still present rather than recreating it.
-
-While there, release the stale `192.168.1.169` lease so the gateway stops
-publishing it as a second address for `pve5.attlocal.net`. A reservation alone
-does not retract a record the gateway already holds.
+The stale `192.168.1.169` record was checked for on both the IP Allocation
+page and the Device List / LAN Host Discovery page — it exists on **neither**.
+There's no UI-exposed lease or discovery entry to release; the round-robin
+DNS answer is coming from somewhere inside the gateway's DNS layer that this
+consumer UI doesn't expose. Worked around via `/etc/hosts` pins on pve1-pve4
+(`192.168.1.204 pve5.attlocal.net pve5`) rather than chased further at the
+gateway — see `scenarios/pve-stale-node-ip-corosync.md` for why that
+workaround alone didn't fix the more serious pmxcfs-level staleness.
 
 Verify afterwards, from any host that can reach the LAN:
 
