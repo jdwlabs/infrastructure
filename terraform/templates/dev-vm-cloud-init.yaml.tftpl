@@ -1,0 +1,30 @@
+#cloud-config
+# Day-0 only, per docs/dev-vm-provisioning.md §5.2: OS/user/base-package
+# bootstrap. The full dev toolchain (Docker, Node/pnpm, gh, Claude Code,
+# kubectl/talosctl, sops/age) is a documented manual post-boot sequence
+# (§5.3), not committed automation — this is a personal daily-driver box,
+# not reproducible cluster infrastructure.
+hostname: ${hostname}
+fqdn: ${hostname}
+preserve_hostname: false
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - git
+  - build-essential
+  - ca-certificates
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent

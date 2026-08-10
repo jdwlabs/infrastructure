@@ -271,3 +271,89 @@ variable "haproxy_snippet_datastore" {
   type        = string
   default     = "local"
 }
+
+# DEV VM (pve1 — daily-driver dev box, see docs/dev-vm-provisioning.md)
+# Flat vars, not a list: single VM, no HA requirement (unlike haproxy_vms).
+variable "dev_vm_node" {
+  description = "Proxmox node hosting the dev VM. No control plane there, same class as the GPU and HAProxy VMs."
+  type        = string
+  default     = "pve1"
+}
+
+variable "dev_vm_name" {
+  description = "Hostname of the dev VM."
+  type        = string
+  default     = "devbox"
+}
+
+variable "dev_vm_id" {
+  description = "Proxmox VMID for the dev VM. Next free after haproxy's 110."
+  type        = number
+  default     = 111
+}
+
+variable "dev_vm_cores" {
+  description = "vCPU cores for the dev VM. Sized for IDE + Nx/pnpm builds + Docker + multiple concurrent agent sessions, not light editing."
+  type        = number
+  default     = 8
+}
+
+variable "dev_vm_memory" {
+  description = "Dedicated memory (MiB) for the dev VM."
+  type        = number
+  default     = 32768
+}
+
+variable "dev_vm_disk_size" {
+  description = "Root disk size (GiB), on the NFS-backed datastore so the VM can live-migrate."
+  type        = number
+  default     = 300
+}
+
+variable "dev_vm_ip" {
+  description = "Static LAN IP for the dev VM (CIDR). Below the DHCP pool floor (.64), adjacent to haproxy's .55 and the GPU VM's .50."
+  type        = string
+  default     = "192.168.1.56/24"
+}
+
+variable "dev_vm_gateway" {
+  description = "Default gateway for the dev VM. The LAN gateway is .254, not .1."
+  type        = string
+  default     = "192.168.1.254"
+}
+
+variable "dev_vm_user" {
+  description = "Cloud-init admin user on the dev VM."
+  type        = string
+  default     = "dev-admin"
+}
+
+variable "dev_vm_ssh_public_key" {
+  description = "SSH public key granted to the dev VM cloud-init admin user."
+  type        = string
+  default     = null
+}
+
+variable "dev_vm_storage_pool" {
+  description = "Datastore for the dev VM's root disk. Must be the NFS-backed datastore from docs/dev-vm-provisioning.md §4, not local/local-lvm — that's what makes online migration between Proxmox hosts possible. A Phase 0 human prerequisite, not provisioned by this Terraform."
+  type        = string
+  default     = "nfs-nas"
+}
+
+variable "dev_vm_cloud_image_url" {
+  description = "Ubuntu cloud image used as the dev VM root disk."
+  type        = string
+  default     = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+}
+
+variable "dev_vm_image_datastore" {
+  description = "Datastore holding the imported cloud image. Needs the 'import' content type."
+  type        = string
+  default     = "local"
+}
+
+variable "dev_vm_snippet_datastore" {
+  description = "Datastore holding the cloud-init user-data snippet. Needs the 'snippets' content type, which an LVM-thin pool cannot provide."
+  type        = string
+  default     = "local"
+}
