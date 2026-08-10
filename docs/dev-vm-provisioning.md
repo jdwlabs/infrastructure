@@ -50,17 +50,22 @@ box.
 
 ## 4. Storage & mobility — decision
 
-**Add the existing TrueNAS NAS (`192.168.1.205`, 35TB RAIDZ2 — already serving
-k8s RWX PVCs) as an NFS storage backend in Proxmox's datacenter config, and
-put this VM's disk on it.** With the disk on shared storage reachable from
-every pve host, moving the VM is `qm migrate <vmid> <target-node> --online`
-(or the Proxmox UI) — only VM RAM state transfers, since the disk doesn't
-move. Seconds of downtime.
+**Put this VM's disk on `truenas-vmdisks`, the TrueNAS-backed NFS storage
+that already exists cluster-wide.** With the disk on shared storage reachable
+from every pve host, moving the VM is `qm migrate <vmid> <target-node>
+--online` (or the Proxmox UI) — only VM RAM state transfers, since the disk
+doesn't move. Seconds of downtime.
 
-This is a Proxmox-level config change (`pvesm add nfs ...` or the Datacenter
-UI), not a Terraform resource — the `bpg/proxmox` provider manages VMs and
-files on existing storage, not the storage backends themselves. It is a
-one-time human prerequisite, done once for the whole cluster.
+**Correction (2026-08-09):** this section originally proposed adding a new
+NFS storage backend as a Phase 0 human prerequisite (`pvesm add nfs ...`).
+Live Proxmox API verification during Phase 0 execution found that work
+already done: `truenas-vmdisks` (dataset `storage/proxmox`, content
+`iso,images,vztmpl`) is active on every node, `shared: true`, currently
+empty. It's already documented in `docs/ARCHITECTURE.md` §"Tier 2 — TrueNAS
+NFS", separate from the `truenas-nfs` k8s PVC tier (`storage/k8s/vols`) and
+`truenas-backup` (`storage/backup`, covers §6). This VM is simply the first
+thing to use it. Nothing left to provision here — §8 Phase 0's storage item
+is done, not outstanding.
 
 ### Alternatives considered
 
@@ -91,8 +96,8 @@ dev_vm_disk_size        = 300     # 300GB, on the new NFS datastore
 dev_vm_ip               = "192.168.1.56/24"
 dev_vm_gateway          = "192.168.1.254"
 dev_vm_user             = "dev-admin"
-dev_vm_ssh_public_key   = "ssh-ed25519 AAAA..."   # same key already used for gpu/haproxy
-dev_vm_storage_pool     = "nfs-nas"               # new Proxmox storage id from §4
+dev_vm_ssh_public_key   = "ssh-ed25519 AAAA..."   # same key already used for the GPU VM
+dev_vm_storage_pool     = "truenas-vmdisks"       # existing cluster-wide NFS storage, see §4
 ```
 
 Placement: **pve5**, not pve1 as originally planned. Phase 0's pre-flight
@@ -184,8 +189,8 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
-| 0 | Human: NFS storage backend added to Proxmox (§4); node capacity check; `.56`/vmid `111` confirmed free | `pvesm status` shows the new datastore on every node; ARP scan clean — **capacity check done 2026-08-09: pve1 ruled out (28.2GiB total, ~5.5GiB free), pve5 selected (~42GiB free); vmid `111` and `.56` confirmed unclaimed**; NFS storage backend still outstanding |
-| 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | `terraform plan` clean; human `terraform apply` |
+| 0 | Node capacity check; `.56`/vmid `111` confirmed free; NFS storage backend | **Done 2026-08-09**: pve1 ruled out (28.2GiB total, ~5.5GiB free), pve5 selected (~42GiB free); vmid `111` and `.56` confirmed unclaimed; `truenas-vmdisks` NFS storage already existed cluster-wide (§4 correction) — no new backend needed |
+| 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | Done: `terraform validate`/`fmt` clean, `dev_vm_ssh_public_key` in vault. `terraform plan` clean; human `terraform apply` still pending |
 | 2 | Cloud-init verified (SSH reachable, guest agent running) | `qm agent 111 ping` OK |
 | 3 | Bootstrap script run (§5.3): tooling installed | `docker`, `gh`, `claude`, `kubectl`, `talosctl`, `sops` all resolve |
 | 4 | Credential/dotfile sync from Windows | age hydrate works on VM; `gh auth status` OK |
@@ -194,12 +199,19 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 
 ## 9. Open questions
 
-1. **Exact NFS export path/options on TrueNAS** — reuse the existing RWX PVC
-   export or a new dedicated one for Proxmox VM images? Deferred to Phase 0
-   execution; either works, a dedicated export keeps VM-image traffic
-   separate from k8s PVC traffic for easier troubleshooting.
+1. ~~Exact NFS export path/options on TrueNAS~~ — **resolved 2026-08-09**:
+   `truenas-vmdisks` (dataset `storage/proxmox`) already exists as a
+   dedicated export, separate from the k8s PVC tier (`storage/k8s/vols`).
+   No action needed; see §4.
 2. **Target migration test host** — with the VM now living on pve5 (§5.1),
    the Phase 6 round-trip needs a different target. pve1 is the only other
    non-CP host but currently has no headroom (§5.1); this needs pve1 freed
    up (e.g. relocating `minecraft-server`) or a fresh capacity check before
    Phase 6, not locked here.
+3. **pve1's API proxy to pve5 returns "no route to host"** — found while
+   verifying pve5's storage during Phase 0 (querying `pve5` through pve1's
+   API works for cluster-wide/cached data but a live per-node proxy call
+   failed; querying pve5's own API directly at `192.168.1.204:8006` worked
+   fine). Unclear if transient or a standing issue with pve1↔pve5
+   connectivity specifically — worth checking before relying on pve1 as the
+   API entry point for pve5-targeted operations (e.g. `talops`, migration).

@@ -335,9 +335,9 @@ variable "dev_vm_ssh_public_key" {
 }
 
 variable "dev_vm_storage_pool" {
-  description = "Datastore for the dev VM's root disk. Must be the NFS-backed datastore from docs/dev-vm-provisioning.md §4, not local/local-lvm — that's what makes online migration between Proxmox hosts possible. A Phase 0 human prerequisite, not provisioned by this Terraform."
+  description = "Datastore for the dev VM's root disk. `truenas-vmdisks` (NFS, cluster-wide, backed by TrueNAS storage/proxmox) already exists — verified live via the Proxmox API on 2026-08-09, active on every node, currently empty. Not local/local-lvm — that's what makes online migration between Proxmox hosts possible."
   type        = string
-  default     = "nfs-nas"
+  default     = "truenas-vmdisks"
 }
 
 variable "dev_vm_cloud_image_url" {
