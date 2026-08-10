@@ -82,7 +82,7 @@ one-time human prerequisite, done once for the whole cluster.
 Flat vars (single VM — not a list; this box has no HA requirement):
 
 ```hcl
-dev_vm_node             = "pve1"
+dev_vm_node             = "pve5"
 dev_vm_name             = "devbox"
 dev_vm_id               = 111
 dev_vm_cores            = 8
@@ -95,10 +95,18 @@ dev_vm_ssh_public_key   = "ssh-ed25519 AAAA..."   # same key already used for gp
 dev_vm_storage_pool     = "nfs-nas"               # new Proxmox storage id from §4
 ```
 
-Placement: **pve1**. No control plane there; already hosts `talos-worker-01`
-(vmid 300) and the planned `haproxy-1` (vmid 110, `.55`) — consistent
-placement class, no new precedent. **Pre-flight**: confirm pve1 has headroom
-for +8c/32GB/300GB before `apply` (not assumed from this document alone).
+Placement: **pve5**, not pve1 as originally planned. Phase 0's pre-flight
+(2026-08-09, live Proxmox API query) found pve1 has only **28.2GiB total
+RAM**, with `minecraft-server` (4GB), `haproxy-1` (1GB), and
+`talos-worker-01` (16GB) already running — ~21GiB allocated, ~5.5GiB free.
+An 8c/32GB VM cannot fit there at all, regardless of what else is idle.
+pve2/pve3/pve4 are excluded per requirement #4 (control plane) and are
+undersized anyway (~12.6GiB each). **pve5** is the only remaining
+non-control-plane host: 123.5GiB total, ~42GiB free at check time — enough
+for this VM with headroom, though it already carries the GPU inference VM
+and is a live K8s worker, so it is not as idle a box as pve1 was assumed to
+be. **Pre-flight before `apply`**: re-check pve5's free memory, since it
+carries live cluster workload that can shift.
 
 Identity: vmid `111` (next free after haproxy's `110`), IP `192.168.1.56/24`
 — adjacent to haproxy's `.55`, in the same below-`.64` reserved block as the
@@ -176,13 +184,13 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
-| 0 | Human: NFS storage backend added to Proxmox (§4); pve1 capacity check; `.56`/vmid `111` confirmed free | `pvesm status` shows the new datastore on every node; ARP scan clean |
+| 0 | Human: NFS storage backend added to Proxmox (§4); node capacity check; `.56`/vmid `111` confirmed free | `pvesm status` shows the new datastore on every node; ARP scan clean — **capacity check done 2026-08-09: pve1 ruled out (28.2GiB total, ~5.5GiB free), pve5 selected (~42GiB free); vmid `111` and `.56` confirmed unclaimed**; NFS storage backend still outstanding |
 | 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | `terraform plan` clean; human `terraform apply` |
 | 2 | Cloud-init verified (SSH reachable, guest agent running) | `qm agent 111 ping` OK |
 | 3 | Bootstrap script run (§5.3): tooling installed | `docker`, `gh`, `claude`, `kubectl`, `talosctl`, `sops` all resolve |
 | 4 | Credential/dotfile sync from Windows | age hydrate works on VM; `gh auth status` OK |
 | 5 | Backup job configured (§6) | first `vzdump` run completes, visible on NAS |
-| 6 | Migration proven | `qm migrate 111 pve5 --online` and back; downtime measured; runbook written (`scenarios/dev-vm-migrate.md`) |
+| 6 | Migration proven | `qm migrate 111 <target> --online` and back; downtime measured; runbook written (`scenarios/dev-vm-migrate.md`) — target host TBD, see open question 2 |
 
 ## 9. Open questions
 
@@ -190,5 +198,8 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
    export or a new dedicated one for Proxmox VM images? Deferred to Phase 0
    execution; either works, a dedicated export keeps VM-image traffic
    separate from k8s PVC traffic for easier troubleshooting.
-2. **Target migration test host** — pve5 assumed in §8 (has headroom, already
-   proven as a non-CP host); confirm at Phase 6 rather than locking it here.
+2. **Target migration test host** — with the VM now living on pve5 (§5.1),
+   the Phase 6 round-trip needs a different target. pve1 is the only other
+   non-CP host but currently has no headroom (§5.1); this needs pve1 freed
+   up (e.g. relocating `minecraft-server`) or a fresh capacity check before
+   Phase 6, not locked here.

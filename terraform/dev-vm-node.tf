@@ -1,4 +1,4 @@
-# Daily-driver dev VM on pve1 — SSH + VS Code Remote-SSH target for git/build/
+# Daily-driver dev VM on pve5 — SSH + VS Code Remote-SSH target for git/build/
 # Claude Code sessions, off the Windows workstation. See
 # docs/dev-vm-provisioning.md for the full design and phase plan. Disk lives
 # on the NFS-backed datastore (var.dev_vm_storage_pool), not local/local-lvm,
