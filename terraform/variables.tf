@@ -272,12 +272,12 @@ variable "haproxy_snippet_datastore" {
   default     = "local"
 }
 
-# DEV VM (pve1 — daily-driver dev box, see docs/dev-vm-provisioning.md)
+# DEV VM (pve5 — daily-driver dev box, see docs/dev-vm-provisioning.md)
 # Flat vars, not a list: single VM, no HA requirement (unlike haproxy_vms).
 variable "dev_vm_node" {
-  description = "Proxmox node hosting the dev VM. No control plane there, same class as the GPU and HAProxy VMs."
+  description = "Proxmox node hosting the dev VM. Not pve1: Phase 0 capacity check (2026-08-09) found pve1 has only 28.2GiB total RAM with ~21GiB already allocated to running guests — an 8c/32GB VM cannot fit. pve5 is the only non-control-plane host with room (123.5GiB total, ~42GiB free at check time)."
   type        = string
-  default     = "pve1"
+  default     = "pve5"
 }
 
 variable "dev_vm_name" {
