@@ -1,7 +1,8 @@
 # Dev VM Provisioning — Design
 
 Status: **applied, Phases 0-5 done.** `terraform/dev-vm-node.tf` is live
-(vmid `111` on pve5, `192.168.1.56`); only Phase 6 (migration proof) remains.
+(vmid `111` on pve5, `192.168.1.56`); Phase 6 (migration proof) is documented
+but blocked on cluster capacity — see §8 and `scenarios/dev-vm-migrate.md`.
 
 A dedicated, always-on Proxmox VM to be the full daily-driver dev environment
 for jdwlabs work — SSH + VS Code Remote-SSH from the Windows workstation,
@@ -195,7 +196,7 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 | 3 | Bootstrap script run (§5.3): tooling installed | **Done 2026-08-10**: `docker`, `gh`, `kubectl`, `talosctl`, `sops`, `git` present; `node`/`pnpm` (via nvm) and `claude` CLI installed and resolve |
 | 4 | Credential/dotfile sync from Windows | **Done 2026-08-10**: age keys present (sops + chezmoi), `gh auth status` logged in as jdwillmsen, dotfiles applied via `chezmoi apply` (personal role) — git identity, `.claude`, shell config all live |
 | 5 | Backup job configured (§6) | **Done**: vzdump job `cbc08f85…` scheduled 02:00 nightly, `keep-daily: 7`, storage `truenas-backup`. First run completed 2026-08-10 02:00:01, 1.4GB, confirmed present on `truenas-backup` |
-| 6 | Migration proven | **Not started**. `qm migrate 111 <target> --online` never run; runbook (`scenarios/dev-vm-migrate.md`) not written. Blocked on target host, see open question 2 |
+| 6 | Migration proven | **Documented, blocked on capacity 2026-08-10**: procedure written in `scenarios/dev-vm-migrate.md`; execution needs a second node that can hold 8c/32GB, which doesn't exist in the cluster today. See open question 2 |
 
 ## 9. Open questions
 
@@ -203,13 +204,14 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
    `truenas-vmdisks` (dataset `storage/proxmox`) already exists as a
    dedicated export, separate from the k8s PVC tier (`storage/k8s/vols`).
    No action needed; see §4.
-2. **Target migration test host** — with the VM now living on pve5 (§5.1),
-   the Phase 6 round-trip needs a different target. pve1 is the only other
-   non-CP host; re-checked 2026-08-10, still only ~5.8GiB available
-   (`minecraft-server` 4GB, `haproxy-1` 1GB, `talos-worker-01` 16GB already
-   running there) — an 8c/32GB devbox still doesn't fit. Needs pve1 freed up
-   (e.g. relocating `minecraft-server`) or a fresh capacity check before
-   Phase 6, not locked here.
+2. **Target migration test host — hardware ceiling, not a scheduling gap.**
+   pve1's *total* RAM is 28.2GiB, below devbox's 32GB allocation — freeing
+   pve1 up (e.g. relocating `minecraft-server`) cannot fix this, the box is
+   too small even empty. pve2/pve3/pve4 are smaller still (~6GiB each,
+   JDWLABS-78) and are excluded anyway as control-plane hosts (req #4). No
+   node in the cluster today can be Phase 6's "other side." Unblocks only by
+   adding cluster capacity; procedure is ready to run in
+   `scenarios/dev-vm-migrate.md` once it does.
 3. ~~pve1's API proxy to pve5 returns "no route to host"~~ — **re-tested
    2026-08-10**: `pvesh get /nodes/pve1/qemu` via pve5's API proxy succeeded
    cleanly. Treating as transient; re-check if it recurs before depending on
