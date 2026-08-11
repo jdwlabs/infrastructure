@@ -10,11 +10,13 @@
 # workstation. Staged on "local" — the disk itself lands on the NFS
 # datastore via the disk block's datastore_id below.
 resource "proxmox_virtual_environment_download_file" "dev_vm_cloud_image" {
-  content_type = "import"
-  datastore_id = var.dev_vm_image_datastore
-  node_name    = var.dev_vm_node
-  file_name    = "ubuntu-24.04-server-cloudimg-amd64-devvm.qcow2"
-  url          = var.dev_vm_cloud_image_url
+  content_type       = "import"
+  datastore_id       = var.dev_vm_image_datastore
+  node_name          = var.dev_vm_node
+  file_name          = "ubuntu-24.04-server-cloudimg-amd64-devvm.qcow2"
+  url                = var.dev_vm_cloud_image_url
+  checksum           = var.dev_vm_cloud_image_checksum
+  checksum_algorithm = "sha256"
 }
 
 # Snippets cannot live on an LVM-thin pool; they need a directory-backed
