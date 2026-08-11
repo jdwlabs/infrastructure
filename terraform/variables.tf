@@ -260,6 +260,12 @@ variable "haproxy_cloud_image_url" {
   default     = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
 }
 
+variable "haproxy_cloud_image_checksum" {
+  description = "SHA256 of haproxy_cloud_image_url's current contents. Update together — a URL change with no matching checksum change fails the download intentionally."
+  type        = string
+  default     = "0533b0655c32e68b31d792ecd6ccfca95abdbc536c4446874fe0513bd4140ffe"
+}
+
 variable "haproxy_image_datastore" {
   description = "Datastore holding the imported cloud image. Needs the 'import' content type."
   type        = string
@@ -344,6 +350,12 @@ variable "dev_vm_cloud_image_url" {
   description = "Ubuntu cloud image used as the dev VM root disk."
   type        = string
   default     = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+}
+
+variable "dev_vm_cloud_image_checksum" {
+  description = "SHA256 of dev_vm_cloud_image_url's current contents. Update together — a URL change with no matching checksum change fails the download intentionally."
+  type        = string
+  default     = "0533b0655c32e68b31d792ecd6ccfca95abdbc536c4446874fe0513bd4140ffe"
 }
 
 variable "dev_vm_image_datastore" {

@@ -17,11 +17,13 @@
 resource "proxmox_virtual_environment_download_file" "haproxy_cloud_image" {
   for_each = toset([for vm in var.haproxy_vms : vm.node_name])
 
-  content_type = "import"
-  datastore_id = var.haproxy_image_datastore
-  node_name    = each.value
-  file_name    = "ubuntu-24.04-server-cloudimg-amd64-haproxy.qcow2"
-  url          = var.haproxy_cloud_image_url
+  content_type       = "import"
+  datastore_id       = var.haproxy_image_datastore
+  node_name          = each.value
+  file_name          = "ubuntu-24.04-server-cloudimg-amd64-haproxy.qcow2"
+  url                = var.haproxy_cloud_image_url
+  checksum           = var.haproxy_cloud_image_checksum
+  checksum_algorithm = "sha256"
 }
 
 # Snippets cannot live on an LVM-thin pool; they need a directory-backed

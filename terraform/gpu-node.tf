@@ -8,11 +8,13 @@
 # import_from instead of the provider's node-SSH importdisk path, which
 # cannot reach an ssh-agent from this workstation.
 resource "proxmox_virtual_environment_download_file" "ubuntu_cloud_image" {
-  content_type = "import"
-  datastore_id = "local"
-  node_name    = var.gpu_vm_node
-  file_name    = "ubuntu-24.04-server-cloudimg-amd64.qcow2"
-  url          = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+  content_type       = "import"
+  datastore_id       = "local"
+  node_name          = var.gpu_vm_node
+  file_name          = "ubuntu-24.04-server-cloudimg-amd64.qcow2"
+  url                = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+  checksum           = "0533b0655c32e68b31d792ecd6ccfca95abdbc536c4446874fe0513bd4140ffe"
+  checksum_algorithm = "sha256"
 }
 
 resource "proxmox_virtual_environment_vm" "gpu_inference" {
