@@ -1,7 +1,7 @@
 # Dev VM Provisioning — Design
 
-Status: **design only, nothing applied.** No Terraform resource exists yet;
-this document is the plan for `terraform/dev-vm-node.tf`.
+Status: **applied, Phases 0-5 done.** `terraform/dev-vm-node.tf` is live
+(vmid `111` on pve5, `192.168.1.56`); only Phase 6 (migration proof) remains.
 
 A dedicated, always-on Proxmox VM to be the full daily-driver dev environment
 for jdwlabs work — SSH + VS Code Remote-SSH from the Windows workstation,
@@ -190,12 +190,12 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
 | 0 | Node capacity check; `.56`/vmid `111` confirmed free; NFS storage backend | **Done 2026-08-09**: pve1 ruled out (28.2GiB total, ~5.5GiB free), pve5 selected (~42GiB free); vmid `111` and `.56` confirmed unclaimed; `truenas-vmdisks` NFS storage already existed cluster-wide (§4 correction) — no new backend needed |
-| 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | Done: `terraform validate`/`fmt` clean, `dev_vm_ssh_public_key` in vault. `terraform plan` clean; human `terraform apply` still pending |
-| 2 | Cloud-init verified (SSH reachable, guest agent running) | `qm agent 111 ping` OK |
-| 3 | Bootstrap script run (§5.3): tooling installed | `docker`, `gh`, `claude`, `kubectl`, `talosctl`, `sops` all resolve |
-| 4 | Credential/dotfile sync from Windows | age hydrate works on VM; `gh auth status` OK |
-| 5 | Backup job configured (§6) | first `vzdump` run completes, visible on NAS |
-| 6 | Migration proven | `qm migrate 111 <target> --online` and back; downtime measured; runbook written (`scenarios/dev-vm-migrate.md`) — target host TBD, see open question 2 |
+| 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | **Done 2026-08-10**: applied, PRs #108/#109/#110 merged. `terraform plan` against current main shows zero diff on `dev_vm` — state matches config |
+| 2 | Cloud-init verified (SSH reachable, guest agent running) | **Done**: `ssh dev-admin@192.168.1.56` succeeds, hostname `devbox`, uptime confirms cloud-init completed |
+| 3 | Bootstrap script run (§5.3): tooling installed | **Done 2026-08-10**: `docker`, `gh`, `kubectl`, `talosctl`, `sops`, `git` present; `node`/`pnpm` (via nvm) and `claude` CLI installed and resolve |
+| 4 | Credential/dotfile sync from Windows | **Done 2026-08-10**: age keys present (sops + chezmoi), `gh auth status` logged in as jdwillmsen, dotfiles applied via `chezmoi apply` (personal role) — git identity, `.claude`, shell config all live |
+| 5 | Backup job configured (§6) | **Done**: vzdump job `cbc08f85…` scheduled 02:00 nightly, `keep-daily: 7`, storage `truenas-backup`. First run completed 2026-08-10 02:00:01, 1.4GB, confirmed present on `truenas-backup` |
+| 6 | Migration proven | **Not started**. `qm migrate 111 <target> --online` never run; runbook (`scenarios/dev-vm-migrate.md`) not written. Blocked on target host, see open question 2 |
 
 ## 9. Open questions
 
@@ -205,13 +205,12 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
    No action needed; see §4.
 2. **Target migration test host** — with the VM now living on pve5 (§5.1),
    the Phase 6 round-trip needs a different target. pve1 is the only other
-   non-CP host but currently has no headroom (§5.1); this needs pve1 freed
-   up (e.g. relocating `minecraft-server`) or a fresh capacity check before
+   non-CP host; re-checked 2026-08-10, still only ~5.8GiB available
+   (`minecraft-server` 4GB, `haproxy-1` 1GB, `talos-worker-01` 16GB already
+   running there) — an 8c/32GB devbox still doesn't fit. Needs pve1 freed up
+   (e.g. relocating `minecraft-server`) or a fresh capacity check before
    Phase 6, not locked here.
-3. **pve1's API proxy to pve5 returns "no route to host"** — found while
-   verifying pve5's storage during Phase 0 (querying `pve5` through pve1's
-   API works for cluster-wide/cached data but a live per-node proxy call
-   failed; querying pve5's own API directly at `192.168.1.204:8006` worked
-   fine). Unclear if transient or a standing issue with pve1↔pve5
-   connectivity specifically — worth checking before relying on pve1 as the
-   API entry point for pve5-targeted operations (e.g. `talops`, migration).
+3. ~~pve1's API proxy to pve5 returns "no route to host"~~ — **re-tested
+   2026-08-10**: `pvesh get /nodes/pve1/qemu` via pve5's API proxy succeeded
+   cleanly. Treating as transient; re-check if it recurs before depending on
+   pve1 as the API entry point for pve5-targeted operations.
