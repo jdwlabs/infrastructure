@@ -192,6 +192,18 @@ TOTAL_STAGES=4
 # docs/lan-name-resolution.md once this wizard is done.
 ENV_FILE="${ENV_FILE:-$(dirname "$0")/lan-dns-gateway-findings.env}"
 
+# _first_ipv4 STRING — pull the first IPv4-looking token out of free-form
+# human input. resolvectl/ipconfig output routinely carries the address
+# buried in other text (interface names, a second address, IPv6 lines), and
+# comparing that raw text against a bare "192.168.1.199" would silently fail
+# even when the human answered correctly. Prints nothing on no match, which
+# is deliberate: an empty string can never equal an address, so a bad paste
+# fails onto the "not equal" branch below rather than an accidental partial
+# match.
+_first_ipv4() {
+  grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$1" | head -n1
+}
+
 banner "BGW320-500 — LAN DNS distribution check"
 
 say "This checks whether the AT&T BGW320-500 gateway at 192.168.1.254 can hand"
@@ -226,10 +238,19 @@ say "easy to conflate and only one of them is relevant here."
 note "If the field exists, it's usually a 'DNS Server' or 'Local DNS'"
 note "entry under the LAN/subnet's DHCP configuration, sometimes with a"
 note "Static/Dynamic toggle that has to be flipped to Static first."
-ask DHCP_DNS_FIELD_FOUND "Does such a field exist? [yes/no]:"
+
+# confirm() (library helper above) does the yes/no parsing — a hand-rolled
+# `ask` + string-equality check here previously meant a human typing "y",
+# "Yes", or anything but the literal string "yes" got silently routed to the
+# "field doesn't exist" branch regardless of what they actually saw.
+if confirm "Does such a field exist?"; then
+  DHCP_DNS_FIELD_FOUND="yes"
+else
+  DHCP_DNS_FIELD_FOUND="no"
+fi
 write_env DHCP_DNS_FIELD_FOUND "$DHCP_DNS_FIELD_FOUND"
 
-if [[ "$DHCP_DNS_FIELD_FOUND" != "yes" ]]; then
+if [[ "$DHCP_DNS_FIELD_FOUND" == "no" ]]; then
   write_env DECISION "no-dhcp-override-field — gateway cannot advertise a custom DNS server; per-client static resolver config is the only distribution path"
   finish
   warn "No override field found. This is a real, useful finding — record it"
@@ -240,8 +261,26 @@ if [[ "$DHCP_DNS_FIELD_FOUND" != "yes" ]]; then
 fi
 
 step "Set the field to 192.168.1.199 (the resolver deployed by"
-step "scenarios/lan-dns-resolver-deploy.md) and save."
+step "scenarios/lan-dns-resolver-deploy.md)."
+step "If the page offers a second/secondary/fallback DNS field, set that one"
+step "to 192.168.1.254 (the gateway's own address) too. Client failover"
+step "between primary and secondary DNS is slow and not guaranteed, so this"
+step "is a mitigation, not a fix — but a single resolver with no fallback"
+step "means the whole LAN loses DNS the moment 192.168.1.199 is down for any"
+step "reason, not just a DNS-specific one (see the 'If it goes down, all LAN"
+step "clients lose all DNS' risk in docs/lan-name-resolution.md)."
+step "Save."
 confirm "Saved?" || { warn "Save it, then re-run this wizard from Stage 3."; exit 1; }
+
+note "Rollback for this stage, if this ever needs undoing: return to this"
+note "page, clear the DNS Server field back to its original value (blank, or"
+note "'Automatic'/'Use gateway' if you didn't note the original setting"
+note "before changing it — that's the safe default on this hardware), clear"
+note "the secondary field the same way if you set one, then save. Clients"
+note "keep using 192.168.1.199 until they renew their lease — force that the"
+note "same way Stage 3 below does (release/renew, or toggle Wi-Fi off/on) if"
+note "the rollback needs to take effect immediately rather than on next"
+note "natural renewal."
 
 # ── Stage 3 — force a client to pick up the new option and test it ────────
 stage "Force a DHCP renewal and test what the client actually got"
@@ -253,13 +292,18 @@ step "'sudo dhclient -r && sudo dhclient' (Linux), or toggle Wi-Fi off/on."
 step "Check which DNS server the client was actually handed:"
 step "  Windows: ipconfig /all | findstr /i \"DNS Servers\""
 step "  Linux:   resolvectl status   (or: nmcli dev show | grep DNS)"
+note "Paste the whole line if that's easier — only the address matters below,"
+note "any surrounding text (interface name, a second address, etc.) is"
+note "stripped automatically."
 ask CLIENT_ASSIGNED_DNS "What DNS server address did the client report?:"
+CLIENT_ASSIGNED_DNS="$(_first_ipv4 "$CLIENT_ASSIGNED_DNS")"
 write_env CLIENT_ASSIGNED_DNS "$CLIENT_ASSIGNED_DNS"
 
 say "Now query that exact address for cluster.jdwlabs.com from the same"
 say "client — not 192.168.1.199 directly, and not the gateway directly."
 step "nslookup cluster.jdwlabs.com   (uses the client's assigned resolver)"
 ask CLIENT_LOOKUP_RESULT "What address did that return?:"
+CLIENT_LOOKUP_RESULT="$(_first_ipv4 "$CLIENT_LOOKUP_RESULT")"
 write_env CLIENT_LOOKUP_RESULT "$CLIENT_LOOKUP_RESULT"
 
 if [[ "$CLIENT_ASSIGNED_DNS" != "192.168.1.199" ]]; then
