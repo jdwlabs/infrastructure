@@ -28,15 +28,25 @@ packages:
   # Without a Unix-socket client installed, that read returns nothing and an
   # unreadable load balancer looks like one with no backends.
   - socat
+  # LAN split-horizon resolver for jdwlabs.com — see the config this installs,
+  # below, and docs/lan-name-resolution.md for why it lives on this VM rather
+  # than in-cluster or on the gateway.
+  - dnsmasq
 
 # No haproxy.cfg content here on purpose. The distro's placeholder config is
 # enough for the service to exist and hold its ports; the real config is
 # rendered from live cluster state and pushed through the existing validated
 # install path with automatic rollback. A second config-rendering path here
 # would drift from the generator that owns it.
+#
+# dnsmasq is the opposite case: its config is static (one domain override
+# plus one forwarder line, terraform/files/dnsmasq-jdwlabs-lan.conf), so
+# baking it into cloud-init doesn't create a second rendering path the way
+# haproxy.cfg would — there is only ever the one path.
 runcmd:
   - systemctl enable --now qemu-guest-agent
   - systemctl enable haproxy
+  - systemctl enable --now dnsmasq
 
 # The generated config binds the API frontends on this host's own address, and
 # a keepalived VIP peer would later bind an address this instance does not own
@@ -46,3 +56,11 @@ write_files:
   - path: /etc/sysctl.d/99-haproxy-nonlocal-bind.conf
     content: |
       net.ipv4.ip_nonlocal_bind = 1
+  # Full replace of the package's default /etc/dnsmasq.conf. Cloud-init writes
+  # this before packages install and before runcmd enables the service, so
+  # dnsmasq starts with the override config already in place, never the
+  # distro default. Content is read from one file (see the comment at its
+  # top) so this template and the manual deploy runbook can never drift.
+  - path: /etc/dnsmasq.conf
+    content: |
+      ${indent(6, dnsmasq_config)}

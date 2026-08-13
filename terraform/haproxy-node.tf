@@ -42,6 +42,9 @@ resource "proxmox_virtual_environment_file" "haproxy_cloud_init" {
       hostname       = each.value.vm_name
       admin_user     = var.haproxy_admin_user
       ssh_public_key = var.haproxy_ssh_public_key
+      # Single source of truth for the LAN split-horizon override — see the
+      # file itself for why its values are hardcoded rather than templated.
+      dnsmasq_config = trimspace(file("${path.module}/files/dnsmasq-jdwlabs-lan.conf"))
     })
   }
 }
