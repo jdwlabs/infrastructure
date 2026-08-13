@@ -6,9 +6,42 @@ would take to stop depending on a single workstation's `hosts` file.
 Companion to [host-addressing.md](host-addressing.md), which covers the Proxmox
 hypervisors' own addresses and names.
 
+**Status: implemented, distribution unconfirmed.** A LAN resolver
+(`dnsmasq`) now ships as part of the HAProxy VM
+(`terraform/files/dnsmasq-jdwlabs-lan.conf`,
+[scenarios/lan-dns-resolver-deploy.md](../scenarios/lan-dns-resolver-deploy.md)).
+What's still open is whether the gateway can hand its address to LAN clients
+automatically via DHCP — see "Options, and the recommendation" below and
+[scenarios/lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh).
+
 ## Resolution today
 
-Verified 2026-08-04 against each resolver directly.
+Verified 2026-08-04 against each resolver directly, **re-verified live
+2026-08-13** from a LAN device (`192.168.1.56`) with no `jdwlabs.com` entries
+of its own anywhere in its resolution path — every row below reproduced
+identically, including the exact CNAME chain and the WAN address:
+
+```
+$ nslookup cluster.jdwlabs.com 192.168.1.254
+cluster.jdwlabs.com  canonical name = jdwlabs.com.
+jdwlabs.com          Address: 104.53.12.62
+
+$ nslookup randomtestname123.jdwlabs.com 192.168.1.254   # wildcard proof
+randomtestname123.jdwlabs.com  canonical name = jdwlabs.com.
+jdwlabs.com                    Address: 104.53.12.62
+
+$ curl -sk -m5 -o /dev/null -w "%{http_code} exit=%{exitcode}" https://cluster.jdwlabs.com:6443/version
+000 exit=7                              # WAN forward closed (JDWLABS-53) — no path without an override
+
+$ curl -sk -o /dev/null -w "%{http_code} remote=%{remote_ip}" https://192.168.1.199:6443/version
+401 remote=192.168.1.199                # apiserver itself is healthy
+
+$ curl -s -o /dev/null -w "%{http_code} remote=%{remote_ip}" https://alertmanager.jdwlabs.com/
+200 remote=104.53.12.62                 # hairpin still covers service names with no override
+```
+
+Nothing here contradicts the 2026-08-04 findings; this is corroboration from
+an independent vantage point, not a revision.
 
 | Name | Public resolver | Gateway resolver (`192.168.1.254`) | Workstation `hosts` |
 | --- | --- | --- | --- |
@@ -157,15 +190,54 @@ enabled bypasses the LAN resolver entirely under option 2 — the same
 gateway-proxying failure mode above, but client-side and just as invisible to
 a single-machine checklist run.
 
-**Recommended: option 1 now, option 3 alongside the subnet router, and option 2
-only if the gateway turns out to be able to advertise a custom DNS server, and
-only after confirming both catches above.** Standing up a resolver that
-clients cannot be pointed at automatically buys nothing over the `hosts` line
-it replaces.
+**Decision (JDWLABS-285, 2026-08-13): option 2, triggered.** The condition
+this document originally set for moving off option 1 — "reasonable while
+there is exactly one admin" — is no longer true. `JDWLABS-53` closed the
+`6443` WAN forward, and a second admin machine (`jake-Inspiron-5406-2n1`) has
+no `hosts` override and therefore no path to the cluster at all. Option 1's
+"add a line per new admin machine" is no longer a maintenance cost worth
+preferring over standing up the resolver — it's now the thing actively
+blocking access.
+
+The resolver itself is built: `dnsmasq` on the HAProxy VM, config in
+`terraform/files/dnsmasq-jdwlabs-lan.conf`, wired into the VM's cloud-init for
+any future rebuild and deployed to the live VM by
+[scenarios/lan-dns-resolver-deploy.md](../scenarios/lan-dns-resolver-deploy.md).
+It answers `jdwlabs.com` and every subdomain — a real wildcard, unlike the
+inert `hosts`-file lines below — and forwards everything else to the gateway
+unchanged.
+
+What is **not** yet resolved is this document's own second catch: whether the
+BGW320-500 can hand that resolver's address to clients via DHCP, and whether
+it actually passes queries through rather than proxying them itself.
+[scenarios/lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh) is
+the human wizard that checks both, because both require clicking through the
+gateway's access-code-gated admin UI — nothing an agent can do from here. Two
+outcomes follow from that check, and the doc will be updated with whichever
+one actually happened once it's run:
+
+- **Confirmed working** — DHCP hands out `192.168.1.199`, the gateway passes
+  queries through untouched. This is the zero-touch, travels-with-the-client
+  outcome the ticket asked for, and option 2 is fully realized.
+- **Field missing, or present but not honoured** (either of this document's
+  two flagged catches) — the resolver still exists and is still useful, but
+  only for clients pointed at it by static per-client configuration. That is
+  a real improvement over the `hosts` file (one resolver setting instead of
+  an unbounded, wildcard-incapable list of names, and it survives adding new
+  service names with zero client-side changes) but it is not automatic
+  distribution, and this document should not claim it is one if the wizard
+  finds otherwise.
+
+Option 3 (Tailscale MagicDNS) remains a good idea alongside the subnet
+router, independent of which branch above applies — it's the only option
+that also fixes the name **off**-LAN. It is unchanged by this decision and
+not re-evaluated here.
 
 ## Order of work
 
-The ordering is the part that can go wrong.
+The ordering is the part that can go wrong. Steps 3-4 below are now a runbook
+rather than a description:
+[scenarios/lan-dns-resolver-deploy.md](../scenarios/lan-dns-resolver-deploy.md).
 
 1. Delete the four inert wildcard lines. No verification needed — they were
    never doing anything.
@@ -180,7 +252,30 @@ The ordering is the part that can go wrong.
    `curl --resolve <name>:443:104.53.12.62 https://<name>/`.
 
 The service-name entries can be dropped at any point, independently — hairpin
-covers them.
+covers them, and the wildcard override in
+`terraform/files/dnsmasq-jdwlabs-lan.conf` now covers them too.
+
+## Why not an in-cluster CoreDNS override
+
+Kubernetes clusters run CoreDNS by default, and this one is no exception —
+but it answers on the cluster's internal `ClusterIP` (`10.96.0.10`), reachable
+only from inside the pod network. There is no MetalLB (or any other
+LAN-facing load-balancer) in the `platform` repo to expose it to LAN clients;
+the only search hit for "coredns" there is an unrelated troubleshooting
+runbook describing that same internal VIP.
+
+Exposing it would mean new infrastructure (a `LoadBalancer` service via a
+LAN-facing allocator, or a `hostNetwork` DaemonSet) to reach parity with what
+the HAProxy VM already does for free, and it would trade one SPOF for a worse
+one: the LAN resolver would then depend on cluster health, which is exactly
+backwards for a name whose entire purpose is reaching the cluster in the
+first place, and would take every other `jdwlabs.com` name down with it on
+any cluster-DNS incident (the `platform` repo's own runbooks already
+catalogue cross-node CoreDNS-VIP timeouts as a real, observed failure mode on
+this cluster). The HAProxy VM is already an accepted SPOF for the API and all
+ingress; adding a five-line static config to it introduces no *new* failure
+domain, which an in-cluster service would. No `platform` repo change is part
+of this decision.
 
 ## Verification checklist
 
