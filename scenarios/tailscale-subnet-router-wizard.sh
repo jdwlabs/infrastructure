@@ -198,7 +198,25 @@ finish() {
 
 TOTAL_STAGES=4
 
-banner "Tailscale subnet router — off-LAN cluster admin"
+# Not using the shared banner() here: it claims progress is remembered across
+# a Ctrl-C and re-run ("it remembers values already saved"), which is true
+# for wizards that call ask/write_env but false for this one — no stage here
+# captures or persists anything. That claim would be actively misleading in
+# Stage 3+, after Tailscale is already installed on the production VM: a
+# human re-running expecting to resume would land back at Stage 1 and could
+# assume Stage 2 still needs redoing, or skip re-confirming what they already
+# did. Authoring a custom opening block instead of overriding the library.
+_clear
+printf '\n%s%s  %s%s\n' "$BOLD" "$BLUE" "Tailscale subnet router — off-LAN cluster admin" "$RESET"
+printf '%s  %s stages%s\n\n' "$DIM" "$TOTAL_STAGES" "$RESET"
+printf '%s  This is a guide only: it opens URLs, prints the exact commands to run\n' "$DIM"
+printf '  yourself, and pauses for confirmation. It never touches the VM, the\n'
+printf '  router, or Talos config — and it does not capture or remember\n'
+printf '  anything. Stopping partway through (Ctrl-C or closing the terminal)\n'
+printf '  and re-running starts over from Stage 1; re-confirm what you already\n'
+printf '  did rather than assuming it is remembered, especially after Stage 2\n'
+printf '  once Tailscale is installed on the VM.%s\n' "$RESET"
+pause "Ready to start?"
 
 # ── Stage 1: prerequisites ─────────────────────────────────────────────────
 stage "Prerequisites"
