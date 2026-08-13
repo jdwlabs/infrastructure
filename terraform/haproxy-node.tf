@@ -114,6 +114,38 @@ resource "proxmox_virtual_environment_vm" "haproxy" {
   scsi_hardware   = "virtio-scsi-single"
   boot_order      = ["scsi0"]
   tags            = ["haproxy", "loadbalancer"]
+
+  # user_data_file_id and the file resource behind it (source_raw.data) are
+  # both ForceNew: true in the pinned v0.111.1 provider source
+  # (proxmoxtf/resource/vm/vm.go's mkInitializationUserDataFileID and
+  # proxmoxtf/resource/file.go's mkResourceVirtualEnvironmentFileSourceRaw*),
+  # confirmed directly rather than inferred — the compiled schema alone
+  # (`terraform providers schema -json`) doesn't expose ForceNew, only
+  # nesting shape, which is where the [0] index below comes from
+  # (`initialization` is schema.TypeList in that same source, i.e. a
+  # list-nested block). Left unguarded, any edit to the cloud-init content —
+  # including the dnsmasq config added alongside this comment — replaces the
+  # snippet file, which changes its id, which replaces this VM: the live
+  # production load balancer for the Kubernetes API, Talos API, and all
+  # ingress, rebuilt from a cloud-init that deliberately ships no
+  # haproxy.cfg. That is an outage, not a config push, and
+  # `terraform plan`/`apply` would do it silently — CI here only runs
+  # `terraform validate`, which cannot see it.
+  #
+  # This also matches reality, not just papers over Terraform's view of it:
+  # cloud-init only runs at first boot, so an in-place edit to the snippet
+  # was never going to reach an already-running VM anyway (see "Day-0 is the
+  # gap" in docs/haproxy-vm-provisioning.md). Ignoring the field means
+  # Terraform stops proposing a change it could never actually deliver.
+  # ignore_changes does not apply at resource creation, so a genuinely new
+  # VM (new vm_name/vmid — an HA peer, or the next full rebuild) still picks
+  # up whatever cloud-init content is current at that time. Landing a
+  # cloud-init change on an already-live VM stays a human-run SSH runbook
+  # (scenarios/lan-dns-resolver-deploy.md is the current example), not a
+  # `terraform apply`.
+  lifecycle {
+    ignore_changes = [initialization[0].user_data_file_id]
+  }
 }
 
 locals {
