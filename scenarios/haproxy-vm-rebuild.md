@@ -1,8 +1,13 @@
 # Runbook: Rebuild the HAProxy load-balancer VM
 
-Status: PLANNED — every `terraform apply` in this runbook is executed by a
-human. The agent contract forbids autonomous applies, and this VM carries the
-Kubernetes API, the Talos API, and all HTTP(S) ingress.
+Status: **EXECUTED, 2026-08-09** (commit `568b368`). `haproxy-1` is the live
+production load balancer at `192.168.1.199`; `haproxy-0` (VMID 100) was
+stopped and is pending deletion after its soak period — re-confirm that
+hasn't happened yet before assuming VMID 100 is free. Every `terraform apply`
+in this runbook is executed by a human. The agent contract forbids autonomous
+applies, and this VM carries the Kubernetes API, the Talos API, and all
+HTTP(S) ingress. Kept here as the tested recovery path for the next rebuild,
+not as a pending TODO.
 
 ## Why
 
@@ -188,9 +193,9 @@ Terraform action.
 
 ## Known follow-ups
 
-- `haproxy_login_user` is still `root` in tfvars while cloud-init creates
-  `haproxy-admin`. Switch it as part of the cutover, or the config push will
-  authenticate as a user the new VM does not have.
+- ~~`haproxy_login_user` is still `root` in tfvars while cloud-init creates
+  `haproxy-admin`.~~ Done as part of the 2026-08-09 cutover — vaulted tfvars
+  now carries `haproxy_login_user = "haproxy-admin"`.
 - A single load balancer remains a single point of failure for the API and all
   ingress. The `haproxy_vms` list shape is what a keepalived VIP pair needs;
   adding the peer is a separate, scheduled change.
