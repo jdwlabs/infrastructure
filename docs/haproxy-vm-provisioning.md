@@ -14,32 +14,45 @@ source of truth if this drifts again. Phase 3 (keepalived) remains
 unscheduled — see §7.
 
 Automating the provisioning of the HAProxy load-balancer VM that fronts the
-Kubernetes API, Talos API, and cluster ingress. Today the VM is the only piece
-of the cluster's infrastructure that is not reproducible from this repo.
+Kubernetes API, Talos API, and cluster ingress. When this design was written,
+the VM was the only piece of the cluster's infrastructure that was not
+reproducible from this repo — Phase 1 below closed that gap on 2026-08-09; see
+the status banner above.
 
 ## 1. Current state
+
+**This section describes the state the design was written against — the
+problem statement sections 2 onward solve for. It predates the 2026-08-09
+cutover; the VM row below is superseded by the status banner at the top of
+this document.** Left as-is rather than rewritten so the rest of this design
+still reads as the rationale it was — sections 2-7 explain *why* the change
+below was made, and that reasoning doesn't change just because the change is
+now done.
 
 ### What exists
 
 | Layer | How it is managed today |
 |---|---|
-| HAProxy **VM** (single, `192.168.1.199`) | **Manual.** Created by hand in the Proxmox UI (OS install, package install, static IP, SSH key). No Terraform resource, no runbook, no record of its build. |
+| HAProxy **VM** (single, `192.168.1.199`) | ~~**Manual.** Created by hand in the Proxmox UI (OS install, package install, static IP, SSH key). No Terraform resource, no runbook, no record of its build.~~ **Superseded 2026-08-09**: Terraform-managed (`terraform/haproxy-node.tf`), built from cloud-init, `haproxy-admin` login — see the status banner at the top of this document. |
 | `haproxy.cfg` | **Fully automated** by `talops`. `bootstrap/internal/haproxy/config.go` renders the config from cluster state (CP backends for 6443/50000, ingress NodePort backends for 80/443, stats on 9000, optional admin CIDR allowlist). |
-| Config push | `bootstrap/internal/haproxy/client.go` SSHes to the VM (`haproxy_login_user`, currently `root`), writes via base64, backs up, validates (`haproxy -c`), installs, reloads — with automatic rollback on validation failure and retry on SSH connection errors. |
+| Config push | `bootstrap/internal/haproxy/client.go` SSHes to the VM (`haproxy_login_user`, now `haproxy-admin`), writes via base64, backs up, validates (`haproxy -c`), installs, reloads — with automatic rollback on validation failure and retry on SSH connection errors. |
 | Reconciliation | `talops bootstrap`/`reconcile` regenerate and push the config whenever CP/worker membership or IPs change (ARP-based IP rediscovery already handles DHCP churn). SSH connectivity to the VM is a preflight check. |
-| Identity | `haproxy_ip` in `terraform.tfvars` (SOPS-vaulted) is consumed **only** by `talops` — Terraform provisions nothing for it. DNS (`cluster.jdwlabs.com`) points at the IP; `talosconfig` endpoints and kubeconfig go through it. |
+| Identity | `haproxy_ip` in `terraform.tfvars` (SOPS-vaulted) is consumed **only** by `talops` — Terraform provisions the VM shell but still doesn't manage this value itself. DNS (`cluster.jdwlabs.com`) points at the IP; `talosconfig` endpoints and kubeconfig go through it. |
 
 ### What this means
 
 - **Day-1+ operations are solved.** Backend drift when nodes change is already
   reconciled automatically. This design does not need to re-solve config
   management — it must *preserve* it.
-- **Day-0 is the gap.** If the VM dies (disk loss, accidental delete, Proxmox
-  host failure), there is no automated or even documented path to rebuild it.
-  Recovery would be an ad-hoc manual rebuild while the cluster API and all
-  ingress are dark.
+- **Day-0 was the gap; Phase 1 (below) closes it.** At the time this was
+  written, there was no automated or even documented path to rebuild the VM
+  if it died. `terraform/haproxy-node.tf` plus
+  `scenarios/haproxy-vm-rebuild.md` is now that path, exercised once for real
+  on 2026-08-09.
 - The VM is a single point of failure for the API endpoint *and* all HTTP(S)
   ingress. (Workloads keep running during an outage; nothing can reach them.)
+  Still true after Phase 1 — a reproducible rebuild shortens the outage, it
+  doesn't remove the SPOF. See §5.5 for the HA option that would.
 
 ### Precedents in this repo
 
