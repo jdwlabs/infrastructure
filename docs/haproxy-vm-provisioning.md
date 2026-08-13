@@ -1,11 +1,17 @@
 # HAProxy VM Provisioning — Design
 
-Status: **implemented, not yet applied.** Phases 1 and 2 are in the repo
-(`terraform/haproxy-node.tf`, its cloud-init template, and the `talops haproxy`
-command group). No `terraform apply` has run: the load balancer serving the
-cluster is still the hand-built one, and replacing it is the human-run
-`scenarios/haproxy-vm-rebuild.md`. Phase 3 (keepalived) remains unscheduled —
-see §7.
+Status: **Phase 1 applied, Phase 2 in the repo.** `terraform/haproxy-node.tf`
+was applied and the rebuild/cutover in `scenarios/haproxy-vm-rebuild.md`
+executed on 2026-08-09 (commit `568b368`) — the production load balancer is
+`haproxy-1`, Terraform-managed, not the hand-built `haproxy-0` this document
+originally described as still live. That commit updated the vaulted tfvars
+and bootstrap-state but not this document's own status line, which is the
+correction being made here now (found while re-verifying live state for
+JDWLABS-285, a separate, DNS-focused ticket — recorded here because this is
+where the stale claim lived, not because that ticket's work touches
+provisioning). `talops haproxy status` against `192.168.1.199` is the live
+source of truth if this drifts again. Phase 3 (keepalived) remains
+unscheduled — see §7.
 
 Automating the provisioning of the HAProxy load-balancer VM that fronts the
 Kubernetes API, Talos API, and cluster ingress. Today the VM is the only piece
@@ -348,9 +354,13 @@ and ARP settle), schedulable in a quiet window.
 ## 7. Open questions — resolved or deferred
 
 1. **HA pair now or later? — DEFERRED, owner: repo maintainer.** Not decided
-   here, because the input the decision needs does not exist yet: the rebuild
-   below has never been executed, so the single-VM outage window is estimated
-   rather than measured. Nothing in phases 1–2 forecloses the pair — the
+   here. The rebuild below **has** now been executed (2026-08-09), so the
+   input this deferral was waiting on — a measured outage window rather than
+   an estimated one — exists if someone captures it from that cutover's
+   timestamps; it was not captured at the time, so the window is still
+   effectively unmeasured. Revisit by pulling the stop/start timestamps from
+   that day rather than re-running a cutover just to measure it. Nothing in
+   phases 1–2 forecloses the pair — the
    tfvars list takes a second element, `net.ipv4.ip_nonlocal_bind` is already
    set by cloud-init so a VIP bind needs no rebuild, and `--host` already
    targets an instance by address rather than assuming one. Revisit once the
