@@ -11,15 +11,17 @@ not as a pending TODO.
 
 ## Why
 
-The load balancer that fronts the cluster today (`haproxy-0`, VMID 100 on
-pve1) was built by hand in the Proxmox UI. Its `haproxy.cfg` is fully
-automated — the generator renders backends from live cluster state and pushes
-them with validation and rollback — but the *VM* is not reproducible. If the
-disk or its host is lost, recovery is an ad-hoc manual rebuild while the API
-and all ingress are dark.
+Until 2026-08-09, the load balancer fronting the cluster (`haproxy-0`, VMID
+100 on pve1) was built by hand in the Proxmox UI. Its `haproxy.cfg` was
+already fully automated — the generator renders backends from live cluster
+state and pushes them with validation and rollback — but the *VM* was not
+reproducible: if the disk or its host was lost, recovery was an ad-hoc manual
+rebuild while the API and all ingress stayed dark.
 
-`terraform/haproxy-node.tf` closes that gap. This runbook is the driver for
-it: it provisions a replacement, proves it serves traffic, and cuts over.
+`terraform/haproxy-node.tf` is what closed that gap. This runbook was its
+driver: it provisioned a replacement, proved it served traffic, and cut over.
+It stays here, already executed once, as the tested path for the next time a
+rebuild is needed.
 
 ## Why this is a rebuild and not an import
 

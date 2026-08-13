@@ -157,16 +157,20 @@ which takes precedence over the tfvars value.
 
 ## Rebuild parity
 
-The VM at `192.168.1.199` is hand-built; `haproxy_vms` is absent from the live
-tfvars, so Terraform provisions nothing for it today and this runbook is the
-only record of the install.
+**Updated 2026-08-09:** the VM at `192.168.1.199` is no longer hand-built —
+`terraform/haproxy-node.tf` provisions it (`haproxy_vms` in the live tfvars
+now holds one entry) and `scenarios/haproxy-vm-rebuild.md` records the cutover
+that made it so. This runbook (Tailscale) predates that change and was never
+re-run against the Terraform-managed VM, so nothing here assumes otherwise —
+this section is about what stays a manual step even now.
 
-`terraform/haproxy-node.tf` and its cloud-init template do describe a
-Terraform-built replacement. Tailscale is intentionally **not** in that template:
-joining a tailnet needs an auth key, and putting one in day-0 user-data writes a
+Tailscale is intentionally **not** in the cloud-init template: joining a
+tailnet needs an auth key, and putting one in day-0 user-data writes a
 credential into the Proxmox VM config where the secret vault cannot reach it.
-A rebuilt VM therefore repeats step 1 by hand, or joins with a short-lived
-ephemeral key issued at rebuild time.
+That's unchanged by the VM becoming Terraform-managed. A future rebuild
+(`scenarios/haproxy-vm-rebuild.md`) therefore still repeats step 1 of this
+runbook by hand, or joins with a short-lived ephemeral key issued at rebuild
+time — Terraform owning the VM shell doesn't own tailnet membership.
 
 ## What this does not do
 
