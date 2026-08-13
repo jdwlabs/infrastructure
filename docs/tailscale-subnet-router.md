@@ -48,6 +48,12 @@ anyone. The tailnet exists but carries no path to the cluster.
 The LAN is `192.168.1.0/24` with its gateway, DHCP server and DNS server all at
 `192.168.1.254`.
 
+Re-checked 2026-08-13 from a machine on the LAN: `192.168.1.199` answers ICMP,
+so the host is reachable at the network layer, but SSH to it as either the
+admin user or `root` returns `Permission denied (publickey)` — this
+environment's key isn't authorized there. Still no credentialed path to the
+VM; Steps 1 and 3 below remain human-executed.
+
 ## Prerequisites
 
 - SSH access to the HAProxy VM from the LAN as the admin user
