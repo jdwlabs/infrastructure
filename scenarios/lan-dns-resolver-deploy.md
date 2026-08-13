@@ -115,6 +115,28 @@ any LAN client is using it — that's Step 5/6 below, and it's the part that
 actually matters (a resolver that answers when asked directly but isn't in
 any client's path proves nothing about the ticket this closes).
 
+### Reboot-test before trusting this with real clients
+
+The config uses `bind-dynamic` specifically so dnsmasq survives a boot race
+(see the comment in `terraform/files/dnsmasq-jdwlabs-lan.conf`) — Ubuntu's
+`dnsmasq.service` only orders `After=network.target`, which doesn't guarantee
+this VM's address is assigned by the time it starts, and this VM has
+`on_boot = true`. `bind-dynamic` is the mitigation, not a proof it works on
+this host's actual boot ordering. Before Step 4 points real clients at this
+resolver — i.e. before it becomes something the whole LAN's DNS depends on —
+reboot the VM once and re-run this step's `dig` checks against it:
+
+```bash
+ssh haproxy-admin@192.168.1.199 'sudo systemctl status dnsmasq --no-pager; sudo reboot'
+# wait ~30s for the VM to come back
+dig @192.168.1.199 cluster.jdwlabs.com +short   # expect 192.168.1.199 again, unattended
+```
+
+If dnsmasq isn't up and answering without manual intervention after that
+reboot, stop — do not proceed to Step 4 until that's fixed. A resolver the
+whole LAN depends on that doesn't survive its own host rebooting is a worse
+outcome than the `hosts` file it's replacing.
+
 ## Step 4 — Point clients at the resolver
 
 This is the part the gateway may or may not let happen automatically. Run
