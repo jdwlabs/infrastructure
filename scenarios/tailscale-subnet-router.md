@@ -11,6 +11,13 @@ parity once `haproxy-node.tf` provisions this VM) see
 checklist follows exactly. Read that doc first if anything here is unclear;
 don't duplicate its rationale into ticket comments — link back to it instead.
 
+Prefer to run this interactively instead of copy-pasting each command by
+hand? [`tailscale-subnet-router-wizard.sh`](tailscale-subnet-router-wizard.sh)
+walks the same steps one at a time — prerequisites, install/advertise,
+console approval, off-LAN verification — pausing for confirmation at each
+one. It's a guide, not automation: it opens URLs and waits for you to act,
+but never touches the VM, the router, or Talos itself.
+
 ## Before you start
 
 - SSH access to the HAProxy VM (`192.168.1.199`) from the LAN as the admin user
