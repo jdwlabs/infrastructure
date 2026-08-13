@@ -49,3 +49,5 @@ tfdestroy-plan
 
 # Agent-created git worktrees live inside the checkout.
 .claude/worktrees/
+worktrees/
+.worktrees/
