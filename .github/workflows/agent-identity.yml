@@ -1,0 +1,83 @@
+name: agent-identity
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Catches an agent authored under the wrong identity: an agent co-author
+  # trailer present on a PR opened by anything other than the registered
+  # agent App. Unauthenticated, self-asserted text — this is a tripwire for
+  # the accidental case, not enforcement against a deliberate bypass. See
+  # jdwlabs/platform docs/adr/0018-agentic-app-topology.md §3.
+  co-author-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm PR author identity against any agent co-author trailer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+
+          # PR author IS the registered agent identity: pass unconditionally
+          # — the point is proving identity discipline held, not penalizing
+          # agent-authored PRs for carrying their own trailer.
+          case "${PR_AUTHOR}" in
+            jdwlabs-agent-bot|jdwlabs-agent-bot\[bot\])
+              echo "PR author is the registered agent identity (${PR_AUTHOR}) — passing unconditionally."
+              exit 0
+              ;;
+          esac
+
+          # Failure to read is not a pass. A transient API error here would
+          # otherwise produce an empty commit list and a green check over a
+          # branch nothing ever looked at.
+          if ! encoded=$(gh api --paginate "repos/${PR_REPO}/pulls/${PR_NUMBER}/commits" \
+            --jq '.[] | .sha + " " + (.commit.message | @base64)'); then
+            echo "::error::Cannot read the commits of ${PR_REPO}#${PR_NUMBER} — refusing to report a pass without inspecting them."
+            exit 1
+          fi
+
+          total=0
+          flagged_sha=""
+
+          # Messages are base64-encoded on the way out so a multi-line commit
+          # body can't break the line-oriented read below.
+          while IFS=' ' read -r sha b64msg; do
+            [ -n "${sha}" ] || continue
+            total=$((total + 1))
+            message=$(printf '%s' "${b64msg}" | base64 -d)
+            if [ -z "${flagged_sha}" ] && printf '%s' "${message}" | grep -iqP 'Co-Authored-By:.*<noreply@anthropic\.com>'; then
+              flagged_sha="${sha}"
+            fi
+          done <<<"${encoded}"
+
+          if [ "${total}" -eq 0 ]; then
+            echo "::error::${PR_REPO}#${PR_NUMBER} contains no commits — there is nothing to attest, so this check cannot report a pass."
+            exit 1
+          fi
+
+          # The commits endpoint caps at 250 and says nothing when it
+          # truncates. The event payload carries the branch's true count, so
+          # a mismatch means part of the branch went unread — report that
+          # instead of passing over the portion that happened to fit.
+          if [ "${total}" -ne "${PR_COMMITS}" ]; then
+            echo "::error::Read ${total} commit(s) but this pull request has ${PR_COMMITS} — refusing to report a pass over part of the branch."
+            exit 1
+          fi
+
+          if [ -n "${flagged_sha}" ]; then
+            echo "::error::Commit ${flagged_sha:0:9} carries an agent co-author trailer, but this PR was opened as ${PR_AUTHOR}, not the registered agent identity (jdwlabs-agent-bot)."
+            echo "Reopen this change through the jdwlabs-agent-bot App token — see jdwlabs/platform docs/adr/0018-agentic-app-topology.md §3."
+            exit 1
+          fi
+
+          echo "co-author-check: ${total} commit(s) inspected, no agent co-author trailer under a non-agent identity — passed"
