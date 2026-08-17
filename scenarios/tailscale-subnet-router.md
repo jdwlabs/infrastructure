@@ -1,8 +1,23 @@
 # Tailscale Subnet Router — Execution Checklist (JDWLABS-284)
 
 Sequential, copy-pasteable steps for standing up the Tailscale subnet router
-on the HAProxy VM and closing out JDWLABS-284. This is a human-executed
-checklist — no agent has SSH, console, or network access to run any of it.
+on the HAProxy VM and closing out JDWLABS-284.
+
+**Steps 1 and 2 are done — the router is live as of 2026-08-13.** Tailscale runs
+on `192.168.1.199` as `haproxy-1` / `100.103.1.41`, and `192.168.1.0/24` is
+advertised and approved (it appears in both `AllowedIPs` and `PrimaryRoutes`).
+Keep them here as the rebuild reference, but do not re-run them expecting a
+fresh install.
+
+**Step 3 is the outstanding one**, and it is what the ticket's Definition of
+Done still turns on: no off-LAN device has yet used the route, so off-LAN admin
+access is inferred from route state rather than demonstrated. It needs a tailnet
+device on a genuinely different network — a phone hotspot is enough.
+
+The earlier note here that "no agent has SSH, console, or network access to run
+any of it" was wrong by the time steps 1 and 2 ran: SSH from the executing
+session worked. It does not work from the devbox, which is a property of that
+box's key, not of the VM.
 
 For the *why* behind each step (why the HAProxy VM, why `--accept-dns=false`,
 why route approval is manual, the tailnet-policy auto-approver, and rebuild
@@ -32,7 +47,7 @@ but never touches the VM, the router, or Talos itself.
   run `sudo tailscale set --accept-routes` on it first (Windows/macOS/Android/
   iOS accept them automatically)
 
-## Step 1 — Install Tailscale and advertise the route
+## Step 1 — Install Tailscale and advertise the route (done 2026-08-13)
 
 On the LAN, SSH to the VM and install:
 
@@ -49,14 +64,29 @@ gateway; see the linked doc for why that matters on this particular host.
 Advertising the route does not activate it — it's a pending request in the
 admin console until Step 2.
 
+Then enable IP forwarding, which the install does not do and which this
+checklist originally missed:
+
+```bash
+printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\n' \
+  | sudo tee /etc/sysctl.d/99-tailscale.conf
+sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+```
+
+On the 2026-08-13 run the VM shipped with both set to `0`, and
+`tailscale status` flagged "Subnet routing is enabled, but IP forwarding is
+disabled". Skipping this yields an approved route that silently forwards
+nothing — the symptom shows up in Step 3 as unreachable hosts, which reads like
+a routing or approval fault rather than a host sysctl.
+
 **Rollback:** `sudo tailscale down` on the VM. Removes the machine from the
 tailnet's active routes immediately; nothing else on the LAN, HAProxy, or
 Talos changes as a result, so this is always safe to run.
 
-## Step 2 — Approve the route in the admin console
+## Step 2 — Approve the route in the admin console (done 2026-08-13)
 
 1. Open the Tailscale admin console → **Machines**
-2. Find the HAProxy VM's row (hostname from Step 1's login)
+2. Find the HAProxy VM's row (`haproxy-1`, from Step 1's login)
 3. Click the row → under **Subnet routes**, approve the pending
    `192.168.1.0/24` route
 
@@ -67,7 +97,16 @@ leaves the machine on the tailnet otherwise untouched.
 tailnet policy `autoApprovers` change described in
 [tailscale-subnet-router.md, Step 2](../docs/tailscale-subnet-router.md#step-2--approve-the-route-human-in-the-admin-console).)
 
-## Step 3 — Verify off-LAN and capture evidence
+## Step 3 — Verify off-LAN and capture evidence (outstanding)
+
+**This is the only step still open.** Steps 1 and 2 put the route in place and
+got it approved; nothing has yet proven a packet crosses it from another
+network. Both existing tailnet peers have been offline, so this needs a device
+brought online on a different network specifically to run these four checks.
+
+Until they are captured, describe the state as *route live and approved,
+off-LAN access not yet demonstrated* — the route being approved is necessary
+for off-LAN admin access, not sufficient.
 
 Run every command in this step from the **off-LAN tailnet device**, not from
 a LAN machine and not from a workstation with an existing `hosts` shortcut
@@ -163,6 +202,10 @@ In short: `admin_allowed_cidrs = ["192.168.1.0/24", "100.64.0.0/10"]` in
 
 ## Closing the ticket
 
-Once Steps 1–3 are all pasted into JDWLABS-284 with passing results, the
-ticket's Definition of Done is met. Step 4 stays open as a separate,
-optional follow-up — don't block this ticket on it.
+Steps 1 and 2 are done. What remains is Step 3's four evidence blocks pasted
+into JDWLABS-284; once they are there with passing results, the Definition of
+Done is met. Step 4 stays open as a separate, optional follow-up — don't block
+this ticket on it.
+
+Do not close on the strength of the route being approved alone. Three of the
+DoD's four checks are off-LAN observations, and none has been made.

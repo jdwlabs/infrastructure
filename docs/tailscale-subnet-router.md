@@ -31,28 +31,39 @@ API-driven OS with no package manager, so putting it there would mean a machine
 config change on the control plane, which is the one change class that can take
 `talosctl` and `kubectl` out together and leave no network path back in.
 
-## State this procedure assumes
+## Current state
 
-Verified 2026-08-04, and worth re-confirming before starting because the answer
-is what makes the work necessary:
+**The subnet router is live as of 2026-08-13.** Steps 1 and 2 below have been
+executed; they are kept as the reference for a rebuild, not as pending work.
 
-```
-$ tailscale status
-100.122.181.6  jakegpc                 windows  -
-100.71.248.90  jake-inspiron-5406-2n1  linux    offline, last seen 19h ago
-```
+Confirmed on the VM itself with `tailscale status --json` on 2026-08-13:
 
-Two workstations, no infrastructure host, and no advertised subnet routes from
-anyone. The tailnet exists but carries no path to the cluster.
+- Tailscale is installed on `192.168.1.199` and joined the tailnet as
+  `haproxy-1` / `100.103.1.41`
+- `192.168.1.0/24` is advertised **and approved** — the subnet appears in both
+  `Self.AllowedIPs` and `Self.PrimaryRoutes`, which is what distinguishes an
+  approved route from a merely advertised one
+- `CorpDNS: false`, i.e. the `--accept-dns=false` this runbook requires held
+
+The lockdown still holds alongside it. Re-swept from the LAN on 2026-08-17:
+`6443`, `50000`, `22` and `9000` on the WAN IP all refuse, `443` answers. No WAN
+port was opened to build this path.
+
+**Still unproven: off-LAN access has not been demonstrated.** Step 3 needs a
+tailnet device on a genuinely different network, and both existing tailnet peers
+have been offline. Until that evidence is captured the honest statement is
+*route live and approved; off-LAN access not yet demonstrated from a peer* — not
+that the capability is proven end-to-end.
 
 The LAN is `192.168.1.0/24` with its gateway, DHCP server and DNS server all at
 `192.168.1.254`.
 
-Re-checked 2026-08-13 from a machine on the LAN: `192.168.1.199` answers ICMP,
-so the host is reachable at the network layer, but SSH to it as either the
-admin user or `root` returns `Permission denied (publickey)` — this
-environment's key isn't authorized there. Still no credentialed path to the
-VM; Steps 1 and 3 below remain human-executed.
+Note for anyone re-checking this: `192.168.1.199` answers ICMP from the LAN, but
+SSH to it from the devbox still returns `Permission denied (publickey)`, and the
+devbox has no Tailscale client. Neither fact means the router is down — it means
+this state can only be re-confirmed from the VM itself or the admin console.
+Earlier notes on this runbook mistook that missing vantage point for a missing
+router.
 
 ## Prerequisites
 
@@ -62,7 +73,7 @@ VM; Steps 1 and 3 below remain human-executed.
   phone hotspot is enough. Have it ready before starting, because it is the only
   thing that can prove the result
 
-## Step 1 — install and advertise (human, on the HAProxy VM)
+## Step 1 — install and advertise (done 2026-08-13, on the HAProxy VM)
 
 ```bash
 ssh <admin-user>@192.168.1.199
@@ -78,12 +89,25 @@ larger blast radius than this change is meant to have.
 Advertising the route does not activate it. Until the next step it is a pending
 request and nothing routes.
 
+**IP forwarding is a second prerequisite this step does not install.** On the
+run that stood this up, `tailscale status` reported "Subnet routing is enabled,
+but IP forwarding is disabled" — the VM shipped with `net.ipv4.ip_forward=0` and
+`net.ipv6.conf.all.forwarding=0`. A subnet router in that state accepts route
+approval and still forwards nothing, so the failure looks like a routing or
+approval problem rather than a host sysctl. It was fixed persistently on
+`192.168.1.199` via `/etc/sysctl.d/99-tailscale.conf`; a rebuild has to repeat
+that, because the cloud-init template does not set it either.
+
 **Rollback:** `sudo tailscale down`.
 
-## Step 2 — approve the route (human, in the admin console)
+## Step 2 — approve the route (done 2026-08-13, in the admin console)
 
 In the Tailscale admin console, open the machine's row and enable the pending
 `192.168.1.0/24` subnet route.
+
+This was approved for `haproxy-1` on 2026-08-13. Whether the `autoApprovers`
+block below was also added is not recorded anywhere outside the tailnet policy
+file — check the console before assuming a rebuild will re-approve itself.
 
 Approval is a per-machine, per-route consent step and is deliberately manual —
 a node advertising a route it should not carry is a routing hijack, so the
@@ -108,14 +132,21 @@ is the only record that it exists.
 **Rollback:** disable the route in the console. Takes effect within seconds and
 leaves the machine on the tailnet.
 
-## Step 3 — verify from off-LAN
+## Step 3 — verify from off-LAN (outstanding)
+
+**This is the step that is still open.** The route is approved, but nothing has
+yet sent traffic over it from another network, so "off-LAN admin access works"
+remains an inference from the route state rather than an observation. Both
+tailnet peers have been offline, and neither the devbox nor any agent session
+has a device on a different network.
 
 Run these from the tailnet device on the other network, **not** from a LAN
 machine, and not from the workstation whose `hosts` file already shortcuts the
 name. All four must hold.
 
 ```bash
-tailscale status                       # HAProxy VM present, online, route listed
+# Plain `tailscale status` does not print routes — approved routes need --json
+tailscale status --json | jq '.Peer[] | select(.PrimaryRoutes) | {name: .HostName, online: .Online, routes: .PrimaryRoutes}'
 
 kubectl get nodes                      # expect 8 nodes
 talosctl -e 192.168.1.199 -n <cp-ip> version
@@ -166,9 +197,10 @@ which takes precedence over the tfvars value.
 **Updated 2026-08-09:** the VM at `192.168.1.199` is no longer hand-built —
 `terraform/haproxy-node.tf` provisions it (`haproxy_vms` in the live tfvars
 now holds one entry) and `scenarios/haproxy-vm-rebuild.md` records the cutover
-that made it so. This runbook (Tailscale) predates that change and was never
-re-run against the Terraform-managed VM, so nothing here assumes otherwise —
-this section is about what stays a manual step even now.
+that made it so. Steps 1 and 2 were then run against that Terraform-managed VM
+on 2026-08-13 — so the live router sits on a VM whose shell Terraform owns but
+whose tailnet membership it does not. This section is about what stays a manual
+step even now.
 
 Tailscale is intentionally **not** in the cloud-init template: joining a
 tailnet needs an auth key, and putting one in day-0 user-data writes a
@@ -177,6 +209,10 @@ That's unchanged by the VM becoming Terraform-managed. A future rebuild
 (`scenarios/haproxy-vm-rebuild.md`) therefore still repeats step 1 of this
 runbook by hand, or joins with a short-lived ephemeral key issued at rebuild
 time — Terraform owning the VM shell doesn't own tailnet membership.
+
+A rebuild also drops the IP-forwarding sysctl from step 1 and the route
+approval from step 2. Neither is in Terraform, so both have to be redone before
+the rebuilt VM routes anything.
 
 ## What this does not do
 
