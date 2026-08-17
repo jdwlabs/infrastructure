@@ -8,32 +8,74 @@ on:
     branches: [main]
     paths: ['bootstrap/**']
 
+permissions:
+  contents: read
+
+# Cancel superseded PR runs; a main-push always runs the gates to completion.
+concurrency:
+  group: bootstrap-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: bootstrap
+    # Test tooling: sops/age for the internal/secrets vault round-trips,
+    # talosctl for the internal/talos config-generation tests. Bump via the
+    # latest releases of getsops/sops, FiloSottile/age, and siderolabs/talos
+    # (talosctl is pinned to the repo's target Talos version for stable output).
+    env:
+      SOPS_VERSION: v3.13.3
+      AGE_VERSION: v1.3.1
+      TALOS_VERSION: v1.13.8
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: bootstrap/go.mod
-      # Test tooling: sops/age for the internal/secrets vault round-trips,
-      # talosctl for the internal/talos config-generation tests. Bump via the
-      # latest releases of getsops/sops, FiloSottile/age, and siderolabs/talos
-      # (talosctl is pinned to the repo's target Talos version for stable output).
+
+      # All three versions are in the key and there are no restore-keys on
+      # purpose: a prefix restore would serve binaries from a superseded
+      # version set, so bumping any constant above must miss.
+      - name: Cache sops, age, and talosctl
+        id: tool-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            /usr/local/bin/sops
+            /usr/local/bin/age
+            /usr/local/bin/age-keygen
+            /usr/local/bin/talosctl
+          key: bootstrap-tools-${{ runner.os }}-sops-${{ env.SOPS_VERSION }}-age-${{ env.AGE_VERSION }}-talos-${{ env.TALOS_VERSION }}
+
+      # sops and talosctl checksums come from the checksum file each project
+      # ships as a release asset (sops-v3.13.3.checksums.txt, sha256sum.txt).
+      # age publishes no checksum file, only a sigsum .proof, so its hash was
+      # computed from the published tarball itself and is unattested.
+      # Re-derive all three whenever a version above moves.
       - name: Install sops, age, and talosctl
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
         run: |
-          SOPS_VERSION=v3.13.3
-          AGE_VERSION=v1.3.1
-          TALOS_VERSION=v1.13.8
-          sudo curl -fsSL "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64" -o /usr/local/bin/sops
-          sudo chmod +x /usr/local/bin/sops
-          curl -fsSL "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz" | tar -xz -C /tmp
-          sudo install /tmp/age/age /tmp/age/age-keygen /usr/local/bin/
-          sudo curl -fsSL "https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/talosctl-linux-amd64" -o /usr/local/bin/talosctl
-          sudo chmod +x /usr/local/bin/talosctl
+          curl -fsSL "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64" -o sops
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
+          sudo install -m 0755 sops /usr/local/bin/sops
+
+          curl -fsSL "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz" -o age.tar.gz
+          echo "bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377  age.tar.gz" | sha256sum -c -
+          tar -xzf age.tar.gz
+          sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
+
+          curl -fsSL "https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/talosctl-linux-amd64" -o talosctl
+          echo "406b56f9e4ff03b1557cc941b1f163aec8a6ebb36e28f0bbbe6d083589529261  talosctl" | sha256sum -c -
+          sudo install -m 0755 talosctl /usr/local/bin/talosctl
+
+      # Runs on a cache hit too, so a restored cache is proven executable
+      # before any test depends on it.
+      - name: Verify tool versions
+        run: |
           sops --version
           age --version
           talosctl version --client

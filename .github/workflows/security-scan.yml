@@ -2,12 +2,22 @@ name: Security Scan
 
 on:
   pull_request:
+  # The main-branch run stays: SARIF only populates the code-scanning alert
+  # list from the default branch. Docs-only pushes can't change what the
+  # scanners see, so they're filtered out rather than re-scanning an
+  # otherwise byte-identical tree.
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
 
 permissions:
   contents: read
   security-events: write
+
+# Supersede in-flight PR scans; a main-push must finish so its SARIF lands.
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scan:
