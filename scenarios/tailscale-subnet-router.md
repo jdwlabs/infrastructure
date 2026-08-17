@@ -95,7 +95,7 @@ leaves the machine on the tailnet otherwise untouched.
 
 (Optional, for surviving reinstalls without repeating this click — the
 tailnet policy `autoApprovers` change described in
-[tailscale-subnet-router.md, Step 2](../docs/tailscale-subnet-router.md#step-2--approve-the-route-human-in-the-admin-console).)
+[tailscale-subnet-router.md, Step 2](../docs/tailscale-subnet-router.md#step-2--approve-the-route-done-2026-08-13-in-the-admin-console).)
 
 ## Step 3 — Verify off-LAN and capture evidence (outstanding)
 
