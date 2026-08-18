@@ -82,3 +82,49 @@ features:
   tx-tcp-segmentation: false
   tx-tcp6-segmentation: false
   rx-gro: false
+---
+# open-iscsi's compiled-in defaults govern every session on this node: the
+# iscsi-tools extension ships no iscsid.conf and Talos creates none, so
+# /etc/iscsi holds nothing but initiatorname.iscsi. Those defaults assume a
+# multipath SAN, where giving up on an unresponsive path after five seconds is
+# free because a second path takes the I/O. There is a single portal to the NAS
+# here and no second path, so giving up fast gives up the filesystem: the SCSI
+# layer returns EIO, ext4 aborts the journal, and the mount latches read-only
+# until it is unmounted and repaired. A NAS that is merely slow has to be
+# waited out rather than abandoned.
+#
+# noop_out_timeout 30s — the liveness probe has to outlast how long a busy pool
+# can take to answer a control PDU. A txg sync under write pressure, or a scrub
+# competing for the same spindles, stalls the ZIO pipeline for tens of seconds;
+# ZFS's own hung-I/O threshold sits an order of magnitude beyond that, so it
+# treats such stalls as slow rather than broken. 30s clears the realistic stall
+# band with margin and stops well short of the point where a stall is better
+# read as a failure.
+#
+# noop_out_interval 10s — with the timeout above, a genuinely dead target is
+# detected in 40s instead of 10s. That is the cost side of this trade and it is
+# accepted deliberately: a dead target stays dead and waiting longer changes
+# nothing, whereas a filesystem abandoned prematurely needs a human with fsck.
+#
+# replacement_timeout 300s — the window in which the SCSI layer queues I/O
+# rather than erroring it, and the last thing standing between a dropped
+# session and an aborted journal. Sized to cover a target-service restart and
+# an ordinary appliance reboot including pool import. Not longer, because past
+# that point the workload is already down from the application's perspective
+# and an honest EIO beats an unbounded uninterruptible hang that also blocks
+# umount, pod deletion and node drain. Not disabled (0 or -1) for that same
+# reason.
+#
+# Worker-only: control-plane nodes attach no iSCSI volumes and have no
+# /var/lib/iscsi node database at all. These values are read when a node record
+# is created at attach time, so a volume already attached keeps the old ones
+# until it is detached and re-staged.
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: iscsid
+configFiles:
+  - content: |
+      node.conn[0].timeo.noop_out_interval = 10
+      node.conn[0].timeo.noop_out_timeout = 30
+      node.session.timeo.replacement_timeout = 300
+    mountPath: /etc/iscsi/iscsid.conf
