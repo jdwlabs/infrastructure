@@ -159,3 +159,161 @@ re-apply that node's machine config, or set the offload back directly with
 `talosctl -n <node-ip> patch machineconfig` re-adding the `EthernetConfig`
 document. Confirm with `talosctl -n <node-ip> get ethernetstatus flannel.1`
 before declaring the node healthy.
+
+## iSCSI initiator timeouts — Talos-layer rollout
+
+### Background
+
+A transient stall on the NAS took an ext4 volume permanently read-only. The
+chain: the initiator's NOP-Out ping went unanswered for five seconds, the
+connection was torn down, session recovery did not complete inside the
+120-second replacement window, the SCSI layer returned `EIO`, ext4 aborted the
+journal and latched the mount read-only. The session recovered on its own
+minutes later and the device was never faulty — but a read-only-latched ext4
+mount does not heal when the device comes back. It stays read-only until the
+volume is unmounted and the journal replayed, so a network-length event
+becomes an outage that needs a human.
+
+It happened twice in one day, which rules out a one-off.
+
+Those two numbers — a 5-second NOP-Out timeout inside a 120-second replacement
+window — are not configured anywhere. They are open-iscsi's compiled-in
+defaults, and they apply because **there is no `iscsid.conf` on these nodes at
+all**:
+
+```bash
+talosctl -n <worker-ip> ls -l /etc/iscsi
+# initiatorname.iscsi is the only entry
+```
+
+The `iscsi-tools` extension builds open-iscsi with `-Dhomedir=/etc/iscsi`, so
+`/etc/iscsi/iscsid.conf` is the file it would read, then deletes its own `/etc`
+during install on the grounds that Talos generates the initiator name itself.
+Nothing puts a config file back. Confirm the resulting values on any attached
+volume by reading the node record the initiator wrote:
+
+```bash
+talosctl -n <worker-ip> ls -r /var/lib/iscsi/nodes
+talosctl -n <worker-ip> read /var/lib/iscsi/nodes/<target-iqn>/<portal> \
+  | grep -E 'noop_out|replacement_timeout'
+```
+
+### Mechanism: a Talos `ExtensionServiceConfig` document
+
+The defaults suit a multipath SAN, where abandoning an unresponsive path in
+five seconds costs nothing because a second path picks the I/O up. There is one
+portal to the NAS and no second path, so abandoning it costs the filesystem.
+The worker role patch therefore ships an `iscsid.conf` carrying a 30-second
+NOP-Out timeout, a 10-second NOP-Out interval and a 300-second replacement
+timeout; the reasoning for each number is in the comment above the document in
+`bootstrap/internal/talos/patches/worker.yaml`.
+
+Why `ExtensionServiceConfig` rather than the alternatives:
+
+- **`machine.files`** writes into `/etc` through a bind-mount overlay. It is
+  the obvious route and it is the wrong one: it is reported upstream to leave
+  nodes completely unresponsive after the next reboot, which is a far worse
+  failure than the one being fixed.
+- **`ExtensionServiceConfig`** is the supported way to hand a config file to an
+  extension service. Talos writes the content under its own state directory and
+  bind-mounts it read-only at the requested path inside the service container.
+  That is the mount namespace that matters here: the CSI driver does not carry
+  its own initiator, it runs the host binary through
+  `nsenter --mount=/proc/<iscsid-pid>/ns/mnt`, so the `iscsiadm` that creates
+  node records reads the `iscsid.conf` visible to the `ext-iscsid` service.
+- **Rebuilding the extension** with a baked-in config would change the Image
+  Factory schematic ID, which is a schematic migration rather than a config
+  change — much larger, and it puts the values somewhere no one thinks to look.
+
+**Unverified before rollout, and the reason the first node is a canary.** The
+extension bind-mounts host `/etc/iscsi` into its container read-only, and
+`iscsid.conf` does not exist inside it. Whether the runtime can create that
+mountpoint on a read-only parent to land the bind mount has not been proven
+here — only that the document itself validates (`talosctl validate`). If it
+cannot, `ext-iscsid` fails to start and **that node loses iSCSI entirely**,
+which takes down every attached volume on it. Prove it on one drained worker
+before going near a second.
+
+### Rollout plan (node-by-node)
+
+Preconditions:
+
+- Rebuild `talops` so the embedded patch template carries the new document:
+  `cd bootstrap && go build -buildvcs=false -o build/ ./...`.
+- Pick a canary worker with **no** attached iSCSI volume, or drain the one it
+  has first. `talosctl -n <worker-ip> ls /var/lib/iscsi/nodes` lists what is
+  attached; an empty or missing directory means the node is free.
+- Control-plane nodes are deliberately out of scope. They attach no iSCSI
+  volumes — `/var/lib/iscsi/nodes` does not exist on any of them — so the
+  control-plane role patch is untouched.
+
+Order: canary worker first and fully verified, then the remaining workers one
+at a time.
+
+1. Regenerate and inspect the config without applying:
+
+   ```bash
+   talosctl machineconfig patch clusters/core/secrets/worker.yaml \
+     --patch @<rendered-worker-patch> -o /tmp/worker-check.yaml
+   talosctl validate --config /tmp/worker-check.yaml --mode metal
+   ```
+
+   The `ExtensionServiceConfig` document named `iscsid` must be present.
+2. **HUMAN**: apply to the canary worker. Applying a changed
+   `ExtensionServiceConfig` restarts `ext-iscsid`, which is why the node is
+   drained first.
+3. The service must come back — this is the step the canary exists for:
+
+   ```bash
+   talosctl -n <worker-ip> services | grep ext-iscsid
+   talosctl -n <worker-ip> logs ext-iscsid | tail -20
+   ```
+
+   `Running` is the pass condition. Anything else means the config-file mount
+   did not land; roll back that node immediately (see below) before the drain
+   is lifted.
+4. Confirm the file is actually visible to the initiator, not merely present
+   in the machine config:
+
+   ```bash
+   talosctl -n <worker-ip> get extensionserviceconfigs
+   ```
+5. Prove the values reach a node record. They are read when a record is
+   created at attach time, so an already-attached volume keeps the old
+   numbers — schedule a workload onto the node and read the record back:
+
+   ```bash
+   talosctl -n <worker-ip> read /var/lib/iscsi/nodes/<target-iqn>/<portal> \
+     | grep -E 'noop_out|replacement_timeout'
+   ```
+
+   Expect `noop_out_interval = 10`, `noop_out_timeout = 30`,
+   `replacement_timeout = 300`. Old values here mean the mount landed but the
+   initiator is not reading it — stop, do not roll further.
+6. **Check the blast radius before the second node.** Longhorn attaches its own
+   volumes over iSCSI on the same workers and inherits the same defaults today
+   (`replacement_timeout = 120`, both NOP-Out values `5`). Whether its
+   initiator calls run in the `ext-iscsid` mount namespace or the host's has
+   not been established, so whether Longhorn picks these values up is an open
+   question rather than a known outcome. Read back a freshly created Longhorn
+   node record (`iqn.2019-10.io.longhorn:*`) on the canary and record which way
+   it went. If Longhorn does inherit them, the trade is different for it: its
+   target is a pod on the same node, and when that pod is recreated at a new
+   address reconnection is impossible, so a longer replacement timeout only
+   lengthens the hang before the same failure.
+7. Repeat 2–5 for each remaining worker. Reboot the canary once and re-run
+   step 5 to prove the config survives a reboot.
+
+### Rollback
+
+Per node, and immediately if `ext-iscsid` does not return to `Running`: revert
+that node's machine config to the previous revision and re-apply. The node
+returns to open-iscsi's compiled defaults — the exposure this change exists to
+remove, but a working initiator.
+
+Fleet-wide: revert the patch-template commit, rebuild `talops`, regenerate and
+re-apply per node. No reboot is required, but `ext-iscsid` restarts on each
+node, so drain each one first.
+
+There is no second safety net. Until every worker is rolled, nodes are in two
+different states, and a volume's exposure depends on which worker it lands on.
