@@ -112,11 +112,48 @@ forwards nothing.
    Bedrock's default port while the cluster keeps a NodePort-range port.
 4. **Add**.
 
+### The gateway's device names are misleading
+
+The BGW learns names from DHCP option 12, which a client sends when it takes a
+lease. Statically addressed hosts never perform that exchange, so they never
+send a name and the gateway falls back to the MAC vendor string — or to a stale
+label left by whatever previously held the address.
+
+The effect is visible in **Home Network → Device List**: every `dhcp` device
+carries a correct name, and every `static` one is wrong or generic. Three
+devices appear as `Proxmox Server Solutions GmbH`, and the HAProxy VM appears
+as something it has never been.
+
+Select devices by this table, not by the name in the dropdown:
+
+| Device | Address | Shown in the gateway as | MAC |
+|---|---|---|---|
+| HAProxy VM (`haproxy-1`) | `192.168.1.199` | **`Windows 10`** | `bc:24:11:1e:cd:65` |
+| devbox | `192.168.1.56` | `Proxmox Server Solutions GmbH` | `bc:24:11:11:dd:af` |
+| GPU VM | `192.168.1.50` | `Proxmox Server Solutions GmbH` | `bc:24:11:ce:9c:f0` |
+
+Confirm against the MAC in the Device List before trusting a name, and re-derive
+it if a VM is rebuilt:
+
+```bash
+ssh haproxy-admin@192.168.1.199 'ip -4 addr show eth0; cat /sys/class/net/eth0/address'
+```
+
+There is no API on the BGW320 to rename a device, so nothing in this repo can
+correct these labels. Switching the VMs to DHCP with reservations would fix the
+names permanently, at the cost of making the gateway the source of truth for
+addressing — which is the opposite of how these hosts are provisioned today.
+
+Do **not** use *Clear and Rescan for Devices* to tidy this up. It clears the
+stale label, but the statically addressed hosts then all resolve to the same
+vendor string, replacing one uniquely-wrong name with three identical ones.
+
 ## Step 3 — attach the service to the node
 
 1. Back on **Firewall → NAT/Gaming**.
 2. **Service** — select `minecraft-fwb`.
-3. **Needed by Device** — select the node reserved in Step 1 (`192.168.1.163`).
+3. **Needed by Device** — select the HAProxy VM. It is listed as `Windows 10`,
+   not by its hostname; see the table above.
 4. **Add**, then **Save**.
 
 The device list is populated from DHCP leases. A node that has never taken a
