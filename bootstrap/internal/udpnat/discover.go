@@ -32,10 +32,12 @@ type serviceList struct {
 
 // ForwardsFromServices extracts forwards from `kubectl get svc -A -o json`.
 //
-// A Service qualifies when it carries the annotation, is of type NodePort, and
+// A Service qualifies when it carries the annotation, allocates a NodePort, and
 // exposes exactly one UDP port. Anything annotated but unusable is an error
 // rather than a skip: the operator asked for it to be published, so silently
 // omitting it would present as "the port forward mysteriously does nothing".
+// One unusable service therefore fails the whole render — see the package doc
+// for the obligation that places on the caller.
 func ForwardsFromServices(raw []byte) ([]Forward, error) {
 	var list serviceList
 	if err := json.Unmarshal(raw, &list); err != nil {
@@ -55,8 +57,10 @@ func ForwardsFromServices(raw []byte) ([]Forward, error) {
 			return nil, fmt.Errorf("udpnat: %s has non-numeric %s %q", id, AnnotationExternalPort, val)
 		}
 
-		if svc.Spec.Type != "NodePort" {
-			return nil, fmt.Errorf("udpnat: %s is annotated for UDP publishing but is type %s, not NodePort",
+		// LoadBalancer allocates a NodePort too, so it is publishable by the
+		// same rules; only types that never get one are rejected.
+		if svc.Spec.Type != "NodePort" && svc.Spec.Type != "LoadBalancer" {
+			return nil, fmt.Errorf("udpnat: %s is annotated for UDP publishing but is type %s, which allocates no NodePort",
 				id, svc.Spec.Type)
 		}
 
