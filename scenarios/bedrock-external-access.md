@@ -116,11 +116,24 @@ correct forward into a host with no `udpnat` table is indistinguishable, from
 outside, from no forward at all:
 
 ```bash
+ssh haproxy-admin@192.168.1.199 'sysctl net.ipv4.ip_forward'   # expect: = 1
 ssh haproxy-admin@192.168.1.199 'sudo nft list table ip udpnat'
 ```
 
-Expect one `udp dport <external> dnat to <node-ip>:<nodeport>` line per
-published server.
+Expect `net.ipv4.ip_forward = 1`, and one `udp dport <external> dnat to
+<node-ip>:<nodeport>` line per published server. Forwarding off means the VM
+accepts the packets and drops them — no refusal, no log — because the DNAT
+destination is a *different* host.
+
+`No such file or directory` from the second command has two causes, and they
+need different responses:
+
+- **A `minecraft` table is present instead.** That is the hand-applied
+  predecessor of `udpnat`, and it is what `192.168.1.199` carries today. Do the
+  migration below before anything else. Check with
+  `sudo nft list tables`.
+- **Neither table is present.** The VM was rebuilt, or the rules were never
+  placed. Go to *Placing the nftables rules* below and come back.
 
 ## Step 2 — define the service on the gateway
 
@@ -221,8 +234,8 @@ kubectl -n jdwillmsen-prd run mcprobe --rm -i --restart=Never \
 Expect `version=… online=… max=…`.
 
 **2. The HAProxy VM answers on the external port** — the nftables leg. This is
-the check that catches both a missing `udpnat` table and a gateway configured to
-rewrite the port, and it can be run from anywhere on the LAN:
+the check that catches a missing `udpnat` table, `ip_forward` left at `0`, and
+a gateway configured to rewrite the port. It needs no off-network access:
 
 ```bash
 kubectl -n jdwillmsen-prd run mcprobe --rm -i --restart=Never \
@@ -247,6 +260,85 @@ mc-monitor status-bedrock --host mc.jdwlabs.com --port 19132
 In the game client: **Servers → Add Server**, address `mc.jdwlabs.com`, port
 `19132`.
 
+## Placing the nftables rules on the HAProxy VM
+
+No `talops` command owns this step yet, so it is done by hand. This is the
+procedure the rest of this document means by "apply the rules", and it is what
+`scenarios/haproxy-vm-rebuild.md` points at after a rebuild.
+
+The paths and unit name below are this runbook's convention. `192.168.1.199`
+was set up by hand before they were written down, so confirm against the live
+host rather than assuming — `systemctl cat udpnat-rules` and
+`sudo nft list tables` are the two answers.
+
+1. **Work out the ruleset.** The format is pinned by
+   `bootstrap/internal/udpnat/testdata/single-forward.nft` in the
+   `infrastructure` repo — one `dnat` line and one `masquerade` line per
+   published server, sorted by external port. Copy that file and extend it;
+   do not invent a layout.
+2. **Write it to the VM:**
+   ```bash
+   sudo install -d /etc/nftables.d
+   sudo tee /etc/nftables.d/udpnat.nft >/dev/null <<'EOF'
+   # ... contents from step 1 ...
+   EOF
+   ```
+3. **Apply it:**
+   ```bash
+   sudo nft -f /etc/nftables.d/udpnat.nft
+   ```
+   The file opens with `table ip udpnat` / `delete table ip udpnat` / `table ip
+   udpnat {`, which replaces the table atomically. It is safe to re-run, and it
+   never flushes.
+
+   Never run `nft flush ruleset` on this host. Tailscale's rules live in
+   `table ip filter` and are installed at runtime — flushing takes the VM off
+   the tailnet, and `nftables.service` is disabled here for exactly that reason
+   (its `/etc/nftables.conf` starts with `flush ruleset`).
+4. **Make it survive a reboot:**
+   ```bash
+   sudo tee /etc/systemd/system/udpnat-rules.service >/dev/null <<'EOF'
+   [Unit]
+   Description=UDP ingress DNAT rules
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=oneshot
+   RemainAfterExit=yes
+   ExecStart=/usr/sbin/nft -f /etc/nftables.d/udpnat.nft
+
+   [Install]
+   WantedBy=multi-user.target
+   EOF
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now udpnat-rules.service
+   ```
+5. **Verify**, with check 2 of Step 4.
+
+### Migrating off the `minecraft` table
+
+`192.168.1.199` still carries `table ip minecraft`, the hand-applied
+predecessor. It holds the same rules under a table named after the first
+workload; `udpnat` replaces it because the generator is generic over UDP
+services.
+
+**Delete the old table first, then apply the new one.** The order matters more
+than the brief gap it opens:
+
+```bash
+sudo nft delete table ip minecraft
+sudo nft -f /etc/nftables.d/udpnat.nft
+```
+
+Both tables register a `prerouting` base chain at priority `dstnat`, and both
+match `udp dport 19132`. With both loaded, which one wins is chain registration
+order — undefined between tables. NAT binds on the first packet of a flow and
+the decision is held for the life of the conntrack entry, so a client that
+lands on the losing chain stays wrong until its entry expires, long after the
+tables look correct. Deleting first costs a few seconds of dropped packets,
+which Bedrock clients retry through.
+
 ## Adding another server
 
 **Nothing on the gateway changes.** The range rule from Step 2 already carries
@@ -261,14 +353,20 @@ In the game client: **Servers → Add Server**, address `mc.jdwlabs.com`, port
      annotations:
        platform.jdwlabs.io/udp-external-port: "19133"
    ```
-3. Re-render and apply the nftables rules on the HAProxy VM. The generator reads
-   the annotation and emits the DNAT and masquerade rules; it refuses a port
+3. Re-render and apply the nftables rules on the HAProxy VM — the procedure in
+   *Placing the nftables rules* above, from step 1. The generator reads the
+   annotation and emits the DNAT and masquerade rules; it refuses a port
    outside `19132-19141`, because the gateway forwards nothing else.
 4. Add a row to the table at the top of this document.
 5. Verify with check 2 of Step 4 against the new port, then from outside.
 
-An eleventh server is the first one that needs the gateway touched again — widen
-the range in Step 2 and the generator's bounds together, in that order.
+An eleventh server is the first one that needs the gateway touched again. Widen
+the range on the gateway first, then the generator's bounds — three places, all
+required: `ExternalPortMin`/`ExternalPortMax` in
+`bootstrap/internal/udpnat/config.go`, and the literals in
+`TestExternalPortRangeMatchesTheRouterRule`, which hardcodes `19132`/`19141` and
+fails until it is updated. That test failing is the intended reminder that the
+router rule and the generator must agree.
 
 ## Known gaps
 
@@ -313,8 +411,10 @@ without a server behind it.
 **Remove one server, keep the ingress:**
 
 1. Drop the `platform.jdwlabs.io/udp-external-port` annotation from its Service.
-2. Re-render and apply the rules on the HAProxy VM. The DNAT and masquerade
-   lines for that port disappear; the table and every other server stay.
+2. Re-render and apply the rules on the HAProxy VM — the procedure in *Placing
+   the nftables rules* above, from step 1. The DNAT and masquerade lines for
+   that port disappear; the table and every other server stay, because
+   `nft -f` replaces the whole table atomically.
 3. Confirm the port is gone, and that its neighbours survived:
    ```bash
    ssh haproxy-admin@192.168.1.199 'sudo nft list table ip udpnat'
@@ -330,13 +430,20 @@ with no rule for it, which drops the packets — the correct outcome.
    attached services and delete the **attachment** first, then **Save**. The
    service definition cannot be deleted while a device still references it.
 2. Open **Custom Services**, select `bedrock-udp`, and delete the definition.
-3. Optionally remove the nftables table on the VM. Leaving it costs nothing once
-   the forward is gone, but removing it keeps the host honest:
+3. Optionally remove the nftables rules from the VM. Leaving them costs nothing
+   once the forward is gone, but removing them keeps the host honest. Disable
+   the unit as well as deleting the table — deleting only the table leaves it
+   re-applied on the next reboot:
    ```bash
-   ssh haproxy-admin@192.168.1.199 'sudo nft delete table ip udpnat'
+   ssh haproxy-admin@192.168.1.199 \
+     'sudo systemctl disable --now udpnat-rules.service && sudo nft delete table ip udpnat'
    ```
    Delete only that table. The host also runs Tailscale, whose rules live in
    `table ip filter` — `nft flush ruleset` takes the VM off the tailnet.
+
+   Leave `net.ipv4.ip_forward` alone. The Tailscale subnet router on this host
+   needs it too, so reverting it would silently break LAN routing over the
+   tailnet — a failure with no connection to Bedrock at all.
 4. Confirm from off-network that the port no longer answers:
    ```bash
    mc-monitor status-bedrock --host mc.jdwlabs.com --port 19132
