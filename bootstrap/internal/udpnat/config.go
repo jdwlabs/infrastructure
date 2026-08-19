@@ -6,11 +6,24 @@
 // same shape: one address at the edge, one router rule, and everything after
 // that driven from cluster state rather than hand-edited.
 //
+// The edge is the HAProxy VM and nothing else. The router forwards the whole
+// [ExternalPortMin]-[ExternalPortMax] range to that one host with no port
+// rewrite, so every external port arrives unchanged and the DNAT rules here are
+// the only place a port is translated. Publishing another service is an
+// annotation on its Service, never a new router rule.
+//
 // The rules live in their own nftables table and never flush the ruleset. The
 // VM also runs Tailscale, whose rules sit in table ip filter and are managed at
 // runtime; /etc/nftables.conf ships with "flush ruleset" at the top, which is
 // why nftables.service stays disabled on that host and these rules are applied
 // by a dedicated unit instead.
+//
+// Discovery is all-or-nothing: [ForwardsFromServices] fails the whole render
+// rather than skipping a service the operator asked to publish, so one bad
+// annotation in any namespace yields an error and no forwards. Whatever wires
+// this package to the host must therefore treat an error as "leave the live
+// ruleset alone" — writing the empty render would take every published service
+// offline to fix a typo.
 package udpnat
 
 import (
@@ -19,6 +32,20 @@ import (
 	"net"
 	"sort"
 	"text/template"
+)
+
+// tableName is the nftables table these rules own. It is scoped to this
+// package's purpose rather than to any one workload, because a second UDP
+// service must not need a second table.
+const tableName = "udpnat"
+
+// The router forwards exactly this range to the HAProxy VM. A port outside it
+// renders valid nftables that no packet ever reaches, so the range is enforced
+// here rather than discovered later as "the forward mysteriously does nothing".
+// Widening it means changing the router rule first.
+const (
+	ExternalPortMin = 19132
+	ExternalPortMax = 19141
 )
 
 // Forward is a single external UDP port published to a NodePort.
@@ -34,19 +61,28 @@ type Config struct {
 	Forwards []Forward // sorted by ExternalPort before rendering
 }
 
+// renderData is what the template sees: Config plus the table name, so the
+// table is named in exactly one place.
+type renderData struct {
+	Table    string
+	TargetIP net.IP
+	Forwards []Forward
+}
+
 const nftTemplate = `#!/usr/sbin/nft -f
 # Managed file. Generated from cluster state - do not edit by hand.
 #
 # Publishes Kubernetes UDP NodePort services at this host's address so a single
-# router rule can serve every one of them.
+# router rule can serve every one of them. The router forwards the external port
+# range here unchanged; these rules are the only port translation in the path.
 #
 # Scoped to its own table and deliberately without "flush ruleset": this host
 # also runs Tailscale, whose rules live in table ip filter. Flushing would drop
 # them, which is why nftables.service is disabled here and a dedicated unit
 # applies this file.
-table ip minecraft
-delete table ip minecraft
-table ip minecraft {
+table ip {{ .Table }}
+delete table ip {{ .Table }}
+table ip {{ .Table }} {
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
 {{- range .Forwards }}
@@ -73,8 +109,9 @@ func (c *Config) Generate() (string, error) {
 
 	seen := make(map[int]string, len(c.Forwards))
 	for _, f := range c.Forwards {
-		if f.ExternalPort <= 0 || f.ExternalPort > 65535 {
-			return "", fmt.Errorf("udpnat: %s has invalid external port %d", f.Name, f.ExternalPort)
+		if f.ExternalPort < ExternalPortMin || f.ExternalPort > ExternalPortMax {
+			return "", fmt.Errorf("udpnat: %s has external port %d outside the forwarded range %d-%d",
+				f.Name, f.ExternalPort, ExternalPortMin, ExternalPortMax)
 		}
 		if f.NodePort <= 0 || f.NodePort > 65535 {
 			return "", fmt.Errorf("udpnat: %s has invalid node port %d", f.Name, f.NodePort)
@@ -98,7 +135,8 @@ func (c *Config) Generate() (string, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, &Config{TargetIP: c.TargetIP, Forwards: sorted}); err != nil {
+	data := renderData{Table: tableName, TargetIP: c.TargetIP, Forwards: sorted}
+	if err := tmpl.Execute(&buf, &data); err != nil {
 		return "", fmt.Errorf("udpnat: rendering template: %w", err)
 	}
 	return buf.String(), nil

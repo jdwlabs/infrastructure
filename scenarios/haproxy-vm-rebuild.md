@@ -171,6 +171,50 @@ in a quiet window; DNS, `talosconfig`, and kubeconfig never change.
    address is the signal that this runbook has actually landed: until then the
    load balancer is still the hand-built one.
 
+## Restore the UDP ingress rules
+
+A rebuild restores HAProxy and stops. It does **not** restore the other thing
+this VM is: the single external UDP ingress hop. The router forwards the whole
+range `19132-19141` to `192.168.1.199` with no port rewrite, and an nftables
+`table ip udpnat` on this host DNATs each external port to the NodePort that
+owns it. That table lives only on the VM's disk, so a rebuild silently drops
+every published UDP service while the API and ingress look completely healthy.
+
+Two constraints on this host make the rules load the way they do:
+
+- `nftables.service` stays **disabled**. The distro's `/etc/nftables.conf`
+  begins with `flush ruleset`, and this VM also runs Tailscale, whose rules sit
+  in `table ip filter` and are installed at runtime. Enabling the service on a
+  rebuilt VM drops them.
+- The ruleset is therefore applied by a dedicated unit that loads only the
+  `udpnat` table, which is scoped so it can be replaced without touching
+  anything else in the ruleset.
+
+The file's contents are generated from cluster state by
+`bootstrap/internal/udpnat` — it reads every Service carrying
+`platform.jdwlabs.io/udp-external-port` and renders the DNAT and masquerade
+rules. Publishing another server is an annotation on that Service; it is never
+a new router rule and never a hand-edited line here.
+
+After cutover, confirm the table is present and points at a live NodePort:
+
+```bash
+ssh haproxy-admin@192.168.1.199 'sudo nft list table ip udpnat'
+ssh haproxy-admin@192.168.1.199 'systemctl is-enabled nftables'   # expect: disabled
+```
+
+Expect one `udp dport <external> dnat to <node-ip>:<nodeport>` line per
+published service. An empty or missing table means external UDP is down even
+though `talops haproxy status` reads healthy — the two are unrelated paths.
+
+A VM rebuilt before 2026-08 carries the hand-applied predecessor of this table,
+named `minecraft`. It is superseded, and leaving both loaded means two tables
+racing for the same ports:
+
+```bash
+ssh haproxy-admin@192.168.1.199 'sudo nft delete table ip minecraft'
+```
+
 ## Abort criteria
 
 - The plan proposes changes to any VM other than the new load balancer.
@@ -204,3 +248,10 @@ Terraform action.
 - The hand-built load balancer has no `socat`, so `talops haproxy status`
   reports backend health as unread against it. Cloud-init installs it, so the
   gap closes with the replacement — no action needed on the old VM.
+- The UDP ingress rules are generated but not yet deployed by `talops`: the
+  renderer exists and nothing calls it, so the file and its unit are still
+  placed on the VM by hand. Until a command owns that step, a rebuild needs the
+  section above followed manually, and the generator's output is the only
+  authority on what the file should contain. Whatever wires it up must treat a
+  render error as "leave the live ruleset alone" — writing an empty ruleset
+  would take every published server offline to fix one bad annotation.

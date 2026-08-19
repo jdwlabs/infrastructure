@@ -1,0 +1,24 @@
+#!/usr/sbin/nft -f
+# Managed file. Generated from cluster state - do not edit by hand.
+#
+# Publishes Kubernetes UDP NodePort services at this host's address so a single
+# router rule can serve every one of them. The router forwards the external port
+# range here unchanged; these rules are the only port translation in the path.
+#
+# Scoped to its own table and deliberately without "flush ruleset": this host
+# also runs Tailscale, whose rules live in table ip filter. Flushing would drop
+# them, which is why nftables.service is disabled here and a dedicated unit
+# applies this file.
+table ip udpnat
+delete table ip udpnat
+table ip udpnat {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    udp dport 19132 dnat to 192.168.1.163:31132 comment "jdwillmsen-prd/minecraft-fwb"
+  }
+
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    ip daddr 192.168.1.163 udp dport 31132 masquerade comment "jdwillmsen-prd/minecraft-fwb"
+  }
+}

@@ -2,6 +2,8 @@ package udpnat
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,12 +34,12 @@ func TestGenerateSortsAndRendersRules(t *testing.T) {
 	// directive rather than the substring, which also appears in the header
 	// comment explaining why the file must not flush.
 	for _, line := range strings.Split(out, "\n") {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "#") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.HasPrefix(t, "flush") {
-			panic("generated ruleset must never flush; it would drop Tailscale's rules")
+		if strings.HasPrefix(trimmed, "flush") {
+			t.Fatalf("generated ruleset must never flush; it would drop Tailscale's rules:\n%s", out)
 		}
 	}
 	// Both nat hooks must be valid nftables hook names.
@@ -94,7 +96,11 @@ func TestGenerateRejectsOutOfRangePorts(t *testing.T) {
 		name string
 		f    Forward
 	}{
-		{"external too high", Forward{Name: "a", ExternalPort: 70000, NodePort: 31132}},
+		{"external above the forwarded range", Forward{Name: "a", ExternalPort: 19142, NodePort: 31142}},
+		{"external below the forwarded range", Forward{Name: "a", ExternalPort: 19131, NodePort: 31131}},
+		// Valid as a port number, and unreachable: the router forwards only
+		// the published range, so rendering this would be a silent dead end.
+		{"external a valid port outside the forwarded range", Forward{Name: "a", ExternalPort: 19200, NodePort: 31200}},
 		{"node port zero", Forward{Name: "a", ExternalPort: 19132, NodePort: 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,10 +112,11 @@ func TestGenerateRejectsOutOfRangePorts(t *testing.T) {
 	}
 }
 
-// Pins the generator to the rules hand-applied on the HAProxy VM when Bedrock
-// was first published, so the first generated run is a no-op rather than a
-// surprise change to a live path.
-func TestGenerateMatchesRulesAppliedByHand(t *testing.T) {
+// Pins the full rendered ruleset byte for byte. The rules are applied to a live
+// host, so a diff against the file that is actually shipped is the only check
+// that catches an accidental change to the header, the table, or rule ordering.
+// Regenerate deliberately, never to make a failing test pass.
+func TestGenerateMatchesGolden(t *testing.T) {
 	c := &Config{
 		TargetIP: net.ParseIP("192.168.1.163"),
 		Forwards: []Forward{{Name: "jdwillmsen-prd/minecraft-fwb", ExternalPort: 19132, NodePort: 31132}},
@@ -118,16 +125,20 @@ func TestGenerateMatchesRulesAppliedByHand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	for _, want := range []string{
-		"table ip minecraft",
-		"delete table ip minecraft",
-		"type nat hook prerouting priority dstnat; policy accept;",
-		"udp dport 19132 dnat to 192.168.1.163:31132",
-		"type nat hook postrouting priority srcnat; policy accept;",
-		"ip daddr 192.168.1.163 udp dport 31132 masquerade",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("generated ruleset missing %q:\n%s", want, out)
-		}
+	want, err := os.ReadFile(filepath.Join("testdata", "single-forward.nft"))
+	if err != nil {
+		t.Fatalf("reading golden: %v", err)
+	}
+	if out != string(want) {
+		t.Errorf("rendered ruleset does not match testdata/single-forward.nft\n--- want ---\n%s\n--- got ---\n%s", want, out)
+	}
+}
+
+// The bounds are a published contract with the router rule, not an internal
+// detail: a reader changing one must know to change the other.
+func TestExternalPortRangeMatchesTheRouterRule(t *testing.T) {
+	if ExternalPortMin != 19132 || ExternalPortMax != 19141 {
+		t.Errorf("range is %d-%d; the router forwards 19132-19141 and both must agree",
+			ExternalPortMin, ExternalPortMax)
 	}
 }
