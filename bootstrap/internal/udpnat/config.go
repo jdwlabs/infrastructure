@@ -50,6 +50,9 @@ const (
 
 // Forward is a single external UDP port published to a NodePort.
 type Forward struct {
+	// Name is interpolated into a quoted nft comment unescaped. Safe because it
+	// is built from a namespace and a Service name, and Kubernetes object names
+	// cannot contain a quote; revisit if it ever carries operator-supplied text.
 	Name         string // service identity, for the rule comment only
 	ExternalPort int    // port the edge listens on, what players connect to
 	NodePort     int    // NodePort the traffic is rewritten to
@@ -105,6 +108,11 @@ table ip {{ .Table }} {
 func (c *Config) Generate() (string, error) {
 	if c.TargetIP == nil {
 		return "", fmt.Errorf("udpnat: TargetIP is required")
+	}
+	// An IPv6 target renders "dnat to fe80::1:31132", which nft rejects only at
+	// apply time on the host. The table is ip (v4), so catch it at render.
+	if c.TargetIP.To4() == nil {
+		return "", fmt.Errorf("udpnat: TargetIP %s is not IPv4; table ip carries v4 only", c.TargetIP)
 	}
 
 	seen := make(map[int]string, len(c.Forwards))
