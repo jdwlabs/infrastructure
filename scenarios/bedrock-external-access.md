@@ -33,6 +33,30 @@ public address.
 The consequence shapes everything below: **servers are told apart by port, not
 by name.** DNS gets a player to the house; the port number picks the room.
 
+## The path a packet takes
+
+Three hops, and only the middle one is described by this runbook:
+
+```
+player ──19132/udp──▶ BGW320-500        one rule, the range 19132-19141,
+                      192.168.1.254     forwarded with no port rewrite
+       ──19132/udp──▶ HAProxy VM        nftables table ip udpnat DNATs
+                      192.168.1.199     each external port to a NodePort
+       ──31132/udp──▶ cluster node      NodePort answers on every node
+                      192.168.1.163
+```
+
+The HAProxy VM is the **single external UDP ingress hop**. It is statically
+addressed and already under Terraform management, which is why the router rule
+can be written once and left alone.
+
+The nftables rules on that VM are generated from cluster state by
+`bootstrap/internal/udpnat`: it reads every Service carrying
+`platform.jdwlabs.io/udp-external-port` and renders the DNAT and masquerade
+rules. **Publishing a server is an annotation on its Service, not a new router
+rule** — see `scenarios/haproxy-vm-rebuild.md` for how that state lives on the
+VM and how to restore it after a rebuild.
+
 ## The port convention
 
 External UDP `191NN` maps to NodePort `311NN`. The last two digits match, which
@@ -49,6 +73,11 @@ The first server deliberately uses **19132**, Bedrock's default port. A client
 fills that in by itself, so players type a bare hostname and nothing else.
 Every subsequent server costs the player an explicit `:port`.
 
+The gateway forwards the whole range **19132-19141** to one address and never
+rewrites the port. Ten servers therefore cost one router rule, defined once in
+Step 2 and never edited again. The 191NN-to-311NN translation happens further
+in, on the HAProxy VM, from cluster state.
+
 Java Edition, if one is ever added, is **TCP** rather than UDP and conventionally
 25565 — a separate forward with a different protocol, not part of this range.
 
@@ -60,35 +89,38 @@ Java Edition, if one is ever added, is **TCP** rather than UDP and conventionall
   an empty allowlist means anyone with an Xbox account can join.
 - The gateway's **Device Access Code** — printed on a sticker on the side of
   the BGW320-500. It is not the Wi-Fi password.
+- SSH to the HAProxy VM as `haproxy-admin`, to read and apply its nftables
+  rules. That VM is the single external UDP ingress hop; without it the gateway
+  half of this runbook forwards into a black hole.
 
-## Step 1 — pin the target node's address
+## Step 1 — confirm the edge address
 
-The forward points at one node. NodePort answers on *every* node, so any of
-them works; what matters is that the address does not move.
+The forward points at exactly one device: the HAProxy VM. Everything downstream
+of it is decided by nftables on that host, not by the gateway.
 
-Worker nodes take their address by DHCP. Only the control planes are pinned by
-static patches (`clusters/core/patches/node-20*.yaml` → `.241`, `.98`, `.125`).
-Forwarding to a DHCP address works until the lease changes, and then breaks
-silently, months later, with no obvious cause.
-
-So reserve it on the gateway:
-
-1. Browse to `http://192.168.1.254` and sign in with the Device Access Code.
-2. **Home Network → IP Allocation**.
-3. Find the node by MAC and set its allocation to fixed/reserved.
-
-Current target:
-
-| Node | Address | MAC |
+| Device | Address | MAC |
 |---|---|---|
-| `talos-lx0-6a4` | `192.168.1.163` | `bc:24:11:16:c2:e1` |
+| HAProxy VM (`haproxy-1`) | `192.168.1.199` | `bc:24:11:1e:cd:65` |
 
-Confirm the MAC before relying on this table — it changes if the VM is rebuilt:
+No gateway reservation is needed. The address is set by cloud-init from the
+`haproxy_vms` entry in the vaulted tfvars, so Terraform is its source of truth —
+see `scenarios/haproxy-vm-rebuild.md`. Confirm it, and re-derive the MAC if the
+VM has been rebuilt:
 
 ```bash
-export TALOSCONFIG=clusters/core/secrets/talosconfig
-talosctl -e 192.168.1.163 -n 192.168.1.163 get links eth0 -o yaml | grep hardwareAddr
+ssh haproxy-admin@192.168.1.199 'ip -4 addr show eth0; cat /sys/class/net/eth0/address'
 ```
+
+Confirm the VM is also carrying the UDP rules before touching the gateway. A
+correct forward into a host with no `udpnat` table is indistinguishable, from
+outside, from no forward at all:
+
+```bash
+ssh haproxy-admin@192.168.1.199 'sudo nft list table ip udpnat'
+```
+
+Expect one `udp dport <external> dnat to <node-ip>:<nodeport>` line per
+published server.
 
 ## Step 2 — define the service on the gateway
 
@@ -98,19 +130,28 @@ forwards nothing.
 
 1. **Firewall → NAT/Gaming**.
 2. Open **Custom Services** (a link on that page, not a top-level menu).
-3. Create the service:
+3. Create the service — **once, for the whole range**:
 
    | Field | Value |
    |---|---|
-   | Service Name | `minecraft-fwb` |
-   | Global Port Range | `19132` to `19132` |
-   | Base Host Port | `31132` |
+   | Service Name | `bedrock-udp` |
+   | Global Port Range | `19132` to `19141` |
+   | Base Host Port | `19132` |
    | Protocol | **UDP** |
 
    `Global Port Range` is what the internet connects to; `Base Host Port` is
-   what the LAN device receives on. They differ here on purpose — players get
-   Bedrock's default port while the cluster keeps a NodePort-range port.
+   what the LAN device receives on. They are **deliberately equal** here: the
+   gateway must deliver each port unchanged, because the HAProxy VM's nftables
+   rules match on the external port. Setting `Base Host Port` to a NodePort
+   (`31132`) makes the gateway rewrite the port before delivery, and the DNAT
+   rule then matches on a port that never arrives — the forward looks correct
+   in the UI and drops every packet.
+
+   All port translation belongs to nftables, and only to nftables.
 4. **Add**.
+
+This is the only gateway rule this design ever needs. Servers two through ten
+are already covered by the range.
 
 ### The gateway's device names are misleading
 
@@ -148,20 +189,28 @@ Do **not** use *Clear and Rescan for Devices* to tidy this up. It clears the
 stale label, but the statically addressed hosts then all resolve to the same
 vendor string, replacing one uniquely-wrong name with three identical ones.
 
-## Step 3 — attach the service to the node
+## Step 3 — attach the service to the HAProxy VM
 
 1. Back on **Firewall → NAT/Gaming**.
-2. **Service** — select `minecraft-fwb`.
-3. **Needed by Device** — select the HAProxy VM. It is listed as `Windows 10`,
-   not by its hostname; see the table above.
+2. **Service** — select `bedrock-udp`.
+3. **Needed by Device** — select the HAProxy VM at `192.168.1.199`, MAC
+   `bc:24:11:1e:cd:65`. It is listed as `Windows 10`, not by its hostname; see
+   the table above.
 4. **Add**, then **Save**.
 
-The device list is populated from DHCP leases. A node that has never taken a
-lease may not appear; Step 1 resolves that as a side effect.
+The device list is populated from DHCP leases, and the HAProxy VM is statically
+addressed — it never takes one. It appears under a stale or vendor label, and on
+a freshly rescanned gateway it may not appear at all. If it is missing, give it
+a temporary DHCP lease long enough for the gateway to learn it, attach the
+service, then restore the static address; the attachment is keyed on the MAC and
+survives. Match on the MAC in every case, never on the displayed name.
 
 ## Step 4 — verify
 
-From inside the LAN, confirm the NodePort itself still answers:
+Verify hop by hop, in order. Each check isolates one of the three legs, so a
+failure names the leg that broke rather than just "it does not work".
+
+**1. The NodePort answers** — the cluster leg, from inside the LAN:
 
 ```bash
 kubectl -n jdwillmsen-prd run mcprobe --rm -i --restart=Never \
@@ -171,7 +220,22 @@ kubectl -n jdwillmsen-prd run mcprobe --rm -i --restart=Never \
 
 Expect `version=… online=… max=…`.
 
-Then verify from **outside**. This is the step that actually tests the forward,
+**2. The HAProxy VM answers on the external port** — the nftables leg. This is
+the check that catches both a missing `udpnat` table and a gateway configured to
+rewrite the port, and it can be run from anywhere on the LAN:
+
+```bash
+kubectl -n jdwillmsen-prd run mcprobe --rm -i --restart=Never \
+  --image=itzg/mc-monitor:latest -- \
+  status-bedrock --host 192.168.1.199 --port 19132
+```
+
+Note the address and port: the **intermediate** hop, on the **external** port —
+`192.168.1.199:19132`, not `:31132`. Check 1 succeeding while this fails means
+the DNAT rule is absent or points at the wrong node. If this passes and the
+external check below fails, the fault is on the gateway and nowhere else.
+
+**3. From outside.** This is the step that actually tests the forward,
 and it cannot be done from the LAN — most consumer gateways do not hairpin, so
 connecting to the public address from inside fails even when the forward is
 correct. Use a phone on mobile data, or any host off-network:
@@ -185,15 +249,26 @@ In the game client: **Servers → Add Server**, address `mc.jdwlabs.com`, port
 
 ## Adding another server
 
+**Nothing on the gateway changes.** The range rule from Step 2 already carries
+`19132-19141`; adding a server is a cluster-side change only.
+
 1. Give it the next NodePort in the chart values (`31133`, then `31134`, …),
    with `serverPort` equal to `nodePort` — the chart requires them to match for
    clients to display a ping time.
-2. Add a matching Custom Service on the gateway (`19133` → `31133`, UDP).
-3. Attach it to the same node.
+2. Annotate its Service with the external port it claims:
+   ```yaml
+   metadata:
+     annotations:
+       platform.jdwlabs.io/udp-external-port: "19133"
+   ```
+3. Re-render and apply the nftables rules on the HAProxy VM. The generator reads
+   the annotation and emits the DNAT and masquerade rules; it refuses a port
+   outside `19132-19141`, because the gateway forwards nothing else.
 4. Add a row to the table at the top of this document.
+5. Verify with check 2 of Step 4 against the new port, then from outside.
 
-Nothing else changes: one wildcard DNS record covers every name, and every
-server rides the same node.
+An eleventh server is the first one that needs the gateway touched again — widen
+the range in Step 2 and the generator's bounds together, in that order.
 
 ## Known gaps
 
@@ -205,13 +280,68 @@ already exist — cert-manager holds Porkbun API credentials for DNS-01 — so a
 small CronJob comparing the current WAN address against the record would close
 it. Not built yet.
 
-**The forward targets a single node.** NodePort answers on every node, but the
-gateway forwards to exactly one. If that node is down, external play stops even
-though the pod is healthy elsewhere in the cluster. A LoadBalancer address from
-MetalLB would remove the dependency; MetalLB is not installed, and adding it is
-a platform change rather than part of this runbook.
+**The HAProxy VM is a single point of failure for external UDP.** Every
+published server enters through `192.168.1.199`. That VM already carries the
+Kubernetes API and all HTTP(S) ingress, so this adds no new failure domain — but
+it does mean external play stops whenever it does. The keepalived VIP pair noted
+in `scenarios/haproxy-vm-rebuild.md` is the fix, and is a separate change.
 
-Neither gap affects LAN play, which is why both can go unnoticed.
+**The DNAT destination is a DHCP address.** NodePort answers on every node, but
+the rendered rule names exactly one — currently `192.168.1.163`. Worker nodes
+take their address by DHCP, so a lease change breaks external play silently,
+months later, with no obvious cause. The repo's precedent runs the other way:
+`clusters/core/patches/node-200.yaml` pins each control plane statically,
+written after DHCP lease flips twice moved a control plane and broke the etcd
+peer mesh. Workers are left on DHCP because losing one is a reschedule rather
+than an outage — which is true of every worker workload *except* this one. Two
+ways to close it, neither done: add a static patch for the target worker
+mirroring `node-200.yaml`'s shape, or install MetalLB and point the DNAT at a
+LoadBalancer address, which removes the single-node dependency as well.
+
+**The nftables rules are not deployed by `talops`.** The generator exists and
+nothing calls it, so the file is still placed on the VM by hand. Until a command
+owns that step, a rebuilt VM comes back with HAProxy healthy and every published
+server dark.
+
+None of these gaps affect LAN play, which is why all of them can go unnoticed.
+
+## Removing a server, and rolling back the forward
+
+Undo in the reverse of the order it was built, so nothing is ever exposed
+without a server behind it.
+
+**Remove one server, keep the ingress:**
+
+1. Drop the `platform.jdwlabs.io/udp-external-port` annotation from its Service.
+2. Re-render and apply the rules on the HAProxy VM. The DNAT and masquerade
+   lines for that port disappear; the table and every other server stay.
+3. Confirm the port is gone, and that its neighbours survived:
+   ```bash
+   ssh haproxy-admin@192.168.1.199 'sudo nft list table ip udpnat'
+   ```
+4. Delete the row from the table at the top of this document.
+
+The gateway is not touched. The range rule keeps forwarding `19133` to a host
+with no rule for it, which drops the packets — the correct outcome.
+
+**Remove external access entirely**, reversing Steps 2 and 3:
+
+1. **Firewall → NAT/Gaming**. Find the `bedrock-udp` entry in the list of
+   attached services and delete the **attachment** first, then **Save**. The
+   service definition cannot be deleted while a device still references it.
+2. Open **Custom Services**, select `bedrock-udp`, and delete the definition.
+3. Optionally remove the nftables table on the VM. Leaving it costs nothing once
+   the forward is gone, but removing it keeps the host honest:
+   ```bash
+   ssh haproxy-admin@192.168.1.199 'sudo nft delete table ip udpnat'
+   ```
+   Delete only that table. The host also runs Tailscale, whose rules live in
+   `table ip filter` — `nft flush ruleset` takes the VM off the tailnet.
+4. Confirm from off-network that the port no longer answers:
+   ```bash
+   mc-monitor status-bedrock --host mc.jdwlabs.com --port 19132
+   ```
+   Expect a timeout. LAN play is unaffected throughout.
 
 ## Troubleshooting
 
@@ -223,9 +353,19 @@ test of the public address fails regardless of whether the forward is right.
 gateway: the Custom Service *and* its attachment to a device. The first alone
 looks complete and forwards nothing.
 
+**LAN NodePort works, external does not, and check 2 of Step 4 also fails.**
+The fault is on the HAProxy VM, not the gateway. Either the `udpnat` table is
+missing — the usual cause after a VM rebuild — or its DNAT rule points at a node
+address that has since moved.
+
+**Checks 1 and 2 pass, outside still fails.** Now it is the gateway. The most
+likely cause is `Base Host Port` set to a NodePort instead of `19132`: the
+gateway rewrites the port, and the nftables rule never matches. Both halves of
+the config look right in the UI.
+
 **Worked before, silently stopped.** Check the WAN address against DNS, and
-check the node still holds the reserved address — the two gaps above are the
-usual causes and both present identically.
+check the target node still holds the address the DNAT rule names — the gaps
+above are the usual causes and all present identically.
 
 **Client shows the server but cannot join.** That is the allowlist, not the
 network — the ping succeeds because it is unauthenticated while joining is not.
