@@ -1,12 +1,21 @@
 name: Bootstrap
 
+# terraform.tfvars.example is in scope because the machine-config validation
+# gate in internal/talos reads its Talos and Kubernetes pins and validates the
+# rendered configs against them. Bumping those pins is precisely the change
+# that can turn a patch key invalid, so it has to run this workflow even
+# though nothing under bootstrap/ moved.
 on:
   push:
     branches: [main]
-    paths: ['bootstrap/**']
+    paths:
+      - 'bootstrap/**'
+      - 'terraform/terraform.tfvars.example'
   pull_request:
     branches: [main]
-    paths: ['bootstrap/**']
+    paths:
+      - 'bootstrap/**'
+      - 'terraform/terraform.tfvars.example'
 
 permissions:
   contents: read
@@ -23,9 +32,12 @@ jobs:
       run:
         working-directory: bootstrap
     # Test tooling: sops/age for the internal/secrets vault round-trips,
-    # talosctl for the internal/talos config-generation tests. Bump via the
-    # latest releases of getsops/sops, FiloSottile/age, and siderolabs/talos
-    # (talosctl is pinned to the repo's target Talos version for stable output).
+    # talosctl for the internal/talos config-generation tests and for the
+    # machine-config validation gate, which renders both role patches and runs
+    # `talosctl validate --mode metal` over the result. Bump via the latest
+    # releases of getsops/sops, FiloSottile/age, and siderolabs/talos
+    # (talosctl is pinned to the repo's target Talos version: the gate is only
+    # meaningful if it validates against the version the nodes will run).
     env:
       SOPS_VERSION: v3.13.3
       AGE_VERSION: v1.3.1
