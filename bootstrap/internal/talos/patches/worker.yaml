@@ -112,13 +112,19 @@ features:
 # an ordinary appliance reboot including pool import. Not longer, because past
 # that point the workload is already down from the application's perspective
 # and an honest EIO beats an unbounded uninterruptible hang that also blocks
-# umount, pod deletion and node drain. Not disabled (0 or -1) for that same
-# reason.
+# umount, pod deletion and node drain. Not -1 for that same reason, which
+# queues forever and never gives up. And emphatically not 0, which is not the
+# milder of the two extremes but the opposite one: it errors I/O the instant a
+# session drops, which is the journal-aborting behaviour this document exists
+# to prevent, reached sooner.
 #
 # Worker-only: control-plane nodes attach no iSCSI volumes and have no
-# /var/lib/iscsi node database at all. These values are read when a node record
-# is created at attach time, so a volume already attached keeps the old ones
-# until it is detached and re-staged.
+# /var/lib/iscsi node database at all. These values are read only when a node
+# record is first created. The record then persists under /var/lib/iscsi/nodes
+# on the /var partition and iscsiadm --login reuses it rather than re-deriving
+# it from this file, so it outlives logout, re-stage and reboot: a target that
+# has ever been attached keeps its old values until its record is explicitly
+# deleted. Detaching the volume is not enough.
 apiVersion: v1alpha1
 kind: ExtensionServiceConfig
 name: iscsid

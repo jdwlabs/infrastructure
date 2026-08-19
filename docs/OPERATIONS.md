@@ -198,6 +198,17 @@ talosctl -n <worker-ip> read /var/lib/iscsi/nodes/<target-iqn>/<portal> \
   | grep -E 'noop_out|replacement_timeout'
 ```
 
+Once a record exists it *is* the live configuration for that target. It is
+written from `iscsid.conf` when the record is first created and then persists
+under `/var/lib/iscsi/nodes` on the `/var` partition, surviving logout,
+re-stage and reboot, because `iscsiadm --login` reuses an existing record
+rather than re-deriving it. Shipping an `iscsid.conf` therefore only changes
+what *new* records get. Every target already attached — including the one on
+the worker that broke, whose record pins `replacement_timeout = 120` — keeps
+its old values until that record is deleted. **Applying this change to a node
+does not protect the volume this work is about; deleting its stale record
+does.** Step 4 of the rollout is where that happens.
+
 ### Mechanism: a Talos `ExtensionServiceConfig` document
 
 The defaults suit a multipath SAN, where abandoning an unresponsive path in
@@ -269,18 +280,41 @@ at a time.
    talosctl -n <worker-ip> logs ext-iscsid | tail -20
    ```
 
-   `Running` is the pass condition. Anything else means the config-file mount
-   did not land; roll back that node immediately (see below) before the drain
-   is lifted.
-4. Confirm the file is actually visible to the initiator, not merely present
-   in the machine config:
+   Two conditions, both required. `services` reports `Running`, **and** the
+   post-restart log no longer contains
+
+   ```text
+   can't open iscsid.safe_logout configuration file /etc/iscsi/iscsid.conf
+   ```
+
+   Every node emits that line today, and its disappearance is the only direct
+   evidence that `iscsid` opened the file rather than the machine config merely
+   carrying it. `talosctl get extensionserviceconfigs` is not evidence: that
+   resource is rendered *from* the machine config, so it can only ever confirm
+   what was applied, never what the service can see. Either condition failing
+   means the config-file mount did not land; roll back that node immediately
+   (see below) before the drain is lifted.
+4. **Delete the stale node record for the target before reading anything
+   back.** Records persist across logout, re-stage and reboot (see Background),
+   so a target that has been attached on this node before reads back its *old*
+   values however correctly the mount landed — which would abort a correct
+   rollout at step 5. With the volume detached, delete the record:
 
    ```bash
-   talosctl -n <worker-ip> get extensionserviceconfigs
+   # in the ext-iscsid mount namespace — the one the CSI driver nsenters into
+   iscsiadm -m node -T <target-iqn> -p <portal> -o delete
    ```
-5. Prove the values reach a node record. They are read when a record is
-   created at attach time, so an already-attached volume keeps the old
-   numbers — schedule a workload onto the node and read the record back:
+
+   Equivalently, remove `/var/lib/iscsi/nodes/<target-iqn>` on the node while
+   nothing is logged into that target. A canary with no prior attachment has
+   nothing to delete; check with `talosctl -n <worker-ip> ls -r
+   /var/lib/iscsi/nodes` first.
+
+   This is a rollout step, not just a verification aid: until a target's record
+   is deleted, that target keeps the timeouts this change exists to replace.
+5. Prove the values reach a freshly created node record. They are read at
+   record-creation time, so schedule a workload onto the node and read the new
+   record back:
 
    ```bash
    talosctl -n <worker-ip> read /var/lib/iscsi/nodes/<target-iqn>/<portal> \
@@ -288,8 +322,9 @@ at a time.
    ```
 
    Expect `noop_out_interval = 10`, `noop_out_timeout = 30`,
-   `replacement_timeout = 300`. Old values here mean the mount landed but the
-   initiator is not reading it — stop, do not roll further.
+   `replacement_timeout = 300`. Old values here — *after* the record was
+   deleted in step 4 — mean the mount landed but the initiator is not reading
+   it; stop, do not roll further.
 6. **Check the blast radius before the second node.** Longhorn attaches its own
    volumes over iSCSI on the same workers and inherits the same defaults today
    (`replacement_timeout = 120`, both NOP-Out values `5`). Whether its
@@ -301,6 +336,18 @@ at a time.
    target is a pod on the same node, and when that pod is recreated at a new
    address reconnection is impossible, so a longer replacement timeout only
    lengthens the hang before the same failure.
+
+   **If it did not inherit them, that is an accepted end state, not a
+   blocker.** It is the likelier result: Longhorn's manager nsenters into PID
+   1's mount namespace, where no `iscsid.conf` exists. The node then carries two
+   initiator configurations at once — records created through the CSI driver's
+   `ext-iscsid` namespace get the new values, records created by Longhorn keep
+   open-iscsi's compiled defaults. Write down which way it went and roll on.
+   Longhorn is not the workload this change exists to protect, and by the trade
+   above it is arguably better served by the short defaults. Do not chase parity
+   by moving the file into PID 1's namespace with `machine.files` — that is the
+   route ruled out at the top of this section, and the reason it was ruled out
+   has not changed.
 7. Repeat 2–5 for each remaining worker. Reboot the canary once and re-run
    step 5 to prove the config survives a reboot.
 
