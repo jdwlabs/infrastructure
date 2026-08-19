@@ -388,3 +388,245 @@ node, so drain each one first.
 
 There is no second safety net. Until every worker is rolled, nodes are in two
 different states, and a volume's exposure depends on which worker it lands on.
+
+## Kernel log shipping to the node-local collector — Talos-layer rollout
+
+### Background: kmsg has no other route off the node
+
+A fault that only the kernel sees currently reaches nobody. Since Linux 6.12
+ext4's error handler latches a mount read-only through an internal emergency
+bit rather than `SB_RDONLY`, so `/proc/mounts` keeps reporting `rw` throughout
+and every layer above the kernel goes on reporting healthy. That is the same
+failure mode the iSCSI timeouts above exist to prevent, and when it happens the
+ring buffer is the only signal that exists at the moment it happens.
+
+Talos exposes the ring buffer two ways, and only one is consumable by an
+unattended collector:
+
+- **The Talos API** (`talosctl dmesg`) needs a talosconfig. A collector pod has
+  none, so this cannot be a data source.
+- **A push to a destination named in the machine config.** The node dials out
+  and streams the ring buffer as newline-delimited JSON. This inverts the usual
+  direction — nothing scrapes the node, the node connects to the collector.
+
+`machine.logging.destinations` is **not** this mechanism and does not cover
+kmsg. It carries Talos *service* logs only; the ring buffer is a separate
+surface with its own config document. Pointing `machine.logging.destinations`
+at the collector would ship service logs and still leave kernel faults
+invisible.
+
+The collector's own `nodeLogs` feature stays off deliberately and is not an
+alternative: it reads systemd journal files, and Talos runs no journald.
+Enabling it would mount a path that never has entries and report nothing wrong
+while doing it.
+
+### Mechanism: a Talos `KmsgLogConfig` document
+
+Both role patch templates
+(`bootstrap/internal/talos/patches/{control-plane,worker}.yaml`) append a
+`KmsgLogConfig` document pointing at `tcp://127.0.0.1:6050/`.
+
+The target is loopback because the receiver is the collector pod on that same
+node, reached through a hostPort. Talos kernel lines carry **no hostname of
+their own**, so only a per-node listener can say truthfully which node produced
+a message; the collector stamps the `node` label from its own `spec.nodeName`.
+A shared Service in front of all the collectors would erase exactly the
+identity the signal is for.
+
+Why `KmsgLogConfig` rather than the `talos.logging.kernel` kernel argument:
+
+- The kernel argument is the other documented route, and it is set through
+  `machine.install.extraKernelArgs`. **These nodes cannot use that field.**
+  They boot UEFI (`bios = "ovmf"` in `terraform/{control,worker}-nodes.tf`),
+  and since Talos 1.10 a UEFI install is systemd-boot with a UKI whose kernel
+  cmdline is baked into the image — the field is inert there. From 1.12 it is
+  additionally mutually exclusive with `install.grubUseUKICmdline`, which
+  defaults on, so `talosctl validate` rejects the pair outright:
+
+  ```text
+  * install.extraKernelArgs and install.grubUseUKICmdline can't be used together
+  ```
+
+- `KmsgLogConfig` is a normal config document applied at runtime. **No
+  reinstall, no `talosctl upgrade`, no reboot** — which is also why this
+  section's rollout is much lighter than the two above it.
+- Delivery begins when `machined` starts rather than at kernel init, but that
+  is **not** a loss of early boot lines: the reader opens `/dev/kmsg` at offset
+  0 and follows rather than tailing, so the ring buffer is replayed from the
+  start. The real limit is wrap — on a long-uptime node the ring may already
+  have overwritten itself, and the reader skips forward silently when it has,
+  so contents predating the apply can simply be gone. On a node rebooted or
+  freshly applied, the full boot is delivered.
+- Should `talos.logging.kernel` ever be added alongside this document, match the
+  URL string byte for byte. Cmdline and document destinations are deduplicated
+  by exact string compare, so `tcp://host:6050` and `tcp://host:6050/` are two
+  destinations and every kernel line would be delivered twice.
+
+**The pre-existing `extraKernelArgs` block in both patch templates is a latent
+failure** and is left untouched here — it is not this change's to fix. It bites
+only once the base config carries `grubUseUKICmdline`, which talosctl started
+emitting at 1.12: the getter safe-dereferences a missing key to `false`, so a
+base generated before then validates clean with `extraKernelArgs` present. The
+moment the base is regenerated on v1.13 — which `baseConfigStale()` does on an
+installer-image bump — `talosctl validate` fails for a reason unrelated to
+kernel logging. Strip it, or set `install.grubUseUKICmdline: false`, in its own
+change. The `console=` entries in it are inert on these UEFI nodes for the same
+reason the kernel argument would be, so removing them should be behaviour-free
+— but that claim is untested and belongs to whoever makes that change.
+
+### Ordering: the platform-side listener lands first
+
+The receiving end is a per-node TCP listener on the `alloy-logs` DaemonSet in
+the platform repo. Until it is live, this configuration names a port nothing is
+bound to. **Nothing breaks in that window** — the connection is refused, and a
+refused log destination costs a retry and nothing else — but the rollout proves
+nothing until the listener exists, so land the platform change first.
+
+### Kernel log rollout plan (canary first)
+
+Preconditions:
+
+- The platform-side listener is merged and the `alloy-logs` DaemonSet is
+  `READY` on the canary node. Confirm before starting, not after.
+- Rebuild `talops` so the embedded templates carry the document:
+  `cd bootstrap && go build -buildvcs=false -o build/ ./...`.
+
+Order: one canary worker, fully verified, then the remaining workers, then the
+control planes. Nothing here restarts a service or reboots a node, so no drain
+is required.
+
+1. Regenerate and inspect the config without applying:
+
+   ```bash
+   talosctl machineconfig patch clusters/core/secrets/worker.yaml \
+     --patch @<rendered-worker-patch> -o /tmp/worker-check.yaml
+   talosctl validate --config /tmp/worker-check.yaml --mode metal
+   ```
+
+   A `KmsgLogConfig` document named `node-local-collector` with
+   `url: tcp://127.0.0.1:6050/` must be present.
+
+   **Expect `validate` to fail with exactly this, and only this:**
+
+   ```text
+   * install.extraKernelArgs and install.grubUseUKICmdline can't be used together
+   ```
+
+   That failure is **pre-existing and unrelated to kernel logging** — see the
+   note at the end of the Mechanism section. It names `extraKernelArgs`, which
+   reads as though this change caused it; it did not, and this change adds no
+   kernel arguments. Proceed only if that is the *sole* error reported. Any
+   additional error is yours — stop and fix it before applying anything.
+2. **HUMAN**: apply the config to the canary. It takes effect immediately —
+   there is no reboot and no upgrade in this rollout.
+3. Confirm Talos accepted the document:
+
+   ```bash
+   talosctl -n <node-ip> get kmsglogconfig -o yaml
+   ```
+
+   `-o yaml` is required: the default table form does not render the
+   destination list, so it cannot show whether the URL is the intended one.
+   Confirm `spec.destinations` carries `tcp://127.0.0.1:6050/`.
+
+   This confirms only what was applied, never that anything is arriving. Step 4
+   is the gate.
+4. Confirm lines are actually arriving (next section). **This is what the
+   canary exists for.**
+5. Repeat 2–4 for each remaining worker, then the control planes.
+
+### Confirming kernel lines actually arrive
+
+A refused or blackholed destination is retried silently: the node logs no loud
+error and `talosctl dmesg` looks entirely normal either way. **Absence of data
+at the collector is the primary signal, so it has to be checked positively
+rather than inferred from the node looking healthy.**
+
+Three checks, in increasing order of strength. The third gates the rollout.
+
+1. The listener is bound on the node, in the host namespace Talos dials into:
+
+   ```bash
+   talosctl -n <node-ip> netstat -l -t | grep 6050
+   ```
+
+   Nothing here means the hostPort did not land, and no node-side configuration
+   will help.
+2. The receiver has accepted records. Read it from the `alloy-logs` pod on the
+   canary itself — a different node's pod proves nothing:
+
+   ```bash
+   kubectl -n monitoring get pods -o wide \
+     --field-selector spec.nodeName=<node-name> | grep alloy-logs
+   kubectl -n monitoring port-forward pod/<alloy-logs-pod-on-canary> 12345:12345 &
+   curl -s localhost:12345/metrics \
+     | grep 'otelcol_receiver_accepted_log_records.*talos_kernel'
+   ```
+
+   Two details, both required for this check to mean anything:
+
+   - **Port-forward rather than `kubectl exec … curl`.** The Alloy image
+     commonly ships no `curl`, so the exec form fails on a working node and
+     reads as a rollout failure. Forwarding from the canary's own pod keeps the
+     "on the canary itself" property that makes this check meaningful — a
+     different node's pod proves nothing.
+   - **Filter to the kernel receiver.** The metric is a series *per receiver*,
+     and the pod-log receivers on that pod are nonzero regardless of whether a
+     single kernel line ever arrived. An unfiltered `grep` will therefore show
+     a healthy-looking count while the thing being tested is dead.
+
+   A counter above zero for the kernel receiver is direct listener-side proof
+   that the loopback path works, independent of anything downstream. Zero, with
+   check 1 passing, points at CNI portmap not resolving loopback — see the
+   fallback below.
+3. The lines are stored, parsed, and attributed to the right node. In Grafana
+   Explore against the platform Loki tenant:
+
+   ```logql
+   {job="integrations/talos/kernel", node="<canary-node-name>"}
+   ```
+
+   All three properties have to hold, and each catches a different failure:
+   entries exist; the stored line is the kernel message rather than the raw
+   JSON envelope; and `node` equals the canary rather than some other node. A
+   populated stream labelled with the wrong node means loopback resolved to a
+   shared endpoint and node identity is being erased — stop.
+
+   Do not wait on organic traffic to decide this: a quiet kernel can emit
+   nothing for minutes, and reading that as failure would be wrong. Generate a
+   line instead — mounting or detaching a volume on the canary produces kernel
+   output — then compare the window against
+   `talosctl -n <node-ip> dmesg` for the same period. The two should describe
+   the same events.
+
+**If loopback does not work**, the fallback is the node's **own** address,
+never a shared Service. Note that the patch templates render from a fixed set
+of fields (`DefaultDisk`, `DefaultNetworkInterface`, `HAProxyIP`,
+`ControlPlaneEndpoint`) and carry no per-node address, so that fallback is not
+a one-line template edit — it needs either a new template field or per-node
+patches under `clusters/core/patches/`.
+
+Whether loopback resolves through the CNI portmap plugin on these nodes has
+**not** been established. It is the single assumption this design rests on, and
+check 2 on the canary is what settles it.
+
+### Kernel log rollback
+
+Nothing here is load-bearing for the node. The delivery controller declares no
+outputs, so no other Talos controller consumes it and nothing reconciles on it;
+an unreachable destination costs an infinite one-second retry logged at `Debug`,
+below machined's default level. **A node left pointing at a listener that does
+not exist is not degraded**, so there is no emergency rollback and no reason to
+rush one. A malformed document is rejected server-side on apply with nothing
+changed, so the apply in step 2 cannot leave a node part-configured.
+
+Per node: revert that node's machine config to the previous revision and
+re-apply. It takes effect immediately — unlike the kernel-argument route, there
+is no boot entry to rewrite and nothing persists past the apply.
+
+Fleet-wide: revert the patch-template commit, rebuild `talops`, regenerate and
+re-apply per node. No reboot, no drain, no service restart.
+
+To stop the flow quickly without touching Talos at all, remove the listener on
+the platform side. The node then retries against a closed port indefinitely and
+harmlessly.

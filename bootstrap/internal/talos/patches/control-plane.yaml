@@ -145,3 +145,44 @@ features:
   tx-tcp-segmentation: false
   tx-tcp6-segmentation: false
   rx-gro: false
+---
+# Ships the kernel ring buffer off the node as newline-delimited JSON to the
+# node-local collector pod, which listens on a hostPort. Without this, a fault
+# that only the kernel sees never leaves the node: since Linux 6.12 ext4's error
+# handler latches a mount read-only through an internal emergency bit rather
+# than SB_RDONLY, so /proc/mounts keeps reporting rw and every layer above the
+# kernel goes on reporting healthy. The ring buffer is the only signal that
+# exists at the moment it happens.
+#
+# machine.logging.destinations is NOT this mechanism and does not cover kmsg —
+# it carries Talos *service* logs only. Pointing it at the collector would ship
+# service logs and still leave kernel faults invisible. The Talos API route
+# (talosctl dmesg) is not usable either: it needs a talosconfig, which a
+# collector pod has none of.
+#
+# KmsgLogConfig rather than the talos.logging.kernel kernel argument: that
+# argument is set via machine.install.extraKernelArgs, which these nodes cannot
+# use. They boot UEFI (bios = "ovmf"), and since Talos 1.10 a UEFI install is
+# systemd-boot with a UKI whose cmdline is baked into the image, so the field is
+# inert; on 1.12+ it is also mutually exclusive with install.grubUseUKICmdline,
+# which defaults on, and `talosctl validate` rejects the pair outright. This
+# document is applied at runtime instead — no reinstall, no reboot. Delivery
+# begins when machined starts, but the reader opens /dev/kmsg at offset 0 and
+# follows rather than tailing, so the ring buffer is replayed from the start and
+# early boot lines still arrive. The real limit is wrap: on a long-uptime node
+# the ring may already have overwritten itself, and the reader skips forward
+# silently when it has, so contents predating the apply can simply be gone.
+#
+# If talos.logging.kernel is ever added alongside this, match the URL string
+# byte for byte — cmdline and document destinations are deduplicated by exact
+# string compare, so tcp://host:6050 and tcp://host:6050/ would double-deliver.
+#
+# Loopback is deliberate: the receiver is the collector pod on this same node.
+# Talos kernel lines carry no hostname of their own, so only a per-node listener
+# can attribute a message to the node that produced it — the collector stamps
+# the node label from its own spec.nodeName. A shared Service in front of all
+# the collectors would erase exactly the identity the signal is for.
+apiVersion: v1alpha1
+kind: KmsgLogConfig
+name: node-local-collector
+url: tcp://127.0.0.1:6050/
