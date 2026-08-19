@@ -7,57 +7,142 @@ permissions:
   contents: read
 
 jobs:
-  # Catches an agent authored under the wrong identity: an agent co-author
-  # trailer present on a PR opened by anything other than the registered
-  # agent App. Unauthenticated, self-asserted text — this is a tripwire for
-  # the accidental case, not enforcement against a deliberate bypass. See
-  # jdwlabs/platform docs/adr/0018-agentic-app-topology.md §3.
+  # Catches agent work that reaches a pull request with its attribution
+  # missing: the registered agent App identity appearing on a commit, or as
+  # the PR author, while nothing on the branch records which agent produced
+  # the change. An agent co-author trailer on a human-opened PR is the
+  # sanctioned attribution path, not the violation — the earlier reading,
+  # which failed exactly that shape, left an agent no way to go green except
+  # by deleting its own attribution. See jdwlabs/platform
+  # docs/adr/0027-agent-identity-tripwire-catches-missing-attribution.md.
+  #
+  # Trailers are unauthenticated, self-asserted text, so this stays a
+  # tripwire for the accidental case and cannot enforce identity discipline
+  # against a deliberate bypass (ADR 0018 §3, unchanged).
   co-author-check:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Confirm PR author identity against any agent co-author trailer
+      - name: Require agent attribution wherever the agent identity appears
         env:
           GH_TOKEN: ${{ github.token }}
           PR_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_COMMITS: ${{ github.event.pull_request.commits }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          AGENT_IDENTITY: jdwlabs-agent-bot
         run: |
           set -euo pipefail
 
-          # PR author IS the registered agent identity: pass unconditionally
-          # — the point is proving identity discipline held, not penalizing
-          # agent-authored PRs for carrying their own trailer.
-          case "${PR_AUTHOR}" in
-            jdwlabs-agent-bot|jdwlabs-agent-bot\[bot\])
-              echo "PR author is the registered agent identity (${PR_AUTHOR}) — passing unconditionally."
-              exit 0
+          # Branch length is read live and *before* the commit list, never
+          # from the event payload: the payload freezes at trigger time, so a
+          # re-run after a push compared a stale count against a live read and
+          # failed a branch that had in fact been inspected end to end.
+          # Ordering the two reads this way also keeps an ordinary push
+          # landing between them harmless, since it can only make the list
+          # longer than the count. A force-push that *shortens* the branch
+          # inside that window still fails closed — the safe direction, and a
+          # re-run reads a consistent pair.
+          if ! expected=$(gh api "repos/${PR_REPO}/pulls/${PR_NUMBER}" --jq '.commits'); then
+            echo "::error::Cannot read ${PR_REPO}#${PR_NUMBER} — refusing to report a pass without knowing how long its branch is."
+            exit 1
+          fi
+
+          # A non-numeric answer (a null field, a truncated body) would make
+          # the comparison below exit 2 rather than fail — a status an `if`
+          # reads as false and `set -e` does not catch, silently turning the
+          # truncation guard into a no-op.
+          case "${expected}" in
+            ''|*[!0-9]*)
+              echo "::error::${PR_REPO}#${PR_NUMBER} reported a non-numeric commit count (${expected}) — refusing to report a pass on a branch length that cannot be checked."
+              exit 1
               ;;
           esac
 
           # Failure to read is not a pass. A transient API error here would
           # otherwise produce an empty commit list and a green check over a
           # branch nothing ever looked at.
-          if ! encoded=$(gh api --paginate "repos/${PR_REPO}/pulls/${PR_NUMBER}/commits" \
-            --jq '.[] | .sha + " " + (.commit.message | @base64)'); then
+          #
+          # Every free-text field is base64-encoded and the fields are joined
+          # with a colon: base64's alphabet cannot contain one, while a
+          # whitespace separator collapses under `read`, so a commit with an
+          # empty message shifted every later field one position left and hid
+          # its own author.
+          if ! encoded=$(gh api --paginate "repos/${PR_REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+            --jq '.[] | [
+                    .sha,
+                    ((.commit.verification.verified // false) | tostring),
+                    ((.commit.message // "") | @base64),
+                    ((.committer.login // "") | @base64),
+                    ((.author.login // "") | @base64),
+                    ((.commit.author.name // "") | @base64),
+                    ((.commit.author.email // "") | @base64),
+                    ((.commit.committer.name // "") | @base64),
+                    ((.commit.committer.email // "") | @base64)
+                  ] | join(":")'); then
             echo "::error::Cannot read the commits of ${PR_REPO}#${PR_NUMBER} — refusing to report a pass without inspecting them."
             exit 1
           fi
 
-          total=0
-          flagged_sha=""
+          # Matched whole-field, so a contributor whose name merely contains
+          # the slug is not read as the App, and case-insensitively below,
+          # since GitHub logins are case-insensitive and a git user.name is
+          # free text. GitHub assigns the numeric prefix on a noreply address
+          # and not every form of that address carries one.
+          agent_pattern="^(${AGENT_IDENTITY}(\[bot\])?|([0-9]+\+)?${AGENT_IDENTITY}(\[bot\])?@users\.noreply\.github\.com)$"
 
-          # Messages are base64-encoded on the way out so a multi-line commit
-          # body can't break the line-oriented read below.
-          while IFS=' ' read -r sha b64msg; do
+          total=0
+          attributed=0
+          unattributed_sha=""
+
+          while IFS=':' read -r sha verified b64msg b64committer_login \
+                                 b64author_login b64author_name b64author_email \
+                                 b64committer_name b64committer_email; do
             [ -n "${sha}" ] || continue
             total=$((total + 1))
-            message=$(printf '%s' "${b64msg}" | base64 -d)
-            if [ -z "${flagged_sha}" ] && printf '%s' "${message}" | grep -iqP 'Co-Authored-By:.*<noreply@anthropic\.com>'; then
-              flagged_sha="${sha}"
+
+            # Anchored to line start because the trailer's literal text also
+            # appears in prose — the ADRs specifying this check quote it — and
+            # an unanchored scan of the whole message flags a commit that
+            # merely discusses attribution. Any @anthropic.com sender counts,
+            # matching what tools/audit-admin-bypass.py looks for rather than
+            # only the noreply@ address agent tooling happens to use today.
+            if printf '%s' "${b64msg}" | base64 -d | grep -iqP '^Co-Authored-By:.*<[^>]*@anthropic\.com>'; then
+              attributed=$((attributed + 1))
+              continue
             fi
+
+            # A commit GitHub itself created — a merge from the update-branch
+            # button, a web-UI revert or edit — is committed as web-flow and
+            # gives nobody an opportunity to write a trailer, so flagging one
+            # would rebuild the unsatisfiable red this check exists to remove.
+            # The exemption rests on GitHub's signature over that commit, not
+            # on the committer login by itself: that login is resolved from
+            # the committer email, which any local commit can set to
+            # noreply@github.com. GitHub signs what it creates, so a forged
+            # one arrives unsigned and stays in scope.
+            committer_login=$(printf '%s' "${b64committer_login}" | base64 -d)
+            if [ "${verified}" = "true" ] && [ "${committer_login}" = "web-flow" ]; then
+              continue
+            fi
+
+            [ -z "${unattributed_sha}" ] || continue
+
+            # Both the GitHub-resolved logins and the raw git author/committer
+            # fields are searched because which of them carries the App
+            # depends on how the commit was made: a `git push` over an
+            # installation token leaves the local git identity untouched, so
+            # the App surfaces here only on commits GitHub created through its
+            # own API.
+            for b64field in "${b64committer_login}" "${b64author_login}" \
+                            "${b64author_name}" "${b64author_email}" \
+                            "${b64committer_name}" "${b64committer_email}"; do
+              field=$(printf '%s' "${b64field}" | base64 -d)
+              if printf '%s' "${field}" | grep -qiE "${agent_pattern}"; then
+                unattributed_sha="${sha}"
+                break
+              fi
+            done
           done <<<"${encoded}"
 
           if [ "${total}" -eq 0 ]; then
@@ -66,18 +151,25 @@ jobs:
           fi
 
           # The commits endpoint caps at 250 and says nothing when it
-          # truncates. The event payload carries the branch's true count, so
-          # a mismatch means part of the branch went unread — report that
-          # instead of passing over the portion that happened to fit.
-          if [ "${total}" -ne "${PR_COMMITS}" ]; then
-            echo "::error::Read ${total} commit(s) but this pull request has ${PR_COMMITS} — refusing to report a pass over part of the branch."
+          # truncates, so a short read is reported rather than passed over the
+          # portion that happened to fit.
+          if [ "${total}" -lt "${expected}" ]; then
+            echo "::error::Read ${total} commit(s) but this pull request has ${expected} — refusing to report a pass over part of the branch."
             exit 1
           fi
 
-          if [ -n "${flagged_sha}" ]; then
-            echo "::error::Commit ${flagged_sha:0:9} carries an agent co-author trailer, but this PR was opened as ${PR_AUTHOR}, not the registered agent identity (jdwlabs-agent-bot)."
-            echo "Reopen this change through the jdwlabs-agent-bot App token — see jdwlabs/platform docs/adr/0018-agentic-app-topology.md §3."
+          if [ -n "${unattributed_sha}" ]; then
+            echo "::error::Commit ${unattributed_sha:0:9} carries the registered agent identity (${AGENT_IDENTITY}) but no agent co-author trailer — the attribution that identity is meant to prove is missing."
+            echo "Restore the 'Co-Authored-By: <agent name> <...@anthropic.com>' trailer on that commit — see jdwlabs/platform docs/adr/0027-agent-identity-tripwire-catches-missing-attribution.md."
             exit 1
           fi
 
-          echo "co-author-check: ${total} commit(s) inspected, no agent co-author trailer under a non-agent identity — passed"
+          if [ "${PR_AUTHOR}" = "${AGENT_IDENTITY}" ] || [ "${PR_AUTHOR}" = "${AGENT_IDENTITY}[bot]" ]; then
+            if [ "${attributed}" -eq 0 ]; then
+              echo "::error::This pull request was opened as the registered agent identity (${PR_AUTHOR}) but not one of its ${total} commit(s) names the agent that produced them."
+              echo "The App identity says a change is agent-authored; only the commit trailer says which agent — see jdwlabs/platform docs/adr/0023-phase4-concurrency-cap-and-agent-attribution.md §4."
+              exit 1
+            fi
+          fi
+
+          echo "co-author-check: ${total} commit(s) inspected, ${attributed} attributed, no agent identity without attribution — passed"
