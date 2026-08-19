@@ -162,7 +162,7 @@ before declaring the node healthy.
 
 ## iSCSI initiator timeouts — Talos-layer rollout
 
-### Background
+### Background: no iscsid.conf on these nodes
 
 A transient stall on the NAS took an ext4 volume permanently read-only. The
 chain: the initiator's NOP-Out ping went unanswered for five seconds, the
@@ -194,9 +194,15 @@ volume by reading the node record the initiator wrote:
 
 ```bash
 talosctl -n <worker-ip> ls -r /var/lib/iscsi/nodes
-talosctl -n <worker-ip> read /var/lib/iscsi/nodes/<target-iqn>/<portal> \
+talosctl -n <worker-ip> read \
+  '/var/lib/iscsi/nodes/<target-iqn>/<ip>,<port>,<tpgt>/default' \
   | grep -E 'noop_out|replacement_timeout'
 ```
+
+A record is a file, not a directory: open-iscsi keys it
+`nodes/<iqn>/<ip>,<port>,<tpgt>/<iface>`, and with no bound iface the leaf is
+`default`. `ls -r` above prints the exact path — read that, not the portal
+directory, or the read errors.
 
 Once a record exists it *is* the live configuration for that target. It is
 written from `iscsid.conf` when the record is first created and then persists
@@ -245,7 +251,7 @@ cannot, `ext-iscsid` fails to start and **that node loses iSCSI entirely**,
 which takes down every attached volume on it. Prove it on one drained worker
 before going near a second.
 
-### Rollout plan (node-by-node)
+### iSCSI rollout plan (node-by-node)
 
 Preconditions:
 
@@ -281,19 +287,22 @@ at a time.
    ```
 
    Two conditions, both required. `services` reports `Running`, **and** the
-   post-restart log no longer contains
+   lines emitted *after* the restart no longer contain
 
    ```text
    can't open iscsid.safe_logout configuration file /etc/iscsi/iscsid.conf
    ```
 
-   Every node emits that line today, and its disappearance is the only direct
-   evidence that `iscsid` opened the file rather than the machine config merely
-   carrying it. `talosctl get extensionserviceconfigs` is not evidence: that
-   resource is rendered *from* the machine config, so it can only ever confirm
-   what was applied, never what the service can see. Either condition failing
-   means the config-file mount did not land; roll back that node immediately
-   (see below) before the drain is lifted.
+   Talos appends to a service's log across restarts, so grep the tail rather
+   than the whole file — the pre-restart occurrence is still in there and will
+   match. Every node emits that line today, and its absence from the lines that
+   follow the restart is the only direct evidence that `iscsid` opened the file
+   rather than the machine config merely carrying it. `talosctl get
+   extensionserviceconfigs` is not evidence: that resource is rendered *from*
+   the machine config, so it can only ever confirm what was applied, never what
+   the service can see. Either condition failing means the config-file mount
+   did not land; roll back that node immediately (see below) before the drain
+   is lifted.
 4. **Delete the stale node record for the target before reading anything
    back.** Records persist across logout, re-stage and reboot (see Background),
    so a target that has been attached on this node before reads back its *old*
@@ -301,14 +310,19 @@ at a time.
    rollout at step 5. With the volume detached, delete the record:
 
    ```bash
-   # in the ext-iscsid mount namespace — the one the CSI driver nsenters into
-   iscsiadm -m node -T <target-iqn> -p <portal> -o delete
+   kubectl -n democratic-csi exec <iscsi-node-pod-on-the-canary> \
+     -c csi-driver -- iscsiadm -m node -T <target-iqn> -p <portal> -o delete
    ```
 
-   Equivalently, remove `/var/lib/iscsi/nodes/<target-iqn>` on the node while
-   nothing is logged into that target. A canary with no prior attachment has
-   nothing to delete; check with `talosctl -n <worker-ip> ls -r
-   /var/lib/iscsi/nodes` first.
+   Go through the CSI node pod, not the Talos host. There is no shell on a
+   Talos node to enter the `ext-iscsid` mount namespace from, and `talosctl`
+   has no verb that deletes a file, so the record cannot be removed from the
+   host side. The driver's `iscsiadm` is a wrapper that already does the
+   `nsenter` into `iscsid`'s mount namespace, which is both the namespace the
+   record lives in and the one this change's `iscsid.conf` is mounted into.
+
+   A canary with no prior attachment has nothing to delete; check with
+   `talosctl -n <worker-ip> ls -r /var/lib/iscsi/nodes` first.
 
    This is a rollout step, not just a verification aid: until a target's record
    is deleted, that target keeps the timeouts this change exists to replace.
@@ -317,7 +331,8 @@ at a time.
    record back:
 
    ```bash
-   talosctl -n <worker-ip> read /var/lib/iscsi/nodes/<target-iqn>/<portal> \
+   talosctl -n <worker-ip> read \
+     '/var/lib/iscsi/nodes/<target-iqn>/<ip>,<port>,<tpgt>/default' \
      | grep -E 'noop_out|replacement_timeout'
    ```
 
@@ -348,10 +363,19 @@ at a time.
    by moving the file into PID 1's namespace with `machine.files` — that is the
    route ruled out at the top of this section, and the reason it was ruled out
    has not changed.
-7. Repeat 2–5 for each remaining worker. Reboot the canary once and re-run
-   step 5 to prove the config survives a reboot.
+7. Repeat 2–5 for each remaining worker.
+8. Reboot the canary once and re-run **step 3**. Step 5 is the wrong gate here
+   and would pass regardless: the node record persists on `/var` across the
+   reboot and the post-reboot re-stage reuses it rather than re-deriving it, so
+   it would still read `300` even if the config-file mount failed to re-land at
+   boot — which is precisely the unproven risk this rollout is canarying. Only
+   `ext-iscsid` reporting `Running` with no `can't open …/iscsid.conf` line
+   after the reboot proves the mount came back. Re-running step 5 on top of
+   that is still worth doing, but as a record-persistence check only; for
+   end-to-end proof after a reboot, delete and re-create the record (steps 4
+   and 5) rather than reading the surviving one.
 
-### Rollback
+### iSCSI rollback
 
 Per node, and immediately if `ext-iscsid` does not return to `Running`: revert
 that node's machine config to the previous revision and re-apply. The node
