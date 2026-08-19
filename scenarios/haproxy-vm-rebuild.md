@@ -171,7 +171,16 @@ in a quiet window; DNS, `talosconfig`, and kubeconfig never change.
    address is the signal that this runbook has actually landed: until then the
    load balancer is still the hand-built one.
 
-## Restore the UDP ingress rules
+## Verify the UDP ingress rules
+
+**Nothing in this runbook restores these rules, and no `talops` command deploys
+them.** The renderer exists and nothing calls it, so the ruleset file and the
+unit that loads it are still placed on the VM by hand. Read that first: the
+checks below confirm the rules are present, and every one of them passes on a
+VM where UDP ingress is completely down, because a rebuilt VM has no rules at
+all. The procedure that places them is in
+`scenarios/bedrock-external-access.md` — follow it before running these checks,
+not after.
 
 A rebuild restores HAProxy and stops. It does **not** restore the other thing
 this VM is: the single external UDP ingress hop. The router forwards the whole
@@ -180,7 +189,7 @@ range `19132-19141` to `192.168.1.199` with no port rewrite, and an nftables
 owns it. That table lives only on the VM's disk, so a rebuild silently drops
 every published UDP service while the API and ingress look completely healthy.
 
-Two constraints on this host make the rules load the way they do:
+Two constraints on this host shape how the rules load:
 
 - `nftables.service` stays **disabled**. The distro's `/etc/nftables.conf`
   begins with `flush ruleset`, and this VM also runs Tailscale, whose rules sit
@@ -196,24 +205,28 @@ The file's contents are generated from cluster state by
 rules. Publishing another server is an annotation on that Service; it is never
 a new router rule and never a hand-edited line here.
 
-After cutover, confirm the table is present and points at a live NodePort:
+After cutover, confirm all three of these:
 
 ```bash
+ssh haproxy-admin@192.168.1.199 'sysctl net.ipv4.ip_forward'      # expect: = 1
 ssh haproxy-admin@192.168.1.199 'sudo nft list table ip udpnat'
 ssh haproxy-admin@192.168.1.199 'systemctl is-enabled nftables'   # expect: disabled
 ```
 
-Expect one `udp dport <external> dnat to <node-ip>:<nodeport>` line per
-published service. An empty or missing table means external UDP is down even
-though `talops haproxy status` reads healthy — the two are unrelated paths.
+`ip_forward` is the one that bites. DNAT sends packets to a NodePort on a
+*different* host, so with forwarding off the VM accepts them and drops them —
+no refusal, no log, and every other check here still passes. Cloud-init now
+writes `/etc/sysctl.d/99-ip-forward.conf`, so a VM built from
+`haproxy-node.tf` comes up with it set; a VM built before that, or one where
+the drop-in was removed, does not. The same sysctl is what
+`scenarios/tailscale-subnet-router.md` needs, and on the 2026-08-13 run the VM
+shipped with it at `0` — until that setup it was off on this host, and the UDP
+rules were relying on it as a side effect.
 
-A VM rebuilt before 2026-08 carries the hand-applied predecessor of this table,
-named `minecraft`. It is superseded, and leaving both loaded means two tables
-racing for the same ports:
-
-```bash
-ssh haproxy-admin@192.168.1.199 'sudo nft delete table ip minecraft'
-```
+The `nft` output should carry one `udp dport <external> dnat to
+<node-ip>:<nodeport>` line per published service. `No such file or directory`
+means the table is absent — external UDP is down even though
+`talops haproxy status` reads healthy, because the two are unrelated paths.
 
 ## Abort criteria
 
@@ -248,10 +261,9 @@ Terraform action.
 - The hand-built load balancer has no `socat`, so `talops haproxy status`
   reports backend health as unread against it. Cloud-init installs it, so the
   gap closes with the replacement — no action needed on the old VM.
-- The UDP ingress rules are generated but not yet deployed by `talops`: the
-  renderer exists and nothing calls it, so the file and its unit are still
-  placed on the VM by hand. Until a command owns that step, a rebuild needs the
-  section above followed manually, and the generator's output is the only
-  authority on what the file should contain. Whatever wires it up must treat a
-  render error as "leave the live ruleset alone" — writing an empty ruleset
-  would take every published server offline to fix one bad annotation.
+- No `talops` command deploys the UDP ingress rules, so a rebuild brings the VM
+  back with HAProxy healthy and every published UDP server dark until the
+  procedure in `scenarios/bedrock-external-access.md` is run by hand. Whatever
+  wires it up must treat a render error as "leave the live ruleset alone" —
+  writing an empty ruleset would take every published server offline to fix one
+  bad annotation.

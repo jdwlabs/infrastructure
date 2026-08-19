@@ -47,6 +47,10 @@ runcmd:
   - systemctl enable --now qemu-guest-agent
   - systemctl enable haproxy
   - systemctl enable --now dnsmasq
+  # cloud-init runs write_files before runcmd, so both sysctl drop-ins are
+  # already on disk here. Applying them explicitly means the settings hold on
+  # first boot rather than only after the next reboot.
+  - sysctl --system
 
 # The generated config binds the API frontends on this host's own address, and
 # a keepalived VIP peer would later bind an address this instance does not own
@@ -56,6 +60,15 @@ write_files:
   - path: /etc/sysctl.d/99-haproxy-nonlocal-bind.conf
     content: |
       net.ipv4.ip_nonlocal_bind = 1
+  # This VM is the LAN's external UDP ingress hop: nftables DNATs published
+  # ports to a NodePort on a *different* host, and forwarding off means the
+  # packets are silently dropped rather than refused. The image ships with this
+  # at 0, and the Tailscale subnet router on this host needs it for the same
+  # reason (scenarios/tailscale-subnet-router.md) — it was previously set only
+  # as a side effect of that setup, so a rebuild lost it.
+  - path: /etc/sysctl.d/99-ip-forward.conf
+    content: |
+      net.ipv4.ip_forward = 1
   # Full replace of the package's default /etc/dnsmasq.conf. Cloud-init writes
   # this before packages install and before runcmd enables the service, so
   # dnsmasq starts with the override config already in place, never the

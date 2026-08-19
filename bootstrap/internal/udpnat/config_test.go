@@ -91,6 +91,18 @@ func TestGenerateRequiresTargetIP(t *testing.T) {
 	}
 }
 
+// An IPv6 target renders cleanly and is rejected by nft on the host, which
+// moves the failure to apply time on a live path.
+func TestGenerateRequiresIPv4Target(t *testing.T) {
+	c := &Config{
+		TargetIP: net.ParseIP("fd00::1"),
+		Forwards: []Forward{{Name: "a", ExternalPort: 19132, NodePort: 31132}},
+	}
+	if _, err := c.Generate(); err == nil {
+		t.Fatal("expected an error when TargetIP is IPv6")
+	}
+}
+
 func TestGenerateRejectsOutOfRangePorts(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -102,6 +114,7 @@ func TestGenerateRejectsOutOfRangePorts(t *testing.T) {
 		// the published range, so rendering this would be a silent dead end.
 		{"external a valid port outside the forwarded range", Forward{Name: "a", ExternalPort: 19200, NodePort: 31200}},
 		{"node port zero", Forward{Name: "a", ExternalPort: 19132, NodePort: 0}},
+		{"node port too high", Forward{Name: "a", ExternalPort: 19132, NodePort: 70000}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Config{TargetIP: net.ParseIP("192.168.1.163"), Forwards: []Forward{tc.f}}
