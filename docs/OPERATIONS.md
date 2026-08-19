@@ -462,17 +462,24 @@ Why `KmsgLogConfig` rather than the `talos.logging.kernel` kernel argument:
   by exact string compare, so `tcp://host:6050` and `tcp://host:6050/` are two
   destinations and every kernel line would be delivered twice.
 
-**The pre-existing `extraKernelArgs` block in both patch templates is a latent
-failure** and is left untouched here — it is not this change's to fix. It bites
-only once the base config carries `grubUseUKICmdline`, which talosctl started
-emitting at 1.12: the getter safe-dereferences a missing key to `false`, so a
-base generated before then validates clean with `extraKernelArgs` present. The
-moment the base is regenerated on v1.13 — which `baseConfigStale()` does on an
-installer-image bump — `talosctl validate` fails for a reason unrelated to
-kernel logging. Strip it, or set `install.grubUseUKICmdline: false`, in its own
-change. The `console=` entries in it are inert on these UEFI nodes for the same
-reason the kernel argument would be, so removing them should be behaviour-free
-— but that claim is untested and belongs to whoever makes that change.
+Both patch templates used to carry an `extraKernelArgs` block of their own, and
+it was a latent failure. It bit only once the base config carried
+`grubUseUKICmdline`, which talosctl started emitting at 1.12: the getter
+safe-dereferences a missing key to `false`, so a base generated before then
+validated clean with `extraKernelArgs` present. The moment the base was
+regenerated on v1.13 — which `baseConfigStale()` does on an installer-image
+bump — `talosctl validate` would have started failing for a reason unrelated to
+kernel logging.
+
+That block has since been deleted, alongside a CI gate that renders both role
+configs the way `talops` renders them for a real node and runs
+`talosctl validate --mode metal` over the result — so this class of breakage is
+now caught in a pull request rather than at step 1 of a runbook. Its `console=`
+entries were inert for the same reason the kernel argument is, and redundant
+besides: the nocloud image these nodes boot already sets
+`console=tty1 console=ttyS0` in the UKI cmdline, and the VMs declare no serial
+device for `ttyS0` to reach. Removing them was behaviour-free, and that is no
+longer an untested claim.
 
 ### Ordering: the platform-side listener lands first
 
@@ -506,17 +513,13 @@ is required.
    A `KmsgLogConfig` document named `node-local-collector` with
    `url: tcp://127.0.0.1:6050/` must be present.
 
-   **Expect `validate` to fail with exactly this, and only this:**
+   **`validate` must pass cleanly.** Any error at all is yours — stop and fix it
+   before applying anything.
 
-   ```text
-   * install.extraKernelArgs and install.grubUseUKICmdline can't be used together
-   ```
-
-   That failure is **pre-existing and unrelated to kernel logging** — see the
-   note at the end of the Mechanism section. It names `extraKernelArgs`, which
-   reads as though this change caused it; it did not, and this change adds no
-   kernel arguments. Proceed only if that is the *sole* error reported. Any
-   additional error is yours — stop and fix it before applying anything.
+   An earlier revision of this runbook told you to expect a single failure
+   naming `install.extraKernelArgs`. That block has been removed from the patch
+   templates and CI now validates the rendered configs on every change, so a
+   clean result is the only acceptable one.
 2. **HUMAN**: apply the config to the canary. It takes effect immediately —
    there is no reboot and no upgrade in this rollout.
 3. Confirm Talos accepted the document:
