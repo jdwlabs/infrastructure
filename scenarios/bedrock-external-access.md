@@ -129,9 +129,9 @@ destination is a *different* host.
 need different responses:
 
 - **A `minecraft` table is present instead.** That is the hand-applied
-  predecessor of `udpnat`, and it is what `192.168.1.199` carries today. Do the
-  migration below before anything else. Check with
-  `sudo nft list tables`.
+  predecessor of `udpnat`, and it is what `192.168.1.199` carries today. Check
+  with `sudo nft list tables`. Go to *Placing the nftables rules* below — its
+  steps 1-2 write the file the migration then applies — and come back.
 - **Neither table is present.** The VM was rebuilt, or the rules were never
   placed. Go to *Placing the nftables rules* below and come back.
 
@@ -319,12 +319,36 @@ host rather than assuming — `systemctl cat udpnat-rules` and
 ### Migrating off the `minecraft` table
 
 `192.168.1.199` still carries `table ip minecraft`, the hand-applied
-predecessor. It holds the same rules under a table named after the first
+predecessor. It should hold the same rules under a table named after the first
 workload; `udpnat` replaces it because the generator is generic over UDP
-services.
+services. Read it rather than assuming it — anything in there that the `udpnat`
+file does not reproduce goes away with the table:
 
-**Delete the old table first, then apply the new one.** The order matters more
-than the brief gap it opens:
+```bash
+sudo nft list table ip minecraft
+```
+
+**Then find and disable whatever re-applies it at boot.** The table survives
+reboots today, so something loads it. Delete the table without disabling that
+loader and the next reboot brings `minecraft` back alongside `udpnat`,
+restoring the registration-order race described below — weeks later, with
+nothing left to connect it to this migration. The loader predates this runbook
+and is not recorded here, so search for it:
+
+```bash
+systemctl list-units --all | grep -i nft
+sudo cat /etc/rc.local
+sudo crontab -l
+```
+
+Disable what you find — `sudo systemctl disable --now <unit>` for a unit, or
+comment out the line in `/etc/rc.local` or the root crontab — and record its
+name in this section so the next operator does not have to rediscover it. If
+nothing turns up, keep looking before you delete anything: a table that
+survives reboots is being applied by something.
+
+**Delete the old table only then, and apply the new one immediately after.**
+The order matters more than the brief gap it opens:
 
 ```bash
 sudo nft delete table ip minecraft
