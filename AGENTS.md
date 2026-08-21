@@ -96,6 +96,30 @@ Ticket evidence more than ~a week old (or gathered in a different investigation)
 - State the scope you searched before claiming something is absent ("checked all N nodes", "every cluster in `clusters/`") — one sample is not the whole set
 - A disproved premise is a valuable result: record it on the ticket, don't quietly work around it
 
+## Concurrency: one worktree, one branch, one agent invocation
+
+Multiple AI agents may operate against this repo at the same time. Never
+work on `main`/`master`, and create a worktree before touching code. For
+humans this is standing practice; for agents it is a **hard invariant,
+not a convention they can relax**:
+
+- Every agent invocation gets its own worktree and its own branch. Never
+  share a worktree across two concurrent agent sessions, and never reuse
+  one worktree for a second, unrelated task after the first is done —
+  create a fresh one instead.
+- Before rebasing or pushing, re-fetch `origin/main` rather than trusting
+  the worktree's cached view of it. A worktree that looks up to date can
+  be stale by the time a concurrent session has pushed.
+- Never assume you are the only agent with a checkout of this repo. Two
+  sessions sharing state is how an unpushed local commit has landed on
+  `main` minutes after a second, unrelated session already pushed — the
+  failure is silent until the histories are compared.
+
+A shared mutable resource (a worktree, or a branch) needs exclusive
+ownership per in-flight task, or concurrent writers eventually race. See
+`platform/docs/adr/0015-agentic-contribution-identity-and-review-gates.md`
+("Concurrency and isolation") for the fuller rationale.
+
 ## Constraints
 
 - `terraform apply` is NEVER run autonomously — produce a plan, stop, and await human approval
