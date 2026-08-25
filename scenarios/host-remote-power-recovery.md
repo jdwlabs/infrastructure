@@ -73,7 +73,7 @@ nothing network-topology-affecting.
 | pve3 | `nic0` | `g` (enabled) |
 | pve4 | `nic0` | `g` (enabled) |
 | pve5 | `nic0` | `g` (enabled) |
-| TrueNAS | `enp7s0` (MAC `30:56:0f:24:01:61`) | not yet configured — see "TrueNAS access" below |
+| TrueNAS | `enp7s0` (MAC `30:56:0f:24:01:61`) | `g` (confirmed working — see "Testing" below) |
 
 MACs are not repeated here — `docs/host-addressing.md` is the single source
 of truth for them (it already documents this fleet's history of address/MAC
@@ -207,27 +207,23 @@ documented. `root@192.168.1.205` still refuses (`Permission denied
 (publickey)`) — use `truenas_admin`, matching the other TrueNAS runbooks in
 this repo.
 
-**Still open: WoL support/config on TrueNAS is unconfirmed**, and this
-session deliberately did not change it. `truenas_admin` has no
-non-interactive sudo (`sudo -n ethtool ...` → `sudo: a password is
-required`), so `ethtool enp7s0` cannot report or set the `Wake-on` field —
-the read attempt returned `netlink error: Operation not permitted` before
-the unprivileged fields it can show. TrueNAS SCALE's WoL setting (if the
-hardware supports it) lives in its own web UI under the network interface
-configuration, not via raw `ethtool` the way the Proxmox hosts were
-configured.
+**Resolved 2026-08-25.** A human with TrueNAS admin/sudo access ran
+`sudo ethtool enp7s0 | grep -i wake` interactively and confirmed `Wake-on: g`
+was already enabled and hardware-supported (`Supports Wake-on: pumbg`) — no
+config change was needed on TrueNAS's side; whatever shipped from the
+motherboard's BIOS default already had it on. See "Testing" below for the
+live power-off/wake proof.
 
-**TODO (needs a human with TrueNAS admin/root access):**
-1. Confirm WoL hardware support and current state — either via the TrueNAS
-   web UI (Network → Interfaces → `enp7s0`) or `sudo ethtool enp7s0 |
-   grep -i wake` from an interactive root/sudo session.
-2. If supported, enable it and persist it (TrueNAS SCALE config, not a
-   systemd unit like pve1-5 — this is a different OS with its own
-   persistence model).
-3. Update the "Current state (pve1-5)" table above with TrueNAS's real
-   `Wake-on` value once known.
-4. Live-test wake-on-LAN against TrueNAS the same way pve2 was tested below,
-   off-hours, with the same "send it twice, expect several minutes" caveat.
+One real gap this test surfaced, unrelated to TrueNAS itself: the operator
+workstation used to send the wake packet runs Tailscale with
+`accept-routes` enabled, and the Tailscale subnet router (JDWLABS-284)
+advertises `192.168.1.0/24`. A broadcast `wakeonlan` call from that
+workstation can get routed through the Tailscale route instead of going out
+the real LAN NIC, silently no-opping the wake. The fix is binding the send
+to the workstation's actual LAN adapter/source address rather than letting
+routing pick — see "Testing" for the working invocation. This applies to
+waking pve1-5 too, not just TrueNAS; anyone on a Tailscale-connected machine
+should bind the sender the same way.
 
 ## Testing
 
@@ -252,3 +248,38 @@ Only pve2 tested so far. pve1, pve3, pve4 configured identically and expected
 to behave the same; pve5 deliberately not tested (hosts the operator's own
 active session) — treat as configured-but-unverified until tested
 separately, off-hours.
+
+Tested live on TrueNAS, 2026-08-25:
+
+1. Baseline: `ssh truenas_admin@192.168.1.205 uptime` → `up 6 days`
+2. Graceful shutdown via the TrueNAS web UI (System Settings → Shutdown),
+   confirmed powered off — full ICMP loss, and the gateway's device table
+   showed the host `off` with a last-seen timestamp matching the shutdown.
+   **A prior attempt in this same session used Restart instead of Shutdown
+   by mistake** — that came back on its own within ~1 minute with no wake
+   packet involved and proved nothing; only a genuine full power-off tests
+   WoL. Confirm the UI action was Shutdown, not Restart, before trusting a
+   fast recovery as evidence.
+3. Devbox itself is a Proxmox VM whose disk lives on `truenas-vmdisks` (NFS,
+   see `terraform/variables.tf`) — the operating session's own devbox
+   correctly stalled for the duration of the outage, the same D-state
+   failure mode the original 2026-08-11 incident hit. Expect this if
+   testing from a machine whose storage depends on the host being woken;
+   it is not a sign anything is broken.
+4. Magic packet sent to `30:56:0f:24:01:61` (broadcast to `192.168.1.255`
+   and `255.255.255.255`, ports 9 and 7), explicitly bound to the sending
+   workstation's real LAN adapter/source address rather than left to normal
+   routing — see the gap noted under "TrueNAS access" above; an unbound
+   send from a Tailscale-connected workstation risks silently routing off
+   the LAN segment and never reaching the host.
+5. `ssh truenas_admin@192.168.1.205 uptime` → `up 1 min`, then confirmed
+   `system boot` timestamp \~2 minutes after the magic packet — genuine cold
+   boot, not a stale connection.
+6. Pool health checked immediately post-boot: `boot-pool` and the main
+   `storage` pool both `ONLINE`, no degraded vdevs — a graceful shutdown +
+   WoL wake cycle is safe for the ZFS pools this host serves.
+
+**TrueNAS's remote-recovery gap is closed**: WoL was already enabled by
+default, the wake succeeded from a genuine cold power-off with zero
+physical access, and the pools came back healthy. The Tailscale-routing gap
+above is the one real follow-up this test surfaced.
