@@ -159,18 +159,41 @@ runcmd:
 
 SSH in once cloud-init completes, then:
 
-1. Install dev tooling: Docker Engine, Node/pnpm (nvm), `gh` CLI, Claude Code
-   CLI, `kubectl`/`talosctl`/`helm`, `sops`/`age`.
-2. Sync credentials/dotfiles from the Windows workstation: age key (the
-   existing dual-recipient re-key setup already anticipates a second
-   machine), SSH keys, git config, shell dotfiles.
+1. Install dev tooling via the dotfiles bootstrap:
+
+   ```sh
+   sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply jdwillmsen
+   ```
+
+   Answer the `installDevTooling` prompt `true` (it defaults to `false`; for
+   an unattended run pass `--promptBool installDevTooling=true`). That flag
+   gates the dotfiles repo's opt-in dev-tooling catalog
+   (`home/run_once_49-install-dev-tools.sh.tmpl`), which installs Docker
+   Engine, Node/pnpm (nvm + corepack), Rust, `helm`, `gh`, `kubectl`,
+   `talosctl`, `sops`, `age`, and JDK 21 — skipping tools already present,
+   checksum-verifying pinned release binaries, and requiring passwordless
+   sudo (which §5.2's cloud-init sudoers entry provides). Claude Code CLI
+   arrives in the same apply via the dotfiles `agentClis` catalog, and Go
+   via the dotfiles Go script (pinned upstream tarball) — neither is behind
+   this flag, and none of the tooling needs installing by hand anymore.
+
+   The apply decrypts dotfiles secrets against the age identity at
+   `~/.config/chezmoi/key.txt`, so sync that key (step 2) before running
+   the one-liner.
+2. Sync credentials from the Windows workstation: age key (the existing
+   dual-recipient re-key setup already anticipates a second machine) and SSH
+   keys. Git config and shell dotfiles no longer need copying — step 1's
+   chezmoi apply lays them down.
 3. Fresh auth on the VM rather than copying tokens: `gh auth login`, Claude
    Code login.
 4. Connect from the workstation via VS Code Remote-SSH.
 
-No new automation proposed here — this is a documented manual sequence, not a
-script committed to this repo, since it's a one-time personal-environment
-setup rather than reproducible infrastructure.
+The tool-install step is no longer a hand-run sequence: the dotfiles repo
+automates it as a data-driven catalog gated behind `installDevTooling`,
+which defaults off so a personal laptop applying the same dotfiles doesn't
+grow a Docker daemon and a kubectl. The automation lives there rather than
+here because it provisions a personal environment, not reproducible
+infrastructure — the same boundary the old manual sequence drew.
 
 ## 6. Backup
 
