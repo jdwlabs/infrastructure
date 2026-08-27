@@ -41,6 +41,14 @@ kubectl describe node <name>      # Node details and conditions
 kubectl logs <pod> -n <ns>        # Pod logs
 ```
 
+### Branch protection / required checks
+
+Branch rulesets (required status checks, review rules) are managed as code
+in [`.github/rulesets/`](.github/rulesets/) and applied to GitHub manually
+via `apply.sh` after merge — see that script's header comment before
+renaming, merging, or removing any required CI job context; doing it in the
+wrong order can make a PR permanently unmergeable or block every open PR.
+
 ## Common Tasks
 
 ### Add a new cluster
