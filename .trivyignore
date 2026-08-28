@@ -5,3 +5,12 @@
 # `go mod why golang.org/x/crypto/openpgp` reports "main module does not need
 # package". x/crypto module updates continue to flow via Renovate.
 GO-2026-5932
+
+# extensions/iscsi-tools/Dockerfile packages a Talos system-extension image:
+# an OCI-shaped filesystem payload (manifest.yaml + rootfs/) consumed by the
+# Talos imager, never run as a container. Container-runtime hardening rules
+# do not apply — there is no process to HEALTHCHECK (DS-0026), and no USER to
+# drop to (DS-0002): Talos launches the packaged iscsid as a host service,
+# which must be root to manage kernel iSCSI sessions.
+DS-0002
+DS-0026
