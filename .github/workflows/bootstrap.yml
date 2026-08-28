@@ -5,17 +5,24 @@ name: Bootstrap
 # rendered configs against them. Bumping those pins is precisely the change
 # that can turn a patch key invalid, so it has to run this workflow even
 # though nothing under bootstrap/ moved.
+#
+# This workflow's own path is in scope too, for the same reason every path
+# above is: the checksum-pinned tool installs and cache logic below only get
+# exercised by editing this file, so an edit that doesn't also touch
+# bootstrap/ would otherwise merge with zero CI signal.
 on:
   push:
     branches: [main]
     paths:
       - 'bootstrap/**'
       - 'terraform/terraform.tfvars.example'
+      - '.github/workflows/bootstrap.yml'
   pull_request:
     branches: [main]
     paths:
       - 'bootstrap/**'
       - 'terraform/terraform.tfvars.example'
+      - '.github/workflows/bootstrap.yml'
 
 permissions:
   contents: read

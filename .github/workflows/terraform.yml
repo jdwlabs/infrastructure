@@ -1,12 +1,14 @@
 name: Terraform
 
+# Own path is in the filter so an edit to this workflow re-triggers the
+# validate job it changed; without it, a broken edit merges untested.
 on:
   push:
     branches: [main]
-    paths: ['terraform/**']
+    paths: ['terraform/**', '.github/workflows/terraform.yml']
   pull_request:
     branches: [main]
-    paths: ['terraform/**']
+    paths: ['terraform/**', '.github/workflows/terraform.yml']
 
 permissions:
   contents: read
