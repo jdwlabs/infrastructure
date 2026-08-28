@@ -12,4 +12,4 @@ jobs:
   # author's signature is verifiable exactly once — before the merge rewrites
   # it. Reads the API only; no checkout, no secret.
   signatures:
-    uses: jdwlabs/.github/.github/workflows/verify-pr-signatures.yml@main
+    uses: jdwlabs/.github/.github/workflows/verify-pr-signatures.yml@b827924589b7e129a81762131b9d451121718bdc  # main as of 2026-08-26 (jdwlabs/.github has no tagged releases)
