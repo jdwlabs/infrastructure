@@ -1,0 +1,96 @@
+# Forked from the upstream extension's service spec. The only change is the
+# /etc/iscsi mount arrangement; every other field is byte-for-byte upstream.
+#
+# Upstream bind-mounts the host's /etc/iscsi over the container's /etc/iscsi
+# read-only. That directory holds only the Talos-generated
+# initiatorname.iscsi, so iscsid and every iscsiadm nsenter'd into this
+# namespace fall back to open-iscsi's compiled-in timeout defaults — and,
+# because the mount is read-only, no runtime mechanism can add a file to it:
+# injecting a config-file bind mount onto /etc/iscsi/iscsid.conf fails at
+# mountpoint creation ("read-only file system") and leaves the service in a
+# restart loop with no working initiator on the node.
+#
+# The fix inverts the arrangement. The extension's own /usr/local/etc/iscsi —
+# part of this image, so present on the host filesystem — becomes the
+# container's /etc/iscsi, carrying the tuned iscsid.conf plus a placeholder
+# initiatorname.iscsi. The host's real initiatorname.iscsi is then
+# file-bind-mounted over the placeholder. Order matters and neither mount can
+# be dropped: the directory mount must come first so the file mount finds an
+# existing target (the runtime cannot create a mountpoint on the read-only
+# source), and the file mount must come second so the Talos-generated
+# initiator name — unique per node, generated at first boot — shadows the
+# placeholder rather than the reverse.
+name: iscsid
+depends:
+  - service: cri
+  - network:
+       - addresses
+       - connectivity
+       - hostname
+       - etcfiles
+  - path: /etc/iscsi/initiatorname.iscsi
+container:
+  entrypoint: /usr/local/sbin/iscsid
+  args:
+    - -f
+  security:
+    maskedPaths: []
+    readonlyPaths: []
+    writeableSysfs: true
+  mounts:
+    # ld-musl-x86_64.so.1
+    - source: /lib
+      destination: /lib
+      type: bind
+      options:
+        - bind
+        - ro
+    # libcrypto.so and libc.so
+    - source: /usr/lib
+      destination: /usr/lib
+      type: bind
+      options:
+        - bind
+        - ro
+    # iscsi libs
+    - source: /usr/local/lib
+      destination: /usr/local/lib
+      type: bind
+      options:
+        - bind
+        - ro
+    - source: /usr/local/sbin
+      destination: /usr/local/sbin
+      type: bind
+      options:
+        - bind
+        - ro
+    # iscsi etc folder: this extension's config dir, not the host's /etc/iscsi
+    - source: /usr/local/etc/iscsi
+      destination: /etc/iscsi
+      type: bind
+      options:
+        - rbind
+        - ro
+    # the node's real initiator name, shadowing the placeholder
+    - source: /etc/iscsi/initiatorname.iscsi
+      destination: /etc/iscsi/initiatorname.iscsi
+      type: bind
+      options:
+        - rbind
+        - ro
+    - source: /var/lib/iscsi
+      destination: /var/lib/iscsi
+      type: bind
+      options:
+        - rshared
+        - rbind
+        - rw
+    - source: /run/lock/iscsi
+      destination: /run/lock/iscsi
+      type: bind
+      options:
+        - rshared
+        - rbind
+        - rw
+restart: always

@@ -215,71 +215,130 @@ its old values until that record is deleted. **Applying this change to a node
 does not protect the volume this work is about; deleting its stale record
 does.** Step 4 of the rollout is where that happens.
 
-### Mechanism: a Talos `ExtensionServiceConfig` document
+### Mechanism: a forked iscsi-tools extension with the config baked in
 
-The defaults suit a multipath SAN, where abandoning an unresponsive path in
-five seconds costs nothing because a second path picks the I/O up. There is one
-portal to the NAS and no second path, so abandoning it costs the filesystem.
-The worker role patch therefore ships an `iscsid.conf` carrying a 30-second
-NOP-Out timeout, a 10-second NOP-Out interval and a 300-second replacement
-timeout; the reasoning for each number is in the comment above the document in
-`bootstrap/internal/talos/patches/worker.yaml`.
+Two runtime mechanisms for delivering this file were tried first, and both are
+proven broken on these nodes — on a drained canary, not in theory:
 
-Why `ExtensionServiceConfig` rather than the alternatives:
+- **`ExtensionServiceConfig`** — what this runbook previously described — is
+  structurally the wrong mechanism for this extension. The extension's own
+  service spec already bind-mounts the host's `/etc/iscsi` into the container
+  read-only, and `iscsid.conf` does not exist inside it, so by the time Talos
+  injects the config-file mount there is no writable mountpoint left to create
+  ("read-only file system"). `ext-iscsid` enters a restart-forever loop with
+  **no working iSCSI initiator on the node**. The document validates and
+  applies without complaint; the failure only appears when the service
+  restarts. Recovery was minutes over the Talos API (remove the document,
+  re-apply, restart the service), but the mechanism is dead.
+- **`machine.files`** hits a hard Talos constraint: a `create` outside `/var`
+  is rejected — `create operation not allowed outside of /var` — and the
+  rejection happens in the boot-time `writeUserFiles` task, which blocks the
+  `cri` service from ever registering. The node never joins Kubernetes and
+  Talos self-schedules a retry reboot 35 minutes out. Recovery required
+  regenerating the node's clean config from the unmodified template and
+  re-applying with `--mode=reboot`. `op: overwrite` was not attempted and
+  cannot rescue the approach: there is no `/etc/iscsi/iscsid.conf` on the host
+  to overwrite, and an overwrite that fails fails in the same boot-blocking
+  task with the same blast radius.
 
-- **`machine.files`** writes into `/etc` through a bind-mount overlay. It is
-  the obvious route and it is the wrong one: it is reported upstream to leave
-  nodes completely unresponsive after the next reboot, which is a far worse
-  failure than the one being fixed.
-- **`ExtensionServiceConfig`** is the supported way to hand a config file to an
-  extension service. Talos writes the content under its own state directory and
-  bind-mounts it read-only at the requested path inside the service container.
-  That is the mount namespace that matters here: the CSI driver does not carry
-  its own initiator, it runs the host binary through
-  `nsenter --mount=/proc/<iscsid-pid>/ns/mnt`, so the `iscsiadm` that creates
-  node records reads the `iscsid.conf` visible to the `ext-iscsid` service.
-- **Rebuilding the extension** with a baked-in config would change the Image
-  Factory schematic ID, which is a schematic migration rather than a config
-  change — much larger, and it puts the values somewhere no one thinks to look.
+What remains is the option originally set aside as the bigger lift: fork the
+extension so the file is part of the image and **no runtime write or runtime
+mount injection is needed at all**. `extensions/iscsi-tools/` holds the fork:
 
-**Unverified before rollout, and the reason the first node is a canary.** The
-extension bind-mounts host `/etc/iscsi` into its container read-only, and
-`iscsid.conf` does not exist inside it. Whether the runtime can create that
-mountpoint on a read-only parent to land the bind mount has not been proven
-here — only that the document itself validates (`talosctl validate`). If it
-cannot, `ext-iscsid` fails to start and **that node loses iSCSI entirely**,
-which takes down every attached volume on it. Prove it on one drained worker
-before going near a second.
+- The Dockerfile layers three files onto the upstream image, pinned by digest
+  to the exact build the current Image Factory schematic ships (the floating
+  `v0.2.0` tag has been re-pushed upstream since and no longer matches).
+- `iscsid.conf` carries the tuned values and their full rationale:
+  `noop_out_interval` 10s, `noop_out_timeout` 30s, `replacement_timeout` 300s.
+- The service spec inverts the `/etc/iscsi` mount: the extension's own
+  `/usr/local/etc/iscsi` (containing `iscsid.conf` and a placeholder
+  `initiatorname.iscsi`) becomes the container's `/etc/iscsi`, and the host's
+  Talos-generated `initiatorname.iscsi` is file-bind-mounted over the
+  placeholder. Both mount-ordering constraints are documented in the spec
+  itself; the arrangement never asks the runtime to create a mountpoint on a
+  read-only filesystem, which is the exact operation that killed the
+  `ExtensionServiceConfig` route.
+- The `Extension Image` workflow builds the extension, asserts the baked
+  content, and on merge to main publishes `ghcr.io/jdwlabs/iscsi-tools` plus a
+  custom nocloud installer `ghcr.io/jdwlabs/talos-installer` assembled by the
+  matching `imager` from the fork and the digest-pinned `qemu-guest-agent` the
+  current schematic also carries.
+
+Delivery is `talosctl upgrade --image` per node, and that is where the risk
+story improves over both dead mechanisms: the failure surface moves from
+apply/boot time on a live node to build time in CI, and a Talos upgrade keeps
+the previous boot image — a new image that fails to boot is automatically
+reverted, where a failed `machine.files` write left the node out of the
+cluster until a human re-applied a clean config.
+
+Namespace scope is unchanged from the previous design: the file lands in the
+`ext-iscsid` mount namespace, which is the namespace the CSI driver's
+`iscsiadm` wrapper nsenters into. The host's `/etc/iscsi` (PID 1's namespace)
+is untouched, so anything reading it — possibly Longhorn — keeps compiled
+defaults; see the Longhorn gate below.
+
+The worker role patch no longer carries the `iscsid` `ExtensionServiceConfig`
+document. **Do not apply a machine config rendered before that removal**: a
+stale rendered config still carrying the document restarts `ext-iscsid` into
+the proven restart loop on the current extension. Rebuild `talops` and
+regenerate before any future `apply-config` to a worker.
 
 ### iSCSI rollout plan (node-by-node)
 
 Preconditions:
 
-- Rebuild `talops` so the embedded patch template carries the new document:
+- The `Extension Image` workflow has published both images (it runs on the
+  merge to main). Confirm:
+
+  ```bash
+  docker manifest inspect ghcr.io/jdwlabs/iscsi-tools:v0.2.0-jdwlabs.1
+  docker manifest inspect ghcr.io/jdwlabs/talos-installer:v1.13.4-iscsi.1
+  ```
+
+- **HUMAN, one-time**: set both GHCR packages to public visibility (org
+  package settings). Nodes pull the installer with no registry credentials
+  configured; a private package fails the upgrade at pull time — before
+  anything on the node changes, but it stops the rollout.
+- Rebuild `talops` and regenerate node configs so the rendered worker configs
+  no longer carry the `iscsid` `ExtensionServiceConfig` document:
   `cd bootstrap && go build -buildvcs=false -o build/ ./...`.
 - Pick a canary worker with **no** attached iSCSI volume, or drain the one it
   has first. `talosctl -n <worker-ip> ls /var/lib/iscsi/nodes` lists what is
-  attached; an empty or missing directory means the node is free.
+  attached; an empty or missing directory means the node is free. Draining a
+  worker that carries Longhorn replicas needs Longhorn's own eviction first —
+  set `evictionRequested: true` and `allowScheduling: false` on the
+  `nodes.longhorn.io` object, wait for replicas to relocate, then cordon and
+  drain; a plain drain is blocked by the instance-manager PDB. This procedure
+  is proven on this cluster.
 - Control-plane nodes are deliberately out of scope. They attach no iSCSI
-  volumes — `/var/lib/iscsi/nodes` does not exist on any of them — so the
-  control-plane role patch is untouched.
+  volumes — `/var/lib/iscsi/nodes` does not exist on any of them — and they
+  stay on the Image Factory installer. Running workers on the forked installer
+  and control planes on the factory one is fine: same Talos version, same
+  extension set, one baked config file of difference.
 
 Order: canary worker first and fully verified, then the remaining workers one
 at a time.
 
-1. Regenerate and inspect the config without applying:
+1. **HUMAN**: upgrade the drained canary to the forked installer:
 
    ```bash
-   talosctl machineconfig patch clusters/core/secrets/worker.yaml \
-     --patch @<rendered-worker-patch> -o /tmp/worker-check.yaml
-   talosctl validate --config /tmp/worker-check.yaml --mode metal
+   talosctl -n <worker-ip> upgrade \
+     --image ghcr.io/jdwlabs/talos-installer:v1.13.4-iscsi.1
    ```
 
-   The `ExtensionServiceConfig` document named `iscsid` must be present.
-2. **HUMAN**: apply to the canary worker. Applying a changed
-   `ExtensionServiceConfig` restarts `ext-iscsid`, which is why the node is
-   drained first.
-3. The service must come back — this is the step the canary exists for:
+   This reboots the node. Talos keeps the previous boot image and reverts to
+   it automatically if the new one fails to boot, so the unrecoverable-node
+   failure mode of the `machine.files` attempt does not exist here.
+2. Confirm the fork is what booted:
+
+   ```bash
+   talosctl -n <worker-ip> get extensions
+   ```
+
+   `iscsi-tools` must report version `v0.2.0-jdwlabs.1`. The factory version
+   string means the node booted the old image — stop and investigate before
+   touching the service.
+3. The service gate — this is the step the canary exists for:
 
    ```bash
    talosctl -n <worker-ip> services | grep ext-iscsid
@@ -287,26 +346,21 @@ at a time.
    ```
 
    Two conditions, both required. `services` reports `Running`, **and** the
-   lines emitted *after* the restart no longer contain
+   log lines from the current boot no longer contain
 
    ```text
    can't open iscsid.safe_logout configuration file /etc/iscsi/iscsid.conf
    ```
 
-   Talos appends to a service's log across restarts, so grep the tail rather
-   than the whole file — the pre-restart occurrence is still in there and will
-   match. Every node emits that line today, and its absence from the lines that
-   follow the restart is the only direct evidence that `iscsid` opened the file
-   rather than the machine config merely carrying it. `talosctl get
-   extensionserviceconfigs` is not evidence: that resource is rendered *from*
-   the machine config, so it can only ever confirm what was applied, never what
-   the service can see. Either condition failing means the config-file mount
-   did not land; roll back that node immediately (see below) before the drain
-   is lifted.
+   Every node on the stock extension emits that line at service start, and its
+   absence after the upgrade is the direct evidence that `iscsid` opened the
+   baked file. Either condition failing means the mount arrangement did not
+   land; roll back that node immediately (see below) before the drain is
+   lifted.
 4. **Delete the stale node record for the target before reading anything
    back.** Records persist across logout, re-stage and reboot (see Background),
    so a target that has been attached on this node before reads back its *old*
-   values however correctly the mount landed — which would abort a correct
+   values however correctly the config landed — which would abort a correct
    rollout at step 5. With the volume detached, delete the record:
 
    ```bash
@@ -319,7 +373,7 @@ at a time.
    has no verb that deletes a file, so the record cannot be removed from the
    host side. The driver's `iscsiadm` is a wrapper that already does the
    `nsenter` into `iscsid`'s mount namespace, which is both the namespace the
-   record lives in and the one this change's `iscsid.conf` is mounted into.
+   record lives in and the one the baked `iscsid.conf` is visible in.
 
    A canary with no prior attachment has nothing to delete; check with
    `talosctl -n <worker-ip> ls -r /var/lib/iscsi/nodes` first.
@@ -338,8 +392,8 @@ at a time.
 
    Expect `noop_out_interval = 10`, `noop_out_timeout = 30`,
    `replacement_timeout = 300`. Old values here — *after* the record was
-   deleted in step 4 — mean the mount landed but the initiator is not reading
-   it; stop, do not roll further.
+   deleted in step 4 — mean the config is visible but the initiator is not
+   reading it; stop, do not roll further.
 6. **Check the blast radius before the second node.** Longhorn attaches its own
    volumes over iSCSI on the same workers and inherits the same defaults today
    (`replacement_timeout = 120`, both NOP-Out values `5`). Whether its
@@ -354,37 +408,45 @@ at a time.
 
    **If it did not inherit them, that is an accepted end state, not a
    blocker.** It is the likelier result: Longhorn's manager nsenters into PID
-   1's mount namespace, where no `iscsid.conf` exists. The node then carries two
-   initiator configurations at once — records created through the CSI driver's
+   1's mount namespace, where no `iscsid.conf` exists — the fork deliberately
+   leaves the host's `/etc/iscsi` alone. The node then carries two initiator
+   configurations at once — records created through the CSI driver's
    `ext-iscsid` namespace get the new values, records created by Longhorn keep
    open-iscsi's compiled defaults. Write down which way it went and roll on.
    Longhorn is not the workload this change exists to protect, and by the trade
-   above it is arguably better served by the short defaults. Do not chase parity
-   by moving the file into PID 1's namespace with `machine.files` — that is the
-   route ruled out at the top of this section, and the reason it was ruled out
-   has not changed.
-7. Repeat 2–5 for each remaining worker.
-8. Reboot the canary once and re-run **step 3**. Step 5 is the wrong gate here
-   and would pass regardless: the node record persists on `/var` across the
-   reboot and the post-reboot re-stage reuses it rather than re-deriving it, so
-   it would still read `300` even if the config-file mount failed to re-land at
-   boot — which is precisely the unproven risk this rollout is canarying. Only
-   `ext-iscsid` reporting `Running` with no `can't open …/iscsid.conf` line
-   after the reboot proves the mount came back. Re-running step 5 on top of
-   that is still worth doing, but as a record-persistence check only; for
-   end-to-end proof after a reboot, delete and re-create the record (steps 4
-   and 5) rather than reading the surviving one.
+   above it is arguably better served by the short defaults. Do not chase
+   parity by writing the file into PID 1's namespace with `machine.files` —
+   that mechanism is proven to fail the node's boot (see Mechanism above).
+7. Repeat 1–5 for each remaining worker, one at a time, drained first.
+8. **Adopt the installer reference permanently.** Until `installer_image` in
+   the tfvars points at the forked installer, the machine configs still name
+   the Image Factory image, and the next `talos-upgrade.md` cycle or node
+   reinstall would silently revert to the stock extension. After the fleet is
+   rolled, bump `installer_image` (and keep `talos_version` in lockstep) in a
+   follow-up change. A future Talos version bump rebuilds the fork first: bump
+   `TALOS_VERSION`, the base digests, and both tags in
+   `.github/workflows/extension-image.yml`, merge, then upgrade nodes to the
+   new installer tag.
 
 ### iSCSI rollback
 
-Per node, and immediately if `ext-iscsid` does not return to `Running`: revert
-that node's machine config to the previous revision and re-apply. The node
-returns to open-iscsi's compiled defaults — the exposure this change exists to
-remove, but a working initiator.
+Per node, and immediately if step 2 or 3 fails: upgrade back to the Image
+Factory installer the fleet runs today —
 
-Fleet-wide: revert the patch-template commit, rebuild `talops`, regenerate and
-re-apply per node. No reboot is required, but `ext-iscsid` restarts on each
-node, so drain each one first.
+```bash
+talosctl -n <worker-ip> upgrade \
+  --image factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.13.4
+```
+
+— which restores the stock extension and open-iscsi's compiled defaults: the
+exposure this change exists to remove, but a working initiator. A forked image
+that fails to boot at all never needs this; Talos reverts to the previous boot
+image on its own.
+
+Rolling back the image does not roll back node records. Any record created
+while the fork was live keeps `30/10/300` until it is deleted (step 4's
+procedure) and recreated under the stock defaults — the mirror image of the
+staleness called out in Background.
 
 There is no second safety net. Until every worker is rolled, nodes are in two
 different states, and a volume's exposure depends on which worker it lands on.
