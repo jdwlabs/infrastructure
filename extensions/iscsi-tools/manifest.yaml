@@ -1,0 +1,12 @@
+version: v1alpha1
+metadata:
+  name: iscsi-tools
+  version: "v0.2.0-jdwlabs.1"
+  author: jdwlabs (forked from Sidero Labs)
+  description: |
+    [core] This system extension provides iscsi-tools with a baked-in
+    /etc/iscsi/iscsid.conf tuning initiator timeouts for a single-portal
+    NAS target.
+  compatibility:
+    talos:
+      version: ">= v1.1.0"

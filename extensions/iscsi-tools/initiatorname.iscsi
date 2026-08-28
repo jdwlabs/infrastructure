@@ -1,0 +1,4 @@
+# Mountpoint placeholder only — never read. The service spec bind-mounts the
+# host's Talos-generated /etc/iscsi/initiatorname.iscsi over this file, and a
+# bind mount onto a read-only filesystem needs its target to already exist
+# because the runtime cannot create one there. See iscsid.yaml.

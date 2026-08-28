@@ -1,0 +1,135 @@
+name: Extension Image
+
+# Builds the forked iscsi-tools system extension and the custom Talos
+# installer that carries it. Pull requests build and verify only; a main push
+# (or manual dispatch) additionally publishes both images, because the imager
+# can only consume extension images from a registry — there is no local-OCI
+# input — so the installer can never be assembled from an unpushed extension.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/**'
+      - '.github/workflows/extension-image.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'extensions/**'
+      - '.github/workflows/extension-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Cancel superseded PR runs; a main-push always publishes to completion.
+concurrency:
+  group: extension-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Published tags are immutable by policy: nodes are upgraded to these
+  # references one at a time, and a tag that changes meaning mid-rollout would
+  # leave the fleet running two different images under one name. Any change
+  # under extensions/iscsi-tools must bump EXTENSION_TAG and INSTALLER_TAG
+  # together; the publish job skips (with a warning) rather than overwrite.
+  EXTENSION_IMAGE: ghcr.io/jdwlabs/iscsi-tools
+  EXTENSION_TAG: v0.2.0-jdwlabs.1
+  INSTALLER_IMAGE: ghcr.io/jdwlabs/talos-installer
+  # Leads with the Talos version, matching the tfvars convention that the
+  # installer tag embeds the Talos version it installs.
+  INSTALLER_TAG: v1.13.4-iscsi.1
+  TALOS_VERSION: v1.13.4
+  # Pinned to the digest the official extensions bundle for TALOS_VERSION
+  # resolves — the same bits the current Image Factory schematic ships.
+  # Re-derive from ghcr.io/siderolabs/extensions:<version> (crane export,
+  # image-digests file) whenever TALOS_VERSION moves.
+  QEMU_GUEST_AGENT_IMAGE: ghcr.io/siderolabs/qemu-guest-agent:11.0.1@sha256:626be1d4cafbc6250723ee5b9683c3585b494d76f71d6ef55e3364d121defc7e
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Build extension image
+        run: docker build -t "$EXTENSION_IMAGE:$EXTENSION_TAG" extensions/iscsi-tools
+
+      # The extension is FROM the upstream image with files layered on top, so
+      # prove the layering landed rather than trusting the build: the tuned
+      # config, the placeholder mountpoint, the replacement service spec with
+      # its two-mount /etc/iscsi arrangement, and the fork-identifying
+      # manifest version.
+      - name: Verify baked content
+        run: |
+          docker create --name ext-verify "$EXTENSION_IMAGE:$EXTENSION_TAG" /unused
+          docker cp ext-verify:/rootfs/usr/local/etc/iscsi ./verify-etc-iscsi
+          docker cp ext-verify:/rootfs/usr/local/etc/containers/iscsid.yaml ./verify-iscsid.yaml
+          docker cp ext-verify:/manifest.yaml ./verify-manifest.yaml
+          docker rm ext-verify
+
+          grep -Fx 'node.conn[0].timeo.noop_out_interval = 10' verify-etc-iscsi/iscsid.conf
+          grep -Fx 'node.conn[0].timeo.noop_out_timeout = 30' verify-etc-iscsi/iscsid.conf
+          grep -Fx 'node.session.timeo.replacement_timeout = 300' verify-etc-iscsi/iscsid.conf
+          test -f verify-etc-iscsi/initiatorname.iscsi
+          grep -F 'source: /usr/local/etc/iscsi' verify-iscsid.yaml
+          grep -F 'source: /etc/iscsi/initiatorname.iscsi' verify-iscsid.yaml
+          grep -F 'version: "v0.2.0-jdwlabs.1"' verify-manifest.yaml
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check published tags
+        if: github.event_name != 'pull_request'
+        id: guard
+        run: |
+          ext=absent
+          docker manifest inspect "$EXTENSION_IMAGE:$EXTENSION_TAG" >/dev/null 2>&1 && ext=present
+          inst=absent
+          docker manifest inspect "$INSTALLER_IMAGE:$INSTALLER_TAG" >/dev/null 2>&1 && inst=present
+          echo "extension=$ext" >> "$GITHUB_OUTPUT"
+          echo "installer=$inst" >> "$GITHUB_OUTPUT"
+          if [ "$ext" = present ]; then
+            echo "::warning::$EXTENSION_IMAGE:$EXTENSION_TAG already published — not overwriting. Bump EXTENSION_TAG if extension content changed."
+          fi
+          if [ "$inst" = present ]; then
+            echo "::warning::$INSTALLER_IMAGE:$INSTALLER_TAG already published — not overwriting. Bump INSTALLER_TAG if inputs changed."
+          fi
+
+      - name: Push extension image
+        if: github.event_name != 'pull_request' && steps.guard.outputs.extension == 'absent'
+        run: docker push "$EXTENSION_IMAGE:$EXTENSION_TAG"
+
+      # The installer is what `talosctl upgrade --image` consumes. Built with
+      # the same imager version as the Talos release so the UKI, kernel and
+      # base installer all match, for the nocloud platform these VMs boot
+      # with. The just-pushed extension is referenced by digest so the
+      # installer records exactly what it embeds. The runner's docker config
+      # is mounted read-only so the imager can pull the extension even while
+      # the GHCR package is private.
+      - name: Build installer image
+        if: github.event_name != 'pull_request' && steps.guard.outputs.installer == 'absent'
+        run: |
+          ext_digest=$(docker manifest inspect -v "$EXTENSION_IMAGE:$EXTENSION_TAG" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['Descriptor']['digest'])")
+          mkdir -p _out
+          docker run --rm -v "$PWD/_out:/out" \
+            -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+            "ghcr.io/siderolabs/imager:$TALOS_VERSION" installer \
+            --arch amd64 \
+            --platform nocloud \
+            --system-extension-image "$EXTENSION_IMAGE@$ext_digest" \
+            --system-extension-image "$QEMU_GUEST_AGENT_IMAGE"
+          test -f _out/installer-amd64.tar
+
+      - name: Set up crane
+        if: github.event_name != 'pull_request' && steps.guard.outputs.installer == 'absent'
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Push installer image
+        if: github.event_name != 'pull_request' && steps.guard.outputs.installer == 'absent'
+        run: crane push _out/installer-amd64.tar "$INSTALLER_IMAGE:$INSTALLER_TAG"
