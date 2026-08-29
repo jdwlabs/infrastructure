@@ -108,6 +108,21 @@ is the problem). Confirmed: reconnecting with `ssh <host>` and the root
 password worked immediately, even with `pve-cluster` down, and stayed
 connected through the entire stop → edit → restart sequence.
 
+**Where that root password comes from (JDWLABS-445):** at the time this
+runbook was first written there was nowhere retrievable to get it from —
+exactly the gap that caused the 2026-08-27 pve3 outage (JDWLABS-437) to be
+console-only. As of JDWLABS-445, each host's root PAM password is stored in
+this cluster's Vault at `kv/pve-hosts/<host>/root` (field `password`) —
+retrieve it with `kubectl exec -n vault platform-vault-0 -- vault kv get
+-field=password kv/pve-hosts/<host>/root` and use it at `sshd`'s password
+prompt (never as a CLI arg). See
+`scenarios/host-remote-power-recovery.md`'s "SSH key auth failure" section
+for the full retrieval procedure and `scenarios/pve-root-vault-wizard.sh`
+for how the password gets set/stored in the first place. As of 2026-08-29
+this is the documented mechanism, not a guarantee — confirm the password
+actually exists for the target node (`vault kv list kv/pve-hosts/`) before
+relying on it during a live incident.
+
 ## If this recurs on a different node
 
 1. Confirm quorum is healthy first (`corosync-quorumtool -l` from an
@@ -115,7 +130,9 @@ connected through the entire stop → edit → restart sequence.
    drops below that.
 2. Have a password-authenticated SSH session to the target node ready
    *before* stopping `pve-cluster` there — key auth will break the instant
-   it stops.
+   it stops. Get the password from Vault (`kv/pve-hosts/<host>/root`, see
+   above) rather than assuming you already have it memorized or saved
+   elsewhere.
 3. Check `grep <hostname> /etc/hosts` on the target node itself first. If a
    stale self-entry exists, this is almost certainly the whole problem —
    fix that before considering anything more invasive (corosync.conf edits,

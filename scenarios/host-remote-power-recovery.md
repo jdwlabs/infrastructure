@@ -38,6 +38,71 @@ All six hosts are consumer-grade with no enterprise out-of-band management,
 and none can gain it without a hardware swap — this rules out the IPMI path
 for the whole fleet, not just pve1-5.
 
+## SSH key auth failure: root PAM password in Vault (JDWLABS-445)
+
+Status: **MECHANISM READY, not yet executed as of 2026-08-29.** The wizard
+below exists; whether a password has actually been set and stored for each
+of pve1-5 is not tracked in this file — check `kubectl exec -n vault
+platform-vault-0 -- vault kv list kv/pve-hosts/` before assuming any given
+host is covered.
+
+This is a different failure mode from everything else in this doc: the host
+never lost power, and Wake-on-LAN (below) does nothing for it. During the
+2026-08-27 pve3 incident (JDWLABS-437), `pvesh get /nodes/pve3/status`
+failed with `root@192.168.1.202: Permission denied (publickey,password)`
+even though pve3's `sshd` was up and reachable — because inter-node Proxmox
+SSH trust routes through `/etc/pve` (`pmxcfs`), and when pmxcfs dies, every
+SSH key path built on it dies with it (see
+`scenarios/pve-stale-node-ip-corosync.md`'s "Important side effect" section
+for the mechanics: `systemctl stop pve-cluster` unmounts `/etc/pve`, which
+takes root's `authorized_keys` symlink with it). `sshd` itself keeps
+accepting PAM (password) auth throughout — the gap was never having a root
+password stored anywhere retrievable.
+
+**What's stored:** a root PAM password per host, in this cluster's Vault at
+`kv/pve-hosts/<host>/root` (field `password`) — `<host>` is `pve1` through
+`pve5`. This reuses the same `kv/` mount and per-purpose-path convention as
+`kv/truenas-csi` (see `docs/secrets.md`); there's no separate access
+mechanism to learn.
+
+**Retrieving it during an incident** (key auth failing, `sshd` still up —
+try this before assuming physical/console access is required):
+
+```bash
+kubectl exec -n vault platform-vault-0 -- vault kv get -field=password kv/pve-hosts/<host>/root
+# then:
+ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no root@<host-ip>
+# paste the value at sshd's password prompt — do not pass it as an SSH/CLI arg
+```
+
+If that `vault exec` itself fails with an auth error, this session isn't
+logged in to Vault yet — see `scenarios/vault-unseal-backup.md` for how to
+decrypt the root token from `clusters/core/vault/vault-unseal.enc.yaml` and
+`vault login` with it.
+
+**Initial setup (setting the password on each host and seeding Vault) is a
+human-run wizard, not something an agent can do:** choosing and typing a
+real root password on a production hypervisor is a decision only a human
+should drive. Run `scenarios/pve-root-vault-wizard.sh` — it walks pve1-5 one
+at a time, has you set the password yourself directly in your own SSH
+session (it never captures or transmits that keystroke traffic), then
+prompts you to paste it once (hidden input) so it can store it in Vault,
+reads it back to confirm the write, and finishes by proving password SSH
+actually works against the live host.
+
+**Out-of-band alternatives, briefly evaluated (JDWLABS-445 asked for a cheap
+look, not a purchase):**
+
+| Option | Cost (approx.) | Setup complexity | Notes |
+| --- | --- | --- | --- |
+| Root PAM password in Vault (this section) | $0 | Low — one wizard run per host | Only works while `sshd` is reachable and PAM auth is enabled; doesn't help if the host is powered off, network-partitioned, or `sshd` itself is down. Chosen as the immediate fix because it closes the JDWLABS-437 gap exactly and needs no new hardware. |
+| PiKVM (or similar HDMI+USB IP-KVM add-on) | ~$120-150/unit in kit form (per-host — 5 units ≈ $600-750 for the pve fleet) | Medium — needs a spare USB-A/USB-C + HDMI on each mini PC, a PoE or separate power source, and per-unit network/VPN exposure decisions | True out-of-band: survives a dead OS, dead network stack, or a host stuck at BIOS/GRUB — covers gaps this ticket's Vault-password fix cannot (e.g. sshd itself down or hung). Best next investment if console-level access becomes a repeated need; not justified for a single incident so far. |
+| Networked smart PDU (per-outlet switching) | ~$150-400 depending on outlet count and metering | Medium — replaces the rack's existing StarTech PDU (metered-display-only, no network control, single shared breaker — see "Mechanism" below); needs its own network path and access control | Solves the AC-loss gap WoL can't cover (see "Known gap" below), not the SSH-key-auth gap this section addresses. Already flagged as a residual risk on JDWLABS-325; the 2026-08-14 operator decision there was explicitly no follow-up purchase — re-raise if that trade-off changes. |
+
+Neither PiKVM nor a smart PDU is being purchased or provisioned as part of
+this ticket — this table is documentation only, to make the next
+console-access or AC-loss-recovery decision cheaper to make.
+
 ## Mechanism: Wake-on-LAN, with a real scope limit
 
 No networked PDU or smart-plug hardware exists on this rack today — checked
