@@ -38,21 +38,22 @@ All six hosts are consumer-grade with no enterprise out-of-band management,
 and none can gain it without a hardware swap — this rules out the IPMI path
 for the whole fleet, not just pve1-5.
 
-## SSH key auth failure: root PAM password in Vault (JDWLABS-445)
+## SSH key auth failure: root PAM password in Vault
 
-Status: **MECHANISM READY, not yet executed as of 2026-08-29.** The wizard
-below exists; whether a password has actually been set and stored for each
-of pve1-5 is not tracked in this file — check `kubectl exec -n vault
-platform-vault-0 -- vault kv list kv/pve-hosts/` before assuming any given
-host is covered.
+Status: **DONE 2026-08-30 on all five hosts.** Each of pve1-5 has a root PAM
+password set and stored in this cluster's Vault, and password-only SSH from
+the devbox was proven live against every host (evidence below). Re-check
+with `kubectl exec -n vault platform-vault-0 -- vault kv list kv/pve-hosts/`
+before relying on it during an incident — the list, not this file, is the
+ground truth.
 
 This is a different failure mode from everything else in this doc: the host
 never lost power, and Wake-on-LAN (below) does nothing for it. During the
-2026-08-27 pve3 incident (JDWLABS-437), `pvesh get /nodes/pve3/status`
-failed with `root@192.168.1.202: Permission denied (publickey,password)`
-even though pve3's `sshd` was up and reachable — because inter-node Proxmox
-SSH trust routes through `/etc/pve` (`pmxcfs`), and when pmxcfs dies, every
-SSH key path built on it dies with it (see
+2026-08-27 pve3 incident, `pvesh get /nodes/pve3/status` failed with
+`root@192.168.1.202: Permission denied (publickey,password)` even though
+pve3's `sshd` was up and reachable — because inter-node Proxmox SSH trust
+routes through `/etc/pve` (`pmxcfs`), and when pmxcfs dies, every SSH key
+path built on it dies with it (see
 `scenarios/pve-stale-node-ip-corosync.md`'s "Important side effect" section
 for the mechanics: `systemctl stop pve-cluster` unmounts `/etc/pve`, which
 takes root's `authorized_keys` symlink with it). `sshd` itself keeps
@@ -60,13 +61,18 @@ accepting PAM (password) auth throughout — the gap was never having a root
 password stored anywhere retrievable.
 
 **What's stored:** a root PAM password per host, in this cluster's Vault at
-`kv/pve-hosts/<host>/root` (field `password`) — `<host>` is `pve1` through
-`pve5`. This reuses the same `kv/` mount and per-purpose-path convention as
-`kv/truenas-csi` (see `docs/secrets.md`); there's no separate access
-mechanism to learn.
+`kv/pve-hosts/<host>/root` — `<host>` is `pve1` through `pve5`. Fields:
+`password` (32-char random, generated with
+`openssl rand -base64 32 | tr -d '/+=' | cut -c1-32`), `set_by`, and
+`date` (UTC, when that password was last set). This reuses the same `kv/`
+mount and per-purpose-path convention as `kv/truenas-csi` (see
+`docs/secrets.md`); there's no separate access mechanism to learn.
 
-**Retrieving it during an incident** (key auth failing, `sshd` still up —
-try this before assuming physical/console access is required):
+### First remote-recovery step when key auth fails
+
+If `ssh root@<host-ip>` answers `Permission denied (publickey,password)`
+while the host still answers on port 22, do this **before** assuming a
+console visit is needed:
 
 ```bash
 kubectl exec -n vault platform-vault-0 -- vault kv get -field=password kv/pve-hosts/<host>/root
@@ -75,33 +81,96 @@ ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no root@<host-i
 # paste the value at sshd's password prompt — do not pass it as an SSH/CLI arg
 ```
 
-If that `vault exec` itself fails with an auth error, this session isn't
-logged in to Vault yet — see `scenarios/vault-unseal-backup.md` for how to
-decrypt the root token from `clusters/core/vault/vault-unseal.enc.yaml` and
-`vault login` with it.
+If that `vault kv get` fails with `permission denied` (HTTP 403), the Vault
+pod's CLI session isn't logged in — log in non-interactively with the root
+token from this repo's sealed backup (see `scenarios/vault-unseal-backup.md`
+for what that file is):
 
-**Initial setup (setting the password on each host and seeding Vault) is a
-human-run wizard, not something an agent can do:** choosing and typing a
-real root password on a production hypervisor is a decision only a human
-should drive. Run `scenarios/pve-root-vault-wizard.sh` — it walks pve1-5 one
-at a time, has you set the password yourself directly in your own SSH
-session (it never captures or transmits that keystroke traffic), then
-prompts you to paste it once (hidden input) so it can store it in Vault,
-reads it back to confirm the write, and finishes by proving password SSH
-actually works against the live host.
+```bash
+sops decrypt --output-type json clusters/core/vault/vault-unseal.enc.yaml \
+  | jq -r '.vault_init.root_token' \
+  | kubectl exec -i -n vault platform-vault-0 -- vault login -
+```
 
-**Out-of-band alternatives, briefly evaluated (JDWLABS-445 asked for a cheap
-look, not a purchase):**
+`--output-type json` matters: `sops decrypt` on a `.yaml` file emits YAML,
+which `jq` rejects. Note this whole path depends on the cluster (and Vault)
+being up; a pve outage that also takes Vault down needs the break-glass
+route in `scenarios/vault-unseal-backup.md` or a physical console.
+
+### sshd preconditions (checked 2026-08-30)
+
+`sshd -T` on every host reports `permitrootlogin yes` and
+`passwordauthentication yes` — the Proxmox defaults. **Do not harden either
+setting** on pve1-5 without first replacing this mechanism; doing so silently
+turns every pmxcfs failure back into a console-only outage.
+
+### Evidence, 2026-08-30
+
+Executed from the devbox in a single Vault-first pass: for each host the
+password was written to Vault, read back and compared byte-for-byte, and
+only then applied on the host via `chpasswd` over the existing key-auth SSH.
+Password-only SSH (`-o PreferredAuthentications=password -o
+PubkeyAuthentication=no`, password sourced from Vault) then returned the
+hostname on every host:
+
+| Host | Address | Vault path written + read back | `chpasswd` applied | Password-only SSH → `hostname` |
+| --- | --- | --- | --- | --- |
+| pve1 | 192.168.1.200 | `kv/pve-hosts/pve1/root` | yes | `pve1` |
+| pve2 | 192.168.1.201 | `kv/pve-hosts/pve2/root` | yes | `pve2` |
+| pve3 | 192.168.1.202 | `kv/pve-hosts/pve3/root` | yes | `pve3` |
+| pve4 | 192.168.1.203 | `kv/pve-hosts/pve4/root` | yes | `pve4` |
+| pve5 | 192.168.1.204 | `kv/pve-hosts/pve5/root` | yes | `pve5` |
+
+The Vault-first ordering is the safety invariant for this credential: a
+password that is set on a host but not stored is strictly worse than no
+password (it becomes an unknown credential on a hypervisor), while a stored
+password that was never applied is harmless — the next attempt simply
+overwrites it.
+
+### Rotation
+
+Rotate whenever a password may have been exposed (typed into a shared
+screen, pasted into a ticket, seen in a recording), when someone with Vault
+access leaves, after any Vault re-init, and otherwise on the same cadence as
+the other `kv/` credentials. Same Vault-first order as the initial setup,
+one host at a time, never printing the value:
+
+```bash
+host=pve1; ip=192.168.1.200
+pw=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)
+printf '%s' "$pw" | kubectl exec -i -n vault platform-vault-0 -- vault kv put \
+  kv/pve-hosts/$host/root set_by="<you>" date="$(date -u +%FT%TZ)" password=-
+[ "$(kubectl exec -n vault platform-vault-0 -- vault kv get -field=password kv/pve-hosts/$host/root)" = "$pw" ] \
+  && printf 'root:%s\n' "$pw" | ssh root@$ip chpasswd
+unset pw
+```
+
+Then prove it: `ssh -o PreferredAuthentications=password -o
+PubkeyAuthentication=no root@$ip hostname` and type the new value at the
+prompt. `kv` keeps prior versions (`vault kv get -version=N`), so a rotation
+that fails between the Vault write and `chpasswd` can be walked back.
+`scenarios/pve-root-vault-wizard.sh` is the interactive equivalent for an
+operator who prefers to choose the password by hand; it performs the same
+write → read-back → apply → password-SSH-proof sequence.
+
+### Out-of-band alternatives, briefly evaluated
+
+Documentation only — nothing here is being purchased or provisioned:
 
 | Option | Cost (approx.) | Setup complexity | Notes |
 | --- | --- | --- | --- |
-| Root PAM password in Vault (this section) | $0 | Low — one wizard run per host | Only works while `sshd` is reachable and PAM auth is enabled; doesn't help if the host is powered off, network-partitioned, or `sshd` itself is down. Chosen as the immediate fix because it closes the JDWLABS-437 gap exactly and needs no new hardware. |
-| PiKVM (or similar HDMI+USB IP-KVM add-on) | ~$120-150/unit in kit form (per-host — 5 units ≈ $600-750 for the pve fleet) | Medium — needs a spare USB-A/USB-C + HDMI on each mini PC, a PoE or separate power source, and per-unit network/VPN exposure decisions | True out-of-band: survives a dead OS, dead network stack, or a host stuck at BIOS/GRUB — covers gaps this ticket's Vault-password fix cannot (e.g. sshd itself down or hung). Best next investment if console-level access becomes a repeated need; not justified for a single incident so far. |
-| Networked smart PDU (per-outlet switching) | ~$150-400 depending on outlet count and metering | Medium — replaces the rack's existing StarTech PDU (metered-display-only, no network control, single shared breaker — see "Mechanism" below); needs its own network path and access control | Solves the AC-loss gap WoL can't cover (see "Known gap" below), not the SSH-key-auth gap this section addresses. Already flagged as a residual risk on JDWLABS-325; the 2026-08-14 operator decision there was explicitly no follow-up purchase — re-raise if that trade-off changes. |
+| Root PAM password in Vault (this section) | $0 | Low — done | Only works while `sshd` is reachable and PAM auth is enabled; doesn't help if the host is powered off, network-partitioned, or `sshd` itself is down. Chosen as the immediate fix because it closes the 2026-08-27 gap exactly and needs no new hardware. |
+| PiKVM (or similar HDMI+USB IP-KVM add-on) | ~$120-150/unit in kit form (per-host — 5 units ≈ $600-750 for the pve fleet) | Medium — needs a spare USB-A/USB-C + HDMI on each mini PC, a PoE or separate power source, and per-unit network/VPN exposure decisions | True out-of-band: survives a dead OS, dead network stack, or a host stuck at BIOS/GRUB — covers gaps the Vault-password fix cannot (e.g. sshd itself down or hung). Best next investment if console-level access becomes a repeated need; not justified for a single incident so far. |
+| Networked smart PDU (per-outlet switching) | ~$150-400 depending on outlet count and metering | Medium — replaces the rack's existing StarTech PDU (metered-display-only, no network control, single shared breaker — see "Mechanism" below); needs its own network path and access control | Solves the AC-loss gap WoL can't cover (see "Known gap" below), not the SSH-key-auth gap this section addresses. The 2026-08-14 operator decision was explicitly no follow-up purchase — re-raise if that trade-off changes. |
 
-Neither PiKVM nor a smart PDU is being purchased or provisioned as part of
-this ticket — this table is documentation only, to make the next
-console-access or AC-loss-recovery decision cheaper to make.
+**Follow-up (not done here):** a proper evaluation of PiKVM versus a smart
+PDU is still open. The two solve different gaps — PiKVM gives console-level
+access when `sshd`/the OS is gone, a switched PDU gives AC-loss recovery
+that WoL cannot — so the decision hinges on which failure recurs first. The
+rough numbers above are enough to size the spend; a real evaluation would
+check each mini PC's spare HDMI/USB ports, where the KVM units would sit
+network-wise (LAN-only vs. Tailscale-exposed), and whether one shared KVM
+with an HDMI/USB switch covers the fleet more cheaply than five units.
 
 ## Mechanism: Wake-on-LAN, with a real scope limit
 

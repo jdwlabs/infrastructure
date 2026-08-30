@@ -108,20 +108,26 @@ is the problem). Confirmed: reconnecting with `ssh <host>` and the root
 password worked immediately, even with `pve-cluster` down, and stayed
 connected through the entire stop → edit → restart sequence.
 
-**Where that root password comes from (JDWLABS-445):** at the time this
-runbook was first written there was nowhere retrievable to get it from —
-exactly the gap that caused the 2026-08-27 pve3 outage (JDWLABS-437) to be
-console-only. As of JDWLABS-445, each host's root PAM password is stored in
-this cluster's Vault at `kv/pve-hosts/<host>/root` (field `password`) —
-retrieve it with `kubectl exec -n vault platform-vault-0 -- vault kv get
--field=password kv/pve-hosts/<host>/root` and use it at `sshd`'s password
-prompt (never as a CLI arg). See
-`scenarios/host-remote-power-recovery.md`'s "SSH key auth failure" section
-for the full retrieval procedure and `scenarios/pve-root-vault-wizard.sh`
-for how the password gets set/stored in the first place. As of 2026-08-29
-this is the documented mechanism, not a guarantee — confirm the password
-actually exists for the target node (`vault kv list kv/pve-hosts/`) before
-relying on it during a live incident.
+**Where that root password comes from:** at the time this runbook was
+first written there was nowhere retrievable to get it from — exactly the gap
+that made the 2026-08-27 pve3 outage console-only. As of 2026-08-30 every
+host's root PAM password is set and stored in this cluster's Vault at
+`kv/pve-hosts/<host>/root` (field `password`), verified live with
+password-only SSH against all of pve1-5. This is the **first remote-recovery
+step** whenever key auth fails but port 22 still answers:
+
+```bash
+kubectl exec -n vault platform-vault-0 -- vault kv get -field=password kv/pve-hosts/<host>/root
+ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no root@<host-ip>
+# paste the value at sshd's prompt — never as a CLI arg
+```
+
+See `scenarios/host-remote-power-recovery.md`'s "SSH key auth failure"
+section for the Vault login fallback (403 means the pod's CLI session isn't
+logged in), the sshd preconditions, the rotation procedure, and the evidence
+table. Still confirm the path exists for the target node
+(`vault kv list kv/pve-hosts/`) before relying on it in a live incident —
+that list is the ground truth, not this file.
 
 ## If this recurs on a different node
 
