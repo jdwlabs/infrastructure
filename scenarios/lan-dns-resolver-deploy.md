@@ -149,6 +149,12 @@ continue to Step 5 once a client has actually picked up the new lease (a
 DHCP renewal, not just a config change — `ipconfig /renew` / `dhclient -r &&
 dhclient` / a link down-up, depending on the client OS).
 
+Expect **no** such field — every published report on this gateway family
+says the DHCP-advertised DNS server is not editable (sources in
+[lan-name-resolution.md](../docs/lan-name-resolution.md#can-it-at-least-advertise-a-different-dns-server-over-dhcp-researched-2026-08-30)).
+The per-machine fallback, with per-OS commands, is
+[Pointing clients at the resolver](../docs/lan-name-resolution.md#pointing-clients-at-the-resolver).
+
 If the wizard finds **no** such field, or finds the gateway proxying DNS
 itself regardless of what the DHCP option says (the wizard's own Stage 3
 tests for this): stop here and record the finding in

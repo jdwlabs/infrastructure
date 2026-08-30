@@ -188,7 +188,7 @@ TOTAL_STAGES=4
 
 # Findings persist to a local scratch file next to this script, not a repo
 # .env — nothing here is a secret, and nothing here is meant to be committed.
-# It's a record to paste into JDWLABS-285 and into the "Options" section of
+# It's a record to paste into the driving ticket and into the "Options" section of
 # docs/lan-name-resolution.md once this wizard is done.
 ENV_FILE="${ENV_FILE:-$(dirname "$0")/lan-dns-gateway-findings.env}"
 
@@ -254,7 +254,7 @@ if [[ "$DHCP_DNS_FIELD_FOUND" == "no" ]]; then
   write_env DECISION "no-dhcp-override-field — gateway cannot advertise a custom DNS server; per-client static resolver config is the only distribution path"
   finish
   warn "No override field found. This is a real, useful finding — record it"
-  warn "in docs/lan-name-resolution.md and JDWLABS-285: the resolver still"
+  warn "in docs/lan-name-resolution.md and the driving ticket: the resolver still"
   warn "works, but only for clients configured to use it by hand. Stop here;"
   warn "there is nothing further this wizard can check."
   exit 0
@@ -292,6 +292,12 @@ step "'sudo dhclient -r && sudo dhclient' (Linux), or toggle Wi-Fi off/on."
 step "Check which DNS server the client was actually handed:"
 step "  Windows: ipconfig /all | findstr /i \"DNS Servers\""
 step "  Linux:   resolvectl status   (or: nmcli dev show | grep DNS)"
+warn "Read the WHOLE server list, IPv6 included. Dual-stack clients also learn"
+warn "the gateway's IPv6 address as a resolver from router advertisements, and"
+warn "may keep using that one regardless of the DHCPv4 option — see 'IPv6 hands"
+warn "out the gateway too' in docs/lan-name-resolution.md. If an IPv6 gateway"
+warn "address is listed, report the DHCPv4 one here but expect the lookup"
+warn "below to fail until the client's IPv6 resolver is overridden as well."
 note "Paste the whole line if that's easier — only the address matters below,"
 note "any surrounding text (interface name, a second address, etc.) is"
 note "stripped automatically."
