@@ -263,8 +263,8 @@ else
   warn "repo's sealed backup (scenarios/vault-unseal-backup.md). The token"
   warn "flows straight through a pipe below; this wizard never stores or"
   warn "prints it."
-  step "sops decrypt clusters/${CLUSTER}/vault/vault-unseal.enc.yaml | jq -r '.vault_init.root_token' | kubectl exec -i -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault login -"
-  if sops decrypt "clusters/${CLUSTER}/vault/vault-unseal.enc.yaml" 2>/dev/null \
+  step "sops decrypt --output-type json clusters/${CLUSTER}/vault/vault-unseal.enc.yaml | jq -r '.vault_init.root_token' | kubectl exec -i -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault login -"
+  if sops decrypt --output-type json "clusters/${CLUSTER}/vault/vault-unseal.enc.yaml" 2>/dev/null \
       | jq -r '.vault_init.root_token' \
       | kubectl exec -i -n "$VAULT_NAMESPACE" "$VAULT_POD" -- vault login - >/dev/null 2>&1; then
     note "Logged in to Vault."
@@ -318,13 +318,13 @@ do_host() {
   fi
   local write_err=""
   if write_err=$(printf '%s' "$pw" \
-      | kubectl exec -i -n "$VAULT_NAMESPACE" "$VAULT_POD" -- vault kv put "$vault_path" password=@- 2>&1 >/dev/null); then
+      | kubectl exec -i -n "$VAULT_NAMESPACE" "$VAULT_POD" -- vault kv put "$vault_path" password=- 2>&1 >/dev/null); then
     printf '  %s✓ wrote%s %s\n' "$GREEN" "$RESET" "$vault_path"
   else
     warn "Vault write failed for ${host}:"
     note "  $write_err"
     warn "Leaving it for you to retry by hand:"
-    note "  kubectl exec -i -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault kv put ${vault_path} password=@-"
+    note "  kubectl exec -i -n ${VAULT_NAMESPACE} ${VAULT_POD} -- vault kv put ${vault_path} password=-"
     SKIPPED+=("${host}: vault kv put ${vault_path} failed")
     pw=""
     return
