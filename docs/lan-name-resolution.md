@@ -6,13 +6,56 @@ would take to stop depending on a single workstation's `hosts` file.
 Companion to [host-addressing.md](host-addressing.md), which covers the Proxmox
 hypervisors' own addresses and names.
 
-**Status: implemented, distribution unconfirmed.** A LAN resolver
-(`dnsmasq`) now ships as part of the HAProxy VM
-(`terraform/files/dnsmasq-jdwlabs-lan.conf`,
-[scenarios/lan-dns-resolver-deploy.md](../scenarios/lan-dns-resolver-deploy.md)).
-What's still open is whether the gateway can hand its address to LAN clients
-automatically via DHCP — see "Options, and the recommendation" below and
-[scenarios/lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh).
+**Status: resolver live and boot-proven; distribution still on the gateway,
+and the gateway almost certainly cannot do it.** A LAN resolver (`dnsmasq`)
+ships as part of the HAProxy VM (`terraform/files/dnsmasq-jdwlabs-lan.conf`,
+[scenarios/lan-dns-resolver-deploy.md](../scenarios/lan-dns-resolver-deploy.md))
+and has been answering on `192.168.1.199:53` since 2026-08-13. As of
+2026-08-30 the gateway still hands every DHCP client `192.168.1.254`, so no
+client is using the resolver yet. What remains is one gateway login
+([scenarios/lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh))
+to confirm the finding below, and — because the expected answer is "no field"
+— the per-client fallback in "Pointing clients at the resolver".
+
+## Re-verified 2026-08-30 (agent, from the devbox — a DHCP client with no `hosts` entry)
+
+```
+$ ssh haproxy-admin@192.168.1.199 'uptime -s; systemctl show dnsmasq -p ActiveEnterTimestamp'
+2026-08-13 06:08:53
+ActiveEnterTimestamp=Thu 2026-08-13 06:09:00 UTC   # up 7 s after boot, unattended, 17 days ago
+
+$ dig +short chaos txt version.bind @192.168.1.199
+"dnsmasq-2.90"
+$ for n in cluster grafana argocd randomtestname123; do dig +short $n.jdwlabs.com @192.168.1.199; done
+192.168.1.199                                       # x4 — real wildcard, per the config
+$ dig +short google.com @192.168.1.199
+108.177.122.100
+108.177.122.139                                     # forward-to-gateway path works
+
+$ dig +short cluster.jdwlabs.com @192.168.1.254
+jdwlabs.com.
+104.53.12.62                                        # gateway: still the public answer, unchanged
+
+$ resolvectl status eth0 | grep -E 'DNS Servers|Current'
+Current DNS Server: 2600:1700:3b40:cd0::1
+       DNS Servers: 192.168.1.254 2600:1700:3b40:cd0::1   # DHCP + IPv6 RA both hand out the gateway
+$ getent hosts cluster.jdwlabs.com
+104.53.12.62    jdwlabs.com cluster.jdwlabs.com     # so this client gets the WAN answer
+
+$ curl -sk -o /dev/null -w '%{http_code} %{remote_ip}\n' --resolve cluster.jdwlabs.com:6443:192.168.1.199 https://cluster.jdwlabs.com:6443/version
+401 192.168.1.199                                   # apiserver behind HAProxy healthy
+$ kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'
+https://192.168.1.199:6443                          # devbox kubectl works only because it bypasses the name
+```
+
+The reboot test the deploy runbook asks for before Step 4 is satisfied by the
+first two lines: the VM's only boot since install brought `dnsmasq` up on its
+own. The last two lines are the ticket's problem restated from a second
+machine: a healthy apiserver, a working resolver, and a client that reaches
+neither by name because nothing has told it where the resolver is.
+
+The `Current DNS Server` line is a new finding and it changes the runbook —
+see "IPv6 hands out the gateway too" below.
 
 ## Resolution today
 
@@ -31,7 +74,7 @@ randomtestname123.jdwlabs.com  canonical name = jdwlabs.com.
 jdwlabs.com                    Address: 104.53.12.62
 
 $ curl -sk -m5 -o /dev/null -w "%{http_code} exit=%{exitcode}" https://cluster.jdwlabs.com:6443/version
-000 exit=7                              # WAN forward closed (JDWLABS-53) — no path without an override
+000 exit=7                              # WAN forward deliberately closed — no path without an override
 
 $ curl -sk -o /dev/null -w "%{http_code} remote=%{remote_ip}" https://192.168.1.199:6443/version
 401 remote=192.168.1.199                # apiserver itself is healthy
@@ -134,6 +177,178 @@ gateway is reported to insert itself as a DNS proxy in front of whatever
 resolver a client is handed — even one assigned by a second DHCP server on the
 same LAN. That proxying behaviour is the risk to flag against option 2 below.
 
+### Can it at least advertise a different DNS server over DHCP? (researched 2026-08-30)
+
+Live gateway: `BGW320-500`, software `6.35.8` (`/cgi-bin/sysinfo.ha`, which
+is readable without the access code; `dhcpserver.ha` is not, so the field
+itself is still only confirmable by a human login).
+
+AT&T publishes no documentation for this page. Every independent report
+found says the same thing, across firmware generations and both BGW320
+variants:
+
+- A BGW320-505 owner, Feb 2025, on setting up Pi-hole: the gateway "doesn't
+  allow me to change its DHCP config to substitute my pi-hole as the default
+  DNS server"; the fix they landed on was disabling the gateway's DHCP and
+  running Pi-hole's — https://discourse.pi-hole.net/t/setting-up-pi-hole-dhcp-server-with-at-t-residential-gateway-with-guest-wifi-enabled/76779
+- Earlier AT&T gateways (Pace, 2020): "With AT&T, you cannot change the DNS
+  or disable the DHCP" — the workaround is shrinking the gateway's DHCP pool
+  to a single address, running a second DHCP server, and disabling IPv6 on
+  the gateway because clients were otherwise still handed AT&T's IPv6
+  resolver — https://discourse.pi-hole.net/t/pi-hole-with-at-t-router/26989
+- Owners pairing a BGW320 with a second router (Asus, Deco, Orbi) all reach
+  the same conclusion: custom DHCP-advertised DNS is set on the second
+  router, never on the BGW320 — e.g.
+  https://www.snbforums.com/threads/dns-assignments-at-t-bgw320-gateway-and-tplink-deco.94624/
+- Separately, AT&T's account-level "DNS Error Assist" intercepts NXDOMAIN
+  answers and redirects them to `104.239.207.44`; it is toggled on att.com,
+  not the gateway, and is reported to behave inverted —
+  https://gist.github.com/CollinChaffin/24f6c9652efb3d6d5ef2f5502720ef00.
+  Irrelevant to `*.jdwlabs.com` (the wildcard means nothing under it is ever
+  NXDOMAIN) but worth knowing when a "why did this random name resolve"
+  question comes up.
+
+So the expected result of
+[lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh) Stage 2 is
+**no field**. Run it anyway — it costs one login, and a firmware surprise in
+the other direction is the cheapest possible outcome — but plan for the
+per-client path below rather than for the DHCP path.
+
+The "second DHCP server" workaround those reports use is deliberately **not**
+adopted here. It would mean either racing the gateway for leases (the pool
+can't be disabled, only shrunk), or making the HAProxy VM the LAN's DHCP
+server as well as its DNS, API front door and ingress — every LAN device's
+addressing would then depend on one VM. `dnsmasq-jdwlabs-lan.conf` says as
+much in its last paragraph. Two admin machines needing a static resolver
+setting is a far smaller cost than that.
+
+### IPv6 hands out the gateway too
+
+The devbox re-verification above shows the client's *active* resolver is
+`2600:1700:3b40:cd0::1` — the gateway's IPv6 address, learned from router
+advertisements (RDNSS), not from DHCPv4. `systemd-resolved` picks one server
+per link and sticks with it until it fails; on this box it picked the IPv6
+one. The same applies to Windows and macOS, which both honour RDNSS.
+
+Consequence: even if the gateway *did* let DHCPv4 option 6 be changed, a
+dual-stack client could keep asking the gateway over IPv6 and keep getting
+the WAN answer. The wizard's Stage 3 check ("what DNS server did the client
+report") must look at the whole server list, not just the first IPv4
+address. And the per-client static configuration below has to replace the
+link's *entire* DNS server list, not add `192.168.1.199` alongside the
+advertised ones.
+
+## Which resolver: the decision record
+
+Three ways to host the override were weighed. Two have their own sections
+above; this table is the side-by-side.
+
+| | (a) `dnsmasq` on the HAProxy VM — **chosen, deployed** | (b) In-cluster CoreDNS via a LAN LoadBalancer | (c) Pi-hole / AdGuard Home VM |
+| --- | --- | --- | --- |
+| Dependency loop | None. The VM is *upstream* of the cluster; the name that reaches the cluster never depends on the cluster. | Yes — resolving `cluster.jdwlabs.com` would need the cluster, and the cluster's DNS VIP already has an observed cross-node timeout failure mode. | None. |
+| Blast radius if it dies | Same as today: the VM is already the accepted SPOF for API and ingress. Only grows if DHCP hands it to every client, which the gateway can't do. | Every `jdwlabs.com` name on any CoreDNS/MetalLB incident. | A new VM to patch, back up and keep on; a new SPOF that didn't exist before. |
+| GitOps-ability | Config is one file in this repo, baked into cloud-init, hand-deployed to the live VM by runbook. Drift undetected by `talops` (accepted for a 9-line file). | Best on paper (`hosts` plugin block in the `platform` repo), but needs MetalLB or a `hostNetwork` DaemonSet that doesn't exist yet. | Web-UI-driven state; would need Terraform + Ansible to be reproducible. Ad-blocking is scope creep for a one-domain override. |
+| Needs the gateway's DHCP option 6 changed | Yes for zero-touch — and that's unavailable; falls back to per-client config. | Same. | Same — Pi-hole's usual answer is "become the DHCP server", rejected above. |
+| New components | One package on an existing VM. | LoadBalancer allocator + Service + CoreDNS config in another repo. | A whole VM plus its application. |
+
+(a) wins on every row that matters for a name whose purpose is reaching the
+cluster. (b) is the one to revisit only if a LAN-facing load balancer lands
+for other reasons *and* the override list grows beyond "everything under one
+domain points at one host" — today it is one `address=` line. (c) buys
+nothing here that (a) doesn't.
+
+## Pointing clients at the resolver
+
+The gateway path is [lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh):
+log in at `http://192.168.1.254/cgi-bin/dhcpserver.ha`, look for a DNS field
+scoped to the LAN subnet's DHCP options, set `192.168.1.199` primary and
+`192.168.1.254` secondary, save, force a lease renewal, verify. If the field
+isn't there — expected — do this instead on each machine that needs cluster
+access (today: the original workstation and `jake-Inspiron-5406-2n1`).
+
+Replace the link's DNS list, don't append to it (see the IPv6 note above).
+Keep `192.168.1.254` as a second entry so a resolver outage degrades to
+"cluster names give the WAN answer", not "no DNS at all".
+
+**Windows (PowerShell, as Administrator)** — the adapter name comes from
+`Get-NetAdapter`:
+
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 192.168.1.199,192.168.1.254
+Get-DnsClientServerAddress -InterfaceAlias "Ethernet"      # should list only those two
+ipconfig /flushdns
+```
+
+Also set the IPv6 servers on the same adapter to the same two addresses'
+IPv6 equivalents or, simpler, to none — `Set-DnsClientServerAddress` with
+`-AddressFamily IPv6 -ResetServerAddresses` still leaves RDNSS in play, so
+if `nslookup` below keeps returning `104.53.12.62`, disable IPv6 on the
+adapter (`Disable-NetAdapterBinding -InterfaceAlias "Ethernet" -ComponentID ms_tcpip6`)
+and re-test. Undo: `Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ResetServerAddresses`.
+
+**Linux, `systemd-resolved` via netplan (Ubuntu server / the devbox)** —
+persistent; a bare `resolvectl dns` call is lost on the next lease renewal:
+
+```yaml
+# /etc/netplan/99-lan-resolver.yaml
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+      dhcp4-overrides: { use-dns: false }
+      dhcp6: true
+      dhcp6-overrides: { use-dns: false }
+      accept-ra: true
+      ra-overrides: { use-dns: false }
+      nameservers:
+        addresses: [192.168.1.199, 192.168.1.254]
+```
+
+```bash
+sudo netplan apply
+resolvectl status eth0 | grep -A1 'DNS Servers'    # expect only 192.168.1.199 192.168.1.254
+resolvectl flush-caches
+```
+
+`ra-overrides` needs netplan 1.0+; on older releases drop that stanza and
+verify the `DNS Servers` line has no IPv6 entry — if it still does, add
+`ipv6-address-generation`/`accept-ra: false` for the link. Undo: delete the
+file, `sudo netplan apply`.
+
+**Linux, NetworkManager (desktop Ubuntu, Fedora)**:
+
+```bash
+nmcli con mod "<connection>" ipv4.dns "192.168.1.199 192.168.1.254" ipv4.ignore-auto-dns yes ipv6.ignore-auto-dns yes
+nmcli con up "<connection>"
+```
+
+**macOS**: System Settings → Network → the active interface → Details… →
+DNS → replace the list with `192.168.1.199` and `192.168.1.254`. Or
+`sudo networksetup -setdnsservers Wi-Fi 192.168.1.199 192.168.1.254`
+(`-setdnsservers Wi-Fi empty` to undo).
+
+**Then, on that machine**, run the Definition-of-Done checks:
+
+```bash
+nslookup cluster.jdwlabs.com          # expect 192.168.1.199, server 192.168.1.199
+kubectl get nodes                     # all 8 nodes — kubeconfig server must be https://cluster.jdwlabs.com:6443, not the IP
+nslookup cluster.jdwlabs.com 8.8.8.8  # expect 104.53.12.62 — public unchanged
+curl -o /dev/null -w "%{http_code} remote=%{remote_ip}\n" \
+  --resolve alertmanager.jdwlabs.com:443:104.53.12.62 https://alertmanager.jdwlabs.com/   # 200 remote=104.53.12.62
+```
+
+Note the `kubectl` caveat: a kubeconfig whose `server:` is
+`https://192.168.1.199:6443` (the devbox's is) passes `kubectl get nodes`
+with no resolver at all and proves nothing. Point it at the name for the
+check, or run the check on the machine whose kubeconfig already uses it.
+
+Only after that passes on a machine that never had the `hosts` override:
+clean up the original workstation per "Order of work" — delete the four
+inert `*.jdwlabs.com` lines, the `cluster.jdwlabs.com` line, and the ~22
+per-service `.199` lines (the wildcard override now covers every one of
+them, and WAN hairpin already did) — then re-run the four checks there.
+
 ## Options, and the recommendation
 
 Ordered by how much new surface each one introduces.
@@ -190,10 +405,10 @@ enabled bypasses the LAN resolver entirely under option 2 — the same
 gateway-proxying failure mode above, but client-side and just as invisible to
 a single-machine checklist run.
 
-**Decision (JDWLABS-285, 2026-08-13): option 2, triggered.** The condition
+**Decision (2026-08-13): option 2, triggered.** The condition
 this document originally set for moving off option 1 — "reasonable while
-there is exactly one admin" — is no longer true. `JDWLABS-53` closed the
-`6443` WAN forward, and a second admin machine (`jake-Inspiron-5406-2n1`) has
+there is exactly one admin" — is no longer true. The `6443` WAN forward
+was deliberately closed, and a second admin machine (`jake-Inspiron-5406-2n1`) has
 no `hosts` override and therefore no path to the cluster at all. Option 1's
 "add a line per new admin machine" is no longer a maintenance cost worth
 preferring over standing up the resolver — it's now the thing actively
