@@ -16,8 +16,10 @@ device on a genuinely different network — a phone hotspot is enough.
 
 The earlier note here that "no agent has SSH, console, or network access to run
 any of it" was wrong by the time steps 1 and 2 ran: SSH from the executing
-session worked. It does not work from the devbox, which is a property of that
-box's key, not of the VM.
+session worked. As of 2026-08-30 it also works from the devbox
+(`ssh haproxy-admin@192.168.1.199`), and the devbox is itself a tailnet peer —
+but it is on the LAN too, so it cannot stand in for the off-LAN device Step 3
+needs. The iPhone on the tailnet, on cellular data with Wi-Fi off, can.
 
 For the *why* behind each step (why the HAProxy VM, why `--accept-dns=false`,
 why route approval is manual, the tailnet-policy auto-approver, and rebuild

@@ -49,21 +49,43 @@ The lockdown still holds alongside it. Re-swept from the LAN on 2026-08-17:
 `6443`, `50000`, `22` and `9000` on the WAN IP all refuse, `443` answers. No WAN
 port was opened to build this path.
 
+Re-confirmed 2026-08-30, this time from the devbox as a tailnet peer rather
+than from the VM alone:
+
+- `tailscale status --json` on the devbox lists `haproxy-1` online with
+  `PrimaryRoutes: ["192.168.1.0/24"]`, and `tailscale ping haproxy-1` answers
+  direct (`via 192.168.1.199:41641`, no DERP relay)
+- on the VM, `Self.AllowedIPs` still carries `192.168.1.0/24`, `Health` is
+  empty, `net.ipv4.ip_forward=1` and `net.ipv6.conf.all.forwarding=1` are both
+  persisted in `/etc/sysctl.d/99-tailscale.conf`
+- the VM runs the `tailscale` package from the official apt repo
+  (`https://pkgs.tailscale.com/stable/ubuntu noble main`, installed `1.102.2`,
+  `1.102.3` available). There is no apt pin: the repo tracks the stable
+  channel and Tailscale's own auto-update is on (`AutoUpdate.Apply: true`, the
+  tailnet default), so the VM upgrades itself and a rebuild should expect
+  whatever stable currently is, not `1.102.x`
+- hairpin sweep of the WAN IP: `6443`, `50000`, `22` and `9000` all
+  `Connection refused`; `80` answers. `443` timed out from both the devbox and
+  the VM even though `https://192.168.1.199` answers LAN-direct — that is an
+  inbound-NAT symptom on the router, unrelated to this path, and is tracked
+  separately
+
 **Still unproven: off-LAN access has not been demonstrated.** Step 3 needs a
-tailnet device on a genuinely different network, and both existing tailnet peers
-have been offline. Until that evidence is captured the honest statement is
-*route live and approved; off-LAN access not yet demonstrated from a peer* — not
-that the capability is proven end-to-end.
+tailnet device on a genuinely different network. The devbox is on the tailnet
+but also on the LAN, so it reaches `192.168.1.0/24` directly and never sends
+a packet through the router — its checks above confirm route state, not
+forwarding. Until an off-LAN peer captures that evidence the honest statement
+is *route live and approved; off-LAN access not yet demonstrated from a peer* —
+not that the capability is proven end-to-end.
 
 The LAN is `192.168.1.0/24` with its gateway, DHCP server and DNS server all at
 `192.168.1.254`.
 
-Note for anyone re-checking this: `192.168.1.199` answers ICMP from the LAN, but
-SSH to it from the devbox still returns `Permission denied (publickey)`, and the
-devbox has no Tailscale client. Neither fact means the router is down — it means
-this state can only be re-confirmed from the VM itself or the admin console.
-Earlier notes on this runbook mistook that missing vantage point for a missing
-router.
+Note for anyone re-checking this: the devbox's key is authorized on the VM as
+`haproxy-admin` (`ssh haproxy-admin@192.168.1.199`, passwordless `sudo`), and
+the devbox is a tailnet member (`devbox.tail5bbd6f.ts.net`), so both vantage
+points are available from an agent session. Earlier notes on this runbook
+said neither was, which was true when written and is not any more.
 
 ## Prerequisites
 
