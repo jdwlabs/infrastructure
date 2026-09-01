@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily refresh of the Tailscale TLS certificate served by pveproxy
+
+[Timer]
+OnCalendar=daily
+
+# Five hypervisors share one tailnet and one Let's Encrypt account. Spreading
+# the runs keeps them from arriving as a burst, and the renewal threshold in
+# the script is measured in weeks, so hours of jitter cost nothing.
+RandomizedDelaySec=4h
+
+# A host that was powered off through its scheduled run must still catch up;
+# missing renewals silently is exactly the failure this timer exists to prevent.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

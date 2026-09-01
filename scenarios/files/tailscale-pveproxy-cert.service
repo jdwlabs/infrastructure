@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh the Tailscale TLS certificate served by pveproxy
+Documentation=https://github.com/jdwlabs/infrastructure/blob/main/scenarios/proxmox-tailscale-tls.md
+
+# The certificate is written into /etc/pve, which only exists once pmxcfs has
+# mounted it — without this the unit would fail on every boot-time catch-up run.
+Requires=pve-cluster.service
+After=pve-cluster.service
+
+# tailscaled serves the certificate request over its local API, and reaching
+# Let's Encrypt needs a routable address, so both must be up first.
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tailscale-pveproxy-cert
