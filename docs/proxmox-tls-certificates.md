@@ -71,13 +71,26 @@ the tailnet, and once that happens `tailscale cert` cannot renew — the
 certificate then lapses on its own 90-day clock some time later, and the browser
 warning returns with a *different* cause than the one this work removed.
 
-Two ways to close it, either sufficient:
+**Key expiry is disabled on all five, so nothing is on a clock.** Done the same
+day via the Tailscale API, and confirmed from both the API
+(`keyExpiryDisabled=true`) and the node side (`tailscale status --json` reports
+`KeyExpiry` absent). The same was applied to `haproxy-1` and `devbox`: checking
+the whole tailnet showed every node untagged and expiring, and `haproxy-1` is the
+subnet router, so its key lapsing would have cost off-LAN `kubectl` and
+`talosctl` — a worse outcome than a hypervisor browser warning. Personal devices
+were left expiring deliberately; a portable device that never expires keeps
+tailnet access after it is lost until someone revokes it by hand.
 
-- Disable key expiry per node in the admin console (five toggles, no policy edit).
-- Re-join each host with an auth key carrying `tag:pve-host`, after adding a
-  `tagOwners` entry for it to the tailnet policy file.
+When auditing this later, read `keyExpiryDisabled`, not `expires`. The API keeps
+returning a populated `expires` timestamp on nodes whose expiry is disabled —
+it is retained metadata, not an enforced deadline, and reading it as one leads
+to the wrong conclusion.
 
-Until one is done, treat the expiry date on the node keys as a real deadline.
+The tag itself is still unapplied, which is a weaker gap but a real one: a
+rebuild or re-join brings a host back untagged *and* expiring, with nothing at
+policy level to catch it. Closing that wants a `tagOwners` entry plus a tagged
+auth key, and belongs to the next reprovision rather than a standalone re-auth
+of hosts that are working.
 
 ## Current state before this work
 
