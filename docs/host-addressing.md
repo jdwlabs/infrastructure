@@ -112,6 +112,14 @@ Either way the issuer is the Proxmox cluster's own CA, so a browser still warns
 until that CA is trusted once. The point is that the name removes a second,
 permanent warning that the address cannot.
 
+That warning is now avoidable on a fourth name. As of 2026-09-01 each host also
+serves a publicly trusted Let's Encrypt certificate under its tailnet name, so
+`https://pve<n>.tail5bbd6f.ts.net:8006` needs no CA import at all — see
+[proxmox-tls-certificates.md](proxmox-tls-certificates.md) for what is live and
+why, and [scenarios/proxmox-tailscale-tls.md](../scenarios/proxmox-tailscale-tls.md)
+for the steps and rollback. Everything in this section still describes the
+LAN-address and `attlocal.net` paths, which are unchanged.
+
 Those embedded addresses are also evidence in their own right. pve1-pve4 carry
 `.233`, `.222`, `.221` and `.223` — addresses none of them holds now. The
 certificates were minted when the hosts were there. **All five hosts have now
