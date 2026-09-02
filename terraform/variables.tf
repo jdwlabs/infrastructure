@@ -305,9 +305,9 @@ variable "dev_vm_cores" {
 }
 
 variable "dev_vm_memory" {
-  description = "Dedicated memory (MiB) for the dev VM."
+  description = "Dedicated memory (MiB) for the dev VM. Sized against measured use, not the original estimate: the VM's resident working set is ~4G and the rest was page cache. The original 32G left pve5 committing 128G of dedicated memory against 123.5G of physical RAM, solvent only because KSM was deduplicating across its three guests."
   type        = number
-  default     = 32768
+  default     = 16384
 }
 
 variable "dev_vm_disk_size" {
