@@ -165,21 +165,37 @@ volume problem.
 **Drain-capacity check, before draining the worker on this host:** confirm
 some *other* schedulable worker has room for what's about to be evicted —
 `kubectl drain` does not check this for you, and a fleet this tight can fail
-it.
+it. Get the non-DaemonSet memory requests on the draining worker (what has to
+land somewhere else — DaemonSet pods aren't evicted) and compare against
+other workers' allocatable minus their current requests:
 
 ```
-$ kubectl describe node <worker-about-to-drain> | grep -A3 'Allocated resources'
+$ kubectl get pods --all-namespaces --field-selector spec.nodeName=<worker-about-to-drain> -o json | python3 -c "
+import json, sys; data = json.load(sys.stdin)
+def parse_mem(s):
+    if not s: return 0
+    s = str(s).strip()
+    units = {'Ki': 1024, 'K': 1000, 'Mi': 1024**2, 'M': 1000**2, 'Gi': 1024**3, 'G': 1000**3, 'Ti': 1024**4, 'T': 1000**4}
+    for u in sorted(units.keys(), key=len, reverse=True):
+        if s.endswith(u): return int(float(s[:-len(u)]) * units[u])
+    return int(float(s))
+total = 0
+for pod in data.get('items', []):
+    is_ds = any(o.get('kind') == 'DaemonSet' for o in pod['metadata'].get('ownerReferences', []))
+    if not is_ds:
+        total += sum(parse_mem(c.get('resources', {}).get('requests', {}).get('memory', '0')) for c in pod['spec'].get('containers', []) + pod['spec'].get('initContainers', []))
+print(f'Non-DaemonSet memory: {total/(1024**3):.2f} GiB')
+"
 $ kubectl describe node <every other worker> | grep -A3 'Allocated resources'
 ```
 
-Compare the draining worker's non-DaemonSet memory *requests* (what has to
-land somewhere else — DaemonSet pods aren't evicted) against the other
-workers' (allocatable − requests). Measured live 2026-09-02: three of the
-five workers (`talos-2qd-v0u`, `talos-g1i-e3h`, `talos-k3y-y3e`) sit at ~98%
-memory requests with only ~20-30 MiB free each — no room to absorb anything.
-If the worker you're about to drain, plus every worker with slack, doesn't
-clear this check, expect Pending pods, not a silent reschedule — see the
-pve5 section below for what this looks like when it's genuinely marginal.
+Measured live 2026-09-02: `talos-lx0-6a4` (pve5) carries 11.42 GiB of
+reschedulable non-DaemonSet memory requests. Of the other four workers, only
+`talos-4h8-zy6` (pve1) has room — ~11.8 GiB allocatable, others sit at ~98%
+requests with only ~20-30 MiB free each — no room to absorb anything. If the
+worker you're about to drain, plus every worker with slack, doesn't clear
+this check, expect Pending pods, not a silent reschedule — see the pve5
+section below for what this looks like when it's genuinely marginal.
 
 ## pve1
 

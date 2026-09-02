@@ -252,12 +252,15 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
    ```
 
 10. Clone this repository and decrypt the Terraform inputs devbox2 needs —
-    `terraform.tfvars` (Proxmox credentials), `backend-credentials.enc.yaml`
-    (the MinIO/S3 keys the state backend authenticates with), and
-    `backend-tls.enc.yaml` (the MinIO CA bundle `providers.tf`'s
-    `custom_ca_bundle` points at) — via `sops -d`, per `docs/secrets.md`.
-    Without all three, `terraform init` cannot reach the state backend and
-    `plan` has no Proxmox credentials to authenticate with.
+    `terraform.tfvars` (Proxmox credentials) and `backend-credentials.enc.yaml`
+    (the MinIO/S3 keys the state backend authenticates with) — via `sops -d`,
+    per `docs/secrets.md`. The public MinIO CA certificate is committed in
+    plaintext as `terraform/minio-ca.crt` and is already in the clone;
+    `terraform init` reads it from `custom_ca_bundle = "minio-ca.crt"` in
+    `providers.tf`. `backend-tls.enc.yaml` holds only the private halves
+    (server cert/key and CA private key) and is not needed for `terraform init`
+    to reach the backend — only the backend *credentials* and tfvars are
+    required to authenticate and plan.
 
 §6's pre-resize verification list — tailnet + `.57` reachable, `kubectl get
 nodes`, `talosctl`, and `terraform init && terraform plan` run *from

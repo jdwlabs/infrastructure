@@ -34,15 +34,19 @@ numbers assume both land as designed, not what `pvesh` returns right now:
 | pve2/pve3/pve4 | 12.6 GiB each | ~2.6 GiB each | No | Control-plane hosts, excluded by design requirement #4 |
 | pve5 | 123.5 GiB | ~11.5 GiB *(projected, after the reclaim)* | n/a — devbox's own host | Not a valid migration target for its own guest |
 
-The "Fits 16 GB?" column asks whether a node could hold devbox *in addition
-to* what it already runs — pve5's free-RAM figure assumes devbox's own 16
-GiB allocation is already sitting elsewhere, which is exactly the thing a
-target node must do that isn't itself devbox's current host. Halving
-devbox's allocation did not unblock migration: pve1 still can't fit an
-8-core/16GB VM even on the more favorable projected figure, and no other
-node clears it either. No node in the cluster, today or under this design's
-projected end state, can be the "other side" of a migrate/migrate-back
-cycle. This is a hardware ceiling, not a process gap.
+The "Fits 16 GB?" column shows free RAM with each host's existing guests
+still resident — all nodes are being asked to fit devbox *in addition to*
+what they already run. pve5 is marked `n/a` not because of insufficient
+headroom, but because a guest cannot migrate to the host it already runs on
+— the question of where devbox would go doesn't apply when it's already
+there. The free-RAM figure for pve5 (~11.5 GiB) includes devbox's 16 GiB
+allocation already counted in pve5's committed memory; if devbox were moved
+away, pve5 would have ~27.5 GiB free instead. Halving devbox's allocation
+did not unblock migration: pve1 still can't fit an 8-core/16GB VM even on
+the more favorable projected figure, and no other node clears it either. No
+node in the cluster, today or under this design's projected end state, can
+be the "other side" of a migrate/migrate-back cycle. This is a hardware
+ceiling, not a process gap.
 
 ## Preconditions — re-check live, do not trust this table
 
