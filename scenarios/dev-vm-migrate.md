@@ -16,18 +16,30 @@ the network — seconds of blip, not a restore-from-backup exercise.
 ## Why it's blocked today
 
 Migration needs a *second* node that can actually hold the VM — migrating
-pve5 → pve5 proves nothing. devbox is sized 8 cores / 32GB RAM
-(`terraform/dev-vm-node.tf`, `dev_vm_cores` / `dev_vm_memory`). Checked
-2026-08-10:
+pve5 → pve5 proves nothing. devbox was sized 8 cores / 32GB RAM when this
+runbook was first written; `dev_vm_memory` has since been resized to 16GB
+against measured use (`docs/devbox2-provisioning.md` §4), but that resize is
+committed, not yet applied — devbox is still running at 32GB today. The table
+below checks the more useful, forward-looking question anyway: does the
+fleet clear even the smaller, post-resize footprint?
 
-| Node | Total RAM | Free RAM | Fits 32GB? | Excluded? |
+Figures captured live 2026-09-01 (`docs/devbox2-provisioning.md` §2). The
+pve1 and pve5 free-RAM columns are **projected, not measured** — devbox2
+doesn't exist yet and the pve5 reclaim hasn't been applied, so those two
+numbers assume both land as designed, not what `pvesh` returns right now:
+
+| Node | Total RAM | Free RAM | Fits 16 GB? | Excluded? |
 |---|---|---|---|---|
-| pve1 | 28.2GiB | ~5.8GiB | No — total is below the VM's allocation | — |
-| pve2/pve3/pve4 | ~6GiB each (JDWLABS-78) | — | No | Control-plane hosts, excluded by design requirement #4 |
-| pve5 | 123.5GiB | ~42GiB | Yes | This is devbox's current host — not a valid target |
+| pve1 | 28.2 GiB | ~3.2 GiB *(projected, after devbox2)* | No | — |
+| pve2/pve3/pve4 | 12.6 GiB each | ~2.6 GiB each | No | Control-plane hosts, excluded by design requirement #4 |
+| pve5 | 123.5 GiB | ~11.5 GiB *(projected, after the reclaim)* | Yes | devbox's current host — not a valid target |
 
-No node in the cluster today can be the "other side" of a round-trip. This
-is a hardware ceiling, not a process gap.
+Halving devbox's allocation did not unblock migration. pve1 still can't fit
+an 8-core/16GB VM even on the more favorable projected figure — and pve5, the
+only host that does clear it, is devbox's own current host, not a valid
+target for a round trip. No node in the cluster, today or under this
+design's projected end state, can be the "other side" of a migrate/migrate-
+back cycle. This is a hardware ceiling, not a process gap.
 
 ## Preconditions — re-check live, do not trust this table
 
@@ -50,6 +62,23 @@ is a hardware ceiling, not a process gap.
    ```bash
    ssh dev-admin@192.168.1.56 'uptime'
    ```
+5. Don't mistake a clean precondition check for proof the cloud-init snippet
+   moves with the guest — it doesn't:
+   ```bash
+   pvesh get /nodes/pve5/qemu/111/migrate --target pve1 --output-format json
+   # local_disks: [], local_resources: [], allowed_nodes: all four other hosts
+   ```
+   `local` is declared on every node, so devbox's
+   `cicustom: user=local:snippets/devbox-cloud-init.yaml` resolves
+   storage-wise everywhere and the check reports nothing local to block the
+   migrate. But the snippet *file* itself lives in exactly one place —
+   `devbox-cloud-init.yaml` on pve5, and nowhere else
+   (`docs/devbox2-provisioning.md` §7). Migration succeeds and the guest
+   keeps running on its existing cloud-init state either way; the exposure is
+   that regenerating the drive from the new host afterward would find no
+   user-data to read. That's latent configuration drift, not a migration
+   blocker — worth knowing before acting on this runbook, not a reason to
+   abort.
 
 ## Migrate out
 
@@ -95,8 +124,10 @@ not just designed for.
 
 ## Abort criteria
 
-- Target's free memory doesn't clear the VM's allocation with headroom for
-  the target's existing workloads (this is the current, standing blocker).
+- Target's free memory doesn't clear the VM's *actual applied* allocation
+  (32GB until the pending `dev_vm_memory` resize lands, 16GB after) with
+  headroom for the target's existing workloads — this is the current,
+  standing blocker either way.
 - `truenas-vmdisks` isn't active on the target.
 - `qm agent 111 ping` fails to answer within a minute of the task log
   reporting completion.
@@ -112,6 +143,6 @@ assuming it needs to be started elsewhere.
 ## Once this becomes unblocked
 
 Re-run the capacity table above against live state — don't assume the gap
-recorded 2026-08-10 still holds. When a qualifying second node exists,
-execute both legs, fill in the measured downtime, and flip this doc's status
-to TESTED.
+recorded 2026-09-01, or its projected devbox2/reclaim figures, still holds.
+When a qualifying second node exists, execute both legs, fill in the
+measured downtime, and flip this doc's status to TESTED.

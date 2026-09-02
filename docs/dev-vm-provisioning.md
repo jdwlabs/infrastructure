@@ -4,6 +4,15 @@ Status: **applied, Phases 0-5 done.** `terraform/dev-vm-node.tf` is live
 (vmid `111` on pve5, `192.168.1.56`); Phase 6 (migration proof) is documented
 but blocked on cluster capacity — see §8 and `scenarios/dev-vm-migrate.md`.
 
+**Now one of two dev VMs.** `docs/devbox2-provisioning.md` adds a second,
+deliberately smaller VM (devbox2, pve1) as a lifeboat for when this one's
+host is down, and covers the capacity reasoning behind both machines
+together — see that document rather than duplicating it here. `dev_vm_memory`
+below was resized from its original 32GB to 16GB against devbox's measured
+working set as part of that same design; the resize is committed but not yet
+applied, so §5.1's Terraform snippet still shows the value actually live
+today.
+
 A dedicated, always-on Proxmox VM to be the full daily-driver dev environment
 for jdwlabs work — SSH + VS Code Remote-SSH from the Windows workstation,
 git/build/Claude Code sessions run on the VM, not locally. Reproducible from
@@ -230,8 +239,9 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 2. **Target migration test host — hardware ceiling, not a scheduling gap.**
    pve1's *total* RAM is 28.2GiB, below devbox's 32GB allocation — freeing
    pve1 up (e.g. relocating `minecraft-server`) cannot fix this, the box is
-   too small even empty. pve2/pve3/pve4 are smaller still (~6GiB each,
-   JDWLABS-78) and are excluded anyway as control-plane hosts (req #4). No
+   too small even empty. pve2/pve3/pve4 are smaller still (12.6GiB each,
+   confirmed live — see `docs/devbox2-provisioning.md` §2) and are excluded
+   anyway as control-plane hosts (req #4). No
    node in the cluster today can be Phase 6's "other side." Unblocks only by
    adding cluster capacity; procedure is ready to run in
    `scenarios/dev-vm-migrate.md` once it does.
