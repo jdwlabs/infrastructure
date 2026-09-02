@@ -90,11 +90,77 @@ enough to drive a restart and keep working in a degraded but functional state.
 | `on_boot` | true | returns unattended after a pve1 reboot |
 | Tags | `dev;lifeboat` | |
 
-Toolchain installed via cloud-init: tailscale, git, chezmoi (which pulls the
-dotfiles), kubectl, talosctl, the Claude Code CLI, and SSH keys. Deliberately
-no Docker and no Node toolchain — build capability is what devbox is for, and
-adding it here would grow the VM past the memory budget that makes it fit on
-pve1 at all.
+Cloud-init is day-0 only, matching the convention `docs/dev-vm-provisioning.md`
+§5.2 established for devbox and the haproxy design before it: OS, user, base
+packages (`qemu-guest-agent`, `git`, `curl`, `ca-certificates`), and
+tailscale. tailscale is installed but deliberately not authenticated —
+`tailscale up` needs an interactive login or an auth key, and baking an
+auth key into the cloud-init snippet would leave it in plaintext in
+`devbox2-cloud-init.yaml` on the `local` snippet datastore (the table
+above), readable by anything with node access to pve1. Everything else —
+kubectl, talosctl, the chezmoi-managed dotfiles, the Claude Code CLI, and
+SSH keys — is a documented post-boot sequence (below), not committed
+automation, the same boundary devbox's own §5.3 draws. Deliberately no
+Docker and no Node toolchain either way — build capability is what devbox
+is for, and adding it here would grow the VM past the memory budget that
+makes it fit on pve1 at all.
+
+### Post-boot bootstrap (manual, one-time)
+
+SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
+
+1. Authenticate tailscale — the one piece cloud-init deliberately left
+   undone:
+
+   ```sh
+   sudo tailscale up
+   ```
+
+   Interactive login, or an auth key entered here rather than shipped in the
+   snippet.
+
+2. Pull the dotfiles via chezmoi, personal role, **`installDevTooling` left
+   at its default `false`**:
+
+   ```sh
+   sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply jdwillmsen
+   ```
+
+   Unlike devbox's bootstrap (`docs/dev-vm-provisioning.md` §5.3), devbox2
+   never answers `installDevTooling` `true`. That flag installs Docker,
+   Node/pnpm, Rust, and JDK 21 as one bundle together with kubectl and
+   talosctl (`home/run_once_49-install-dev-tools.sh.tmpl` in the dotfiles
+   repo) — there's no way to opt into the bundle's kubectl/talosctl without
+   also taking Docker and Node, and doing that would be exactly the
+   memory-budget mistake "Why 2 GB and not more" (below) argues against.
+   kubectl and talosctl are installed directly instead, outside that bundle.
+
+3. Install kubectl and talosctl directly — the fleet's pinned versions, just
+   run without the flag that would also pull in Docker and Node:
+
+   ```sh
+   curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubectl.gpg
+   echo "deb [signed-by=/etc/apt/keyrings/kubectl.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+   sudo apt-get update && sudo apt-get install -y kubectl
+
+   curl -fsSL -o /usr/local/bin/talosctl https://github.com/siderolabs/talos/releases/download/v1.13.8/talosctl-linux-amd64
+   chmod +x /usr/local/bin/talosctl
+   ```
+
+4. Copy the existing `kubeconfig` and `talosconfig` over — devbox2 needs the
+   same cluster credentials devbox already holds, not a freshly generated
+   set.
+
+5. The Claude Code CLI needs no separate step: step 2's chezmoi apply already
+   installed it as a native binary via the dotfiles repo's ungated
+   agent-CLI catalog (`home/run_once_43-install-agent-clis.sh.tmpl`), which
+   doesn't depend on npm or Node.
+
+6. Sync SSH keys from the existing Remote-SSH/tailnet setup so outbound
+   `git`/`gh` and inbound SSH behave the same as on devbox.
+
+§6's verification list (tailnet + `.57` reachable, `kubectl get nodes`,
+`talosctl`, `claude` starts) is what confirms this sequence actually landed.
 
 Implementation follows the repository's existing one-file-per-role Terraform
 layout (`dev-vm-node.tf`, `haproxy-node.tf`, `gpu-node.tf`) with a new
