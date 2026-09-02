@@ -170,7 +170,7 @@ land somewhere else — DaemonSet pods aren't evicted) and compare against
 other workers' allocatable minus their current requests:
 
 ```
-$ kubectl get pods --all-namespaces --field-selector spec.nodeName=<worker-about-to-drain> -o json | python3 -c "
+$ kubectl get pods --all-namespaces --field-selector spec.nodeName=<worker-about-to-drain>,status.phase=Running -o json | python3 -c "
 import json, sys; data = json.load(sys.stdin)
 def parse_mem(s):
     if not s: return 0
@@ -183,13 +183,13 @@ total = 0
 for pod in data.get('items', []):
     is_ds = any(o.get('kind') == 'DaemonSet' for o in pod['metadata'].get('ownerReferences', []))
     if not is_ds:
-        total += sum(parse_mem(c.get('resources', {}).get('requests', {}).get('memory', '0')) for c in pod['spec'].get('containers', []) + pod['spec'].get('initContainers', []))
+        total += sum(parse_mem(c.get('resources', {}).get('requests', {}).get('memory', '0')) for c in pod['spec'].get('containers', []))
 print(f'Non-DaemonSet memory: {total/(1024**3):.2f} GiB')
 "
 $ kubectl describe node <every other worker> | grep -A3 'Allocated resources'
 ```
 
-Measured live 2026-09-02: `talos-lx0-6a4` (pve5) carries 11.42 GiB of
+Measured live 2026-09-02: `talos-lx0-6a4` (pve5) carries ~10.7 GiB of
 reschedulable non-DaemonSet memory requests. Of the other four workers, only
 `talos-4h8-zy6` (pve1) has room — ~11.8 GiB allocatable, others sit at ~98%
 requests with only ~20-30 MiB free each — no room to absorb anything. If the
