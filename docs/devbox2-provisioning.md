@@ -136,25 +136,50 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
    kubectl and talosctl are installed directly instead, outside that bundle.
 
 3. Install kubectl and talosctl directly — the fleet's pinned versions, just
-   run without the flag that would also pull in Docker and Node:
+   run without the flag that would also pull in Docker and Node. `mkdir -p`
+   the keyring directory first: devbox2's cloud-init only ever creates
+   `/usr/share/keyrings` (for tailscale), never `/etc/apt/keyrings`, and
+   devbox2 skips the Docker/gh installs that create the latter as a side
+   effect on devbox — so on a fresh devbox2 `gpg --dearmor -o` into it fails
+   with "No such file or directory" (`gpg -o` does not create missing parent
+   directories; verified against a real path). talosctl's target,
+   `/usr/local/bin`, is a stock FHS directory and needs no such step:
 
    ```sh
+   sudo mkdir -p -m 755 /etc/apt/keyrings
    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubectl.gpg
    echo "deb [signed-by=/etc/apt/keyrings/kubectl.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
    sudo apt-get update && sudo apt-get install -y kubectl
 
-   curl -fsSL -o /usr/local/bin/talosctl https://github.com/siderolabs/talos/releases/download/v1.13.8/talosctl-linux-amd64
+   curl -fsSL -o /usr/local/bin/talosctl https://github.com/siderolabs/talos/releases/download/vX.Y.Z/talosctl-linux-amd64
    chmod +x /usr/local/bin/talosctl
    ```
+
+   Don't hardcode the talosctl version above — pin it to whatever the
+   cluster is actually running, checked live rather than assumed stale:
+
+   ```sh
+   kubectl get nodes -o wide   # OS-IMAGE column, e.g. Talos (v1.13.4)
+   ```
+
+   Client/server skew is tolerated, but there's no reason to run a client
+   that's already behind the cluster on day one.
 
 4. Copy the existing `kubeconfig` and `talosconfig` over — devbox2 needs the
    same cluster credentials devbox already holds, not a freshly generated
    set.
 
-5. The Claude Code CLI needs no separate step: step 2's chezmoi apply already
-   installed it as a native binary via the dotfiles repo's ungated
-   agent-CLI catalog (`home/run_once_43-install-agent-clis.sh.tmpl`), which
-   doesn't depend on npm or Node.
+5. Install the Claude Code CLI. **The dotfiles repo does not do this.**
+   Checking `~/.local/share/chezmoi` directly: `agentClis` in
+   `home/.chezmoidata.yaml` lists exactly `no-mistakes` and `gnhf`, no
+   `claude` entry, and the script that installs that list is
+   `home/run_onchange_43-install-agent-clis.sh.tmpl` — `run_onchange_`, not
+   `run_once_`. On devbox, `claude` is a symlink into
+   `~/.local/share/claude/versions/`, which nothing in this dotfiles repo
+   writes; it got there out-of-band. **Confirm the current official install
+   method before relying on this step during an incident** — this document
+   does not have a verified command for it on this machine, and guessing
+   one here would be worse than saying so.
 
 6. Sync SSH keys from the existing Remote-SSH/tailnet setup so outbound
    `git`/`gh` and inbound SSH behave the same as on devbox.
