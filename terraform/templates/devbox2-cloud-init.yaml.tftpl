@@ -1,0 +1,39 @@
+#cloud-config
+# Day-0 only, matching the dev VM's template: OS/user/base-package bootstrap.
+# The admin toolchain is a documented post-boot sequence in
+# docs/devbox2-provisioning.md, not committed automation.
+#
+# tailscale is installed but deliberately not authenticated: `tailscale up`
+# needs an interactive login or an auth key, and an auth key here would sit in
+# plaintext in the snippet on the host's local storage.
+hostname: ${hostname}
+fqdn: ${hostname}
+preserve_hostname: false
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - git
+  - curl
+  - ca-certificates
+
+# tailscale is not in Ubuntu's archive; it needs its own signed-by keyring.
+# These are the upstream-documented steps, reproducing the exact keyring and
+# list paths already present on devbox.
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+  - curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
+  - apt-get update
+  - apt-get install -y tailscale

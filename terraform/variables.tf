@@ -369,3 +369,75 @@ variable "dev_vm_snippet_datastore" {
   type        = string
   default     = "local"
 }
+
+variable "devbox2_node" {
+  description = "Proxmox node hosting the lifeboat VM. Must not be devbox's host (pve5) — a lifeboat that dies with the machine it exists to survive is not a lifeboat. pve1 is the only non-control-plane host with unallocated memory: 23G of its 28.2G is committed to talos-worker-01 and haproxy-1."
+  type        = string
+  default     = "pve1"
+}
+
+variable "devbox2_name" {
+  description = "Hostname of the lifeboat VM."
+  type        = string
+  default     = "devbox2"
+}
+
+variable "devbox2_id" {
+  description = "Proxmox VMID for the lifeboat VM. Next free after devbox's 111."
+  type        = number
+  default     = 112
+}
+
+variable "devbox2_cores" {
+  description = "vCPU cores for the lifeboat VM. pve1 has 4 unallocated threads of 16 and runs at single-digit utilisation; CPU is not the scarce resource on this host."
+  type        = number
+  default     = 2
+}
+
+variable "devbox2_memory" {
+  description = "Dedicated memory (MiB) for the lifeboat VM. Deliberately small: this takes pve1 to 25G committed of 28.2G, leaving 3.2G for the hypervisor. Enough for a shell, the admin toolchain and one agent session — not a second daily driver."
+  type        = number
+  default     = 2048
+}
+
+variable "devbox2_disk_size" {
+  description = "Root disk size (GiB) for the lifeboat VM."
+  type        = number
+  default     = 32
+}
+
+variable "devbox2_ip" {
+  description = "Static LAN IP for the lifeboat VM (CIDR). Below the DHCP pool floor (.64), adjacent to devbox's .56."
+  type        = string
+  default     = "192.168.1.57/24"
+}
+
+variable "devbox2_gateway" {
+  description = "Default gateway for the lifeboat VM. The LAN gateway is .254, not .1."
+  type        = string
+  default     = "192.168.1.254"
+}
+
+variable "devbox2_user" {
+  description = "Cloud-init admin user on the lifeboat VM. Matches devbox's so existing SSH config and habits carry over unchanged."
+  type        = string
+  default     = "dev-admin"
+}
+
+variable "devbox2_storage_pool" {
+  description = "Datastore for the lifeboat VM's root disk. NFS rather than pve1's local-lvm: keeps the VM migratable and leaves pve1's local storage for talos-worker-01."
+  type        = string
+  default     = "truenas-vmdisks"
+}
+
+variable "devbox2_image_datastore" {
+  description = "Datastore holding the imported cloud image. Needs the 'import' content type, and must live on devbox2_node."
+  type        = string
+  default     = "local"
+}
+
+variable "devbox2_snippet_datastore" {
+  description = "Datastore holding the cloud-init user-data snippet. Needs the 'snippets' content type, which an LVM-thin pool cannot provide. Host-local, same as haproxy-1's on this node — see docs/devbox2-provisioning.md on why that is a drift risk rather than a migration blocker."
+  type        = string
+  default     = "local"
+}
