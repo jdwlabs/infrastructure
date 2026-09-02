@@ -83,12 +83,29 @@ enough to drive a restart and keep working in a degraded but functional state.
 | Host | pve1 | the only host with unallocated memory, and a different physical machine from devbox |
 | Cores | 2 | pve1 has 4 unallocated threads of 16; CPU is not scarce here |
 | Memory | 2048 MB, `balloon: 0` | takes pve1 to 25 GB allocated of 28.2 GB, leaving 3.2 GB hypervisor reserve; matches the fleet's dedicated-memory convention |
-| Disk | 32 GB on `truenas-vmdisks` | NFS-backed, keeping the VM migratable and off pve1's local-lvm |
+| Disk | 32 GB on `truenas-vmdisks` | NFS-backed, not pinned to pve1's local storage |
 | Address | 192.168.1.57/24, gateway 192.168.1.254 | below the .64 DHCP pool floor, adjacent to devbox's .56 |
 | Admin user | `dev-admin`, existing SSH key | existing Remote-SSH and tailnet habits carry over unchanged |
 | Snippet datastore | `local` on pve1 | same pattern haproxy-1 already uses on this host; see §7 |
 | `on_boot` | true | returns unattended after a pve1 reboot |
 | Tags | `dev;lifeboat` | |
+
+`terraform/devbox2-node.tf` reuses `dev_vm_cloud_image_url` and
+`dev_vm_cloud_image_checksum` rather than defining its own — one Ubuntu
+release to track, one checksum to rotate, at the cost that an image rotation
+touches both devbox and devbox2 in the same `apply`. That is a real
+trade-off for two machines whose whole point is not sharing fate, accepted
+here because the alternative (a second set of image variables tracking the
+same upstream release) is duplication without a corresponding safety gain —
+an image rotation is reviewed either way, and it is the pve1/pve5 physical
+separation and the independent VMIDs, not the image source, that keep a
+pve5 outage from taking devbox2 down too.
+
+devbox2 is deliberately outside the nightly `vzdump` job (§6): that job's
+`vmid` is `111` only, not `all`, so devbox2 gets no backup of its own. It
+doesn't need one — everything about it is reproducible from
+`terraform/devbox2-node.tf` plus the post-boot sequence below, not
+accumulated state worth preserving.
 
 Cloud-init is day-0 only, matching the convention `docs/dev-vm-provisioning.md`
 §5.2 established for devbox and the haproxy design before it: OS, user, base
@@ -182,10 +199,70 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
    one here would be worse than saying so.
 
 6. Sync SSH keys from the existing Remote-SSH/tailnet setup so outbound
-   `git`/`gh` and inbound SSH behave the same as on devbox.
+   `git`/`gh` and inbound SSH behave the same as on devbox. This key also
+   has to be authorized as `root@pve1` through `root@pve5` — every `qm` and
+   `pvecm` command in this document and
+   `scenarios/host-restart-coordination.md` depends on it, and nothing
+   above provisions that authorization automatically.
 
-§6's verification list (tailnet + `.57` reachable, `kubectl get nodes`,
-`talosctl`, `claude` starts) is what confirms this sequence actually landed.
+7. Install Terraform >= 1.16.0. **Don't trust the dotfiles bootstrap for
+   this one.** `run_once_46-install-cloud-clis.sh` installs Terraform
+   ungated — it ran in step 2 regardless of `installDevTooling` — but its
+   `TERRAFORM_FALLBACK_VERSION` is `1.15.8`, below `terraform/providers.tf`'s
+   `required_version = ">= 1.16.0"`. That fallback is what actually lands if
+   the GitHub releases API lookup the script prefers fails or is
+   rate-limited, the same trap that had to be worked around getting devbox
+   itself onto a qualifying version. Verify what's actually present and
+   replace it if it's too old:
+
+   ```sh
+   terraform version
+   # if < 1.16.0: download a qualifying release from
+   # https://releases.hashicorp.com/terraform/ and install it over the
+   # existing binary, checksum-verified, same as run_once_46 does
+   ```
+
+8. Install `sops`. It lives in `home/run_once_49-install-dev-tools.sh.tmpl`,
+   the bundle behind `installDevTooling`, which step 2 deliberately left
+   `false` — so it never arrived. Install it directly, the same pattern
+   step 3 used for kubectl/talosctl rather than opting into the whole
+   bundle it would otherwise come with:
+
+   ```sh
+   curl -fsSL -o /tmp/sops.deb https://github.com/getsops/sops/releases/download/vX.Y.Z/sops_X.Y.Z_amd64.deb
+   sudo apt-get install -y /tmp/sops.deb
+   ```
+
+   Pin `vX.Y.Z` to whatever `home/run_once_49-install-dev-tools.sh.tmpl`
+   currently pins for devbox, checked live rather than assumed stale.
+
+9. Get an age identity and become an authorized vault device
+   (`docs/secrets.md`). This repo's Terraform state backend credentials and
+   `terraform.tfvars` are SOPS-encrypted; decrypting them with an
+   unauthorized key fails closed no matter how correctly step 8 installed
+   the tool. Either copy devbox's existing age key across (treating devbox2
+   as the same operator identity) or generate a new one and have an
+   already-authorized device re-key the vault for it:
+
+   ```sh
+   age-keygen -o ~/.config/sops/age/keys.txt
+   # from an already-authorized device: talops secrets add-device <devbox2's printed public key>
+   #   then: git commit -am "chore(secrets): authorize devbox2" && git push
+   # on devbox2, once that's pushed: git pull
+   ```
+
+10. Clone this repository and decrypt the Terraform inputs devbox2 needs —
+    `terraform.tfvars` (Proxmox credentials), `backend-credentials.enc.yaml`
+    (the MinIO/S3 keys the state backend authenticates with), and
+    `backend-tls.enc.yaml` (the MinIO CA bundle `providers.tf`'s
+    `custom_ca_bundle` points at) — via `sops -d`, per `docs/secrets.md`.
+    Without all three, `terraform init` cannot reach the state backend and
+    `plan` has no Proxmox credentials to authenticate with.
+
+§6's pre-resize verification list — tailnet + `.57` reachable, `kubectl get
+nodes`, `talosctl`, and `terraform init && terraform plan` run *from
+devbox2* — is what confirms this sequence actually landed, and it has to
+pass before §5 step 3 stops devbox.
 
 Implementation follows the repository's existing one-file-per-role Terraform
 layout (`dev-vm-node.tf`, `haproxy-node.tf`, `gpu-node.tf`) with a new
@@ -217,26 +294,53 @@ start of the VM. A reboot from inside the guest will not re-read the allocation.
 ## 5. Ordering
 
 The ordering is not incidental — the reclaim stops the machine the operator
-works from, so the lifeboat has to exist and be proven first.
+works from, so the lifeboat has to exist and be proven able to actually do
+the job it exists for — including run Terraform — before that happens. The
+operator should discover a broken lifeboat while devbox is still up to fix
+it from, not after.
 
 1. `terraform apply` devbox2 on pve1. No downtime for anything existing.
-2. Bootstrap and verify devbox2: tailnet reachable, `kubectl get nodes` returns
-   8 Ready, `talosctl` reaches the control planes, `claude` starts.
-3. **From devbox2:** apply the `dev_vm_memory` change and stop/start devbox.
+2. Bootstrap devbox2 (post-boot sequence above) and run §6's pre-resize
+   verification, ending with `terraform init && terraform plan` executed
+   *from devbox2*, showing only the intended `dev_vm_memory` diff. Stop here
+   if any of it doesn't come back clean — nothing has been touched on devbox
+   or pve5 yet.
+3. Commit and push any in-progress work on devbox — the next step powers it
+   off. From devbox2: `terraform apply` the `dev_vm_memory` change, then
+   force a full stop/start of devbox (a reboot from inside the guest will
+   not re-read a `balloon: 0` allocation change; `qm shutdown` rather than
+   `qm stop` because this is a hard power-off of the operator's own
+   workstation and the guest agent is available to shut down cleanly):
+   ```sh
+   ssh root@pve5 'qm shutdown 111'
+   ssh root@pve5 'qm start 111'
+   ```
 4. Verify pve5 and devbox.
 
 ## 6. Verification
 
-- `terraform fmt` and `terraform validate` clean; the plan reviewed by a human
-  before any apply.
+**Before touching devbox — all of this has to pass first, per §5 step 2:**
+
+- `terraform fmt` and `terraform validate` clean; the devbox2 plan reviewed
+  by a human before any apply.
 - devbox2 answers on both the tailnet and 192.168.1.57.
 - From devbox2: `kubectl get nodes` returns 8 Ready; `talosctl` reaches the
-  control planes; `claude` starts.
-- After the resize: `free -g` on pve5 reports at least 11 GB free with all
-  three guests running; devbox SSH is back; the cluster still shows 8 nodes
-  Ready.
+  control planes.
+- From devbox2: `terraform init` succeeds against the MinIO state backend
+  and `terraform plan` shows only the intended `dev_vm_memory` diff. This is
+  the real test of the post-boot bootstrap's Terraform/`sops`/age/repo-clone
+  steps — that the binaries installed is not the same claim as that they can
+  actually reach the backend and decrypt the vault. `claude` is not part of
+  this gate: the lifeboat's job (`ssh`, `kubectl`, `talosctl`, `terraform`)
+  doesn't need it, and there's no verified install method for it yet (post-
+  boot step 5) — it stays a best-effort follow-up, not a blocker.
+
+**After the resize:**
+
+- `free -g` on pve5 reports at least 11 GB free with all three guests
+  running; devbox SSH is back; the cluster still shows 8 nodes Ready.
 - The 02:00 `vzdump` of VM 111 succeeds on the following night. Seven healthy
-  dailies exist today at ~19.6 GB each on `truenas-backup`.
+  dailies exist today on `truenas-backup`, averaging ~19.8 GB.
 
 ## 7. What this does not solve
 
