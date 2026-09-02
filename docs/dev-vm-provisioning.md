@@ -223,7 +223,7 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
 | 0 | Node capacity check; `.56`/vmid `111` confirmed free; NFS storage backend | **Done 2026-08-09**: pve1 ruled out (28.2GiB total, ~5.5GiB free), pve5 selected (~42GiB free); vmid `111` and `.56` confirmed unclaimed; `truenas-vmdisks` NFS storage already existed cluster-wide (§4 correction) — no new backend needed |
-| 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | **Done 2026-08-10**: applied, PRs #108/#109/#110 merged. `terraform plan` against current main shows zero diff on `dev_vm` — state matches config |
+| 1 | `terraform/dev-vm-node.tf` + vars + tfvars entry | **Done 2026-08-10**: applied, PRs #108/#109/#110 merged. `terraform plan` against main at the time showed zero diff on `dev_vm` — state matched config (this branch's `dev_vm_memory` 32768→16384 resize is a deliberate change on top of that baseline, not drift) |
 | 2 | Cloud-init verified (SSH reachable, guest agent running) | **Done**: `ssh dev-admin@192.168.1.56` succeeds, hostname `devbox`, uptime confirms cloud-init completed |
 | 3 | Bootstrap script run (§5.3): tooling installed | **Done 2026-08-10**: `docker`, `gh`, `kubectl`, `talosctl`, `sops`, `git` present; `node`/`pnpm` (via nvm) and `claude` CLI installed and resolve |
 | 4 | Credential/dotfile sync from Windows | **Done 2026-08-10**: age keys present (sops + chezmoi), `gh auth status` logged in as jdwillmsen, dotfiles applied via `chezmoi apply` (personal role) — git identity, `.claude`, shell config all live |
@@ -237,14 +237,17 @@ internet needed for package registries (apt, npm/pnpm, Docker Hub, GitHub).
    dedicated export, separate from the k8s PVC tier (`storage/k8s/vols`).
    No action needed; see §4.
 2. **Target migration test host — hardware ceiling, not a scheduling gap.**
-   pve1's *total* RAM is 28.2GiB, below devbox's 32GB allocation — freeing
-   pve1 up (e.g. relocating `minecraft-server`) cannot fix this, the box is
-   too small even empty. pve2/pve3/pve4 are smaller still (12.6GiB each,
-   confirmed live — see `docs/devbox2-provisioning.md` §2) and are excluded
-   anyway as control-plane hosts (req #4). No
-   node in the cluster today can be Phase 6's "other side." Unblocks only by
-   adding cluster capacity; procedure is ready to run in
-   `scenarios/dev-vm-migrate.md` once it does.
+   pve1 has 5.2 GiB *free* today (28.2GiB total, ~23GiB already allocated to
+   haproxy-1 and talos-worker-01), dropping to ~3.2 GiB once devbox2 lands
+   on it (`docs/devbox2-provisioning.md` §2-3). Neither figure covers even
+   the resized `dev_vm_memory` (16GiB, committed but not yet applied — see
+   above), let alone the original 32GiB. pve2/pve3/pve4 have less free
+   still (~2.6GiB each, confirmed live) and are excluded anyway as
+   control-plane hosts (req #4). No node in the cluster today can be Phase
+   6's "other side." Unblocks only by adding cluster capacity or freeing an
+   existing node's allocation, not by shrinking devbox further; procedure is
+   ready to run in `scenarios/dev-vm-migrate.md` once a qualifying target
+   exists.
 3. ~~pve1's API proxy to pve5 returns "no route to host"~~ — **re-tested
    2026-08-10**: `pvesh get /nodes/pve1/qemu` via pve5's API proxy succeeded
    cleanly. Treating as transient; re-check if it recurs before depending on

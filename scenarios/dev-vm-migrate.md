@@ -32,14 +32,17 @@ numbers assume both land as designed, not what `pvesh` returns right now:
 |---|---|---|---|---|
 | pve1 | 28.2 GiB | ~3.2 GiB *(projected, after devbox2)* | No | — |
 | pve2/pve3/pve4 | 12.6 GiB each | ~2.6 GiB each | No | Control-plane hosts, excluded by design requirement #4 |
-| pve5 | 123.5 GiB | ~11.5 GiB *(projected, after the reclaim)* | Yes | devbox's current host — not a valid target |
+| pve5 | 123.5 GiB | ~11.5 GiB *(projected, after the reclaim)* | n/a — devbox's own host | Not a valid migration target for its own guest |
 
-Halving devbox's allocation did not unblock migration. pve1 still can't fit
-an 8-core/16GB VM even on the more favorable projected figure — and pve5, the
-only host that does clear it, is devbox's own current host, not a valid
-target for a round trip. No node in the cluster, today or under this
-design's projected end state, can be the "other side" of a migrate/migrate-
-back cycle. This is a hardware ceiling, not a process gap.
+The "Fits 16 GB?" column asks whether a node could hold devbox *in addition
+to* what it already runs — pve5's free-RAM figure assumes devbox's own 16
+GiB allocation is already sitting elsewhere, which is exactly the thing a
+target node must do that isn't itself devbox's current host. Halving
+devbox's allocation did not unblock migration: pve1 still can't fit an
+8-core/16GB VM even on the more favorable projected figure, and no other
+node clears it either. No node in the cluster, today or under this design's
+projected end state, can be the "other side" of a migrate/migrate-back
+cycle. This is a hardware ceiling, not a process gap.
 
 ## Preconditions — re-check live, do not trust this table
 
