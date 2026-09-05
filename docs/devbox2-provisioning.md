@@ -5,6 +5,11 @@ performed or is proposed by this document. Capacity figures captured live
 2026-09-01 via `pvesh` and `kubectl`; re-verify before acting if reading this
 more than a few weeks later.
 
+**Read §5's "Standing state drift" before running any `terraform apply` from
+this document.** An untargeted apply against current state destroys and
+recreates devbox, for reasons that predate this design and are not fixed by
+it.
+
 Companion runbook: `scenarios/host-restart-coordination.md`.
 Related: `docs/dev-vm-provisioning.md` (devbox itself),
 `scenarios/dev-vm-migrate.md` (still blocked, see §7),
@@ -265,7 +270,7 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
 §6's pre-resize verification list — tailnet + `.57` reachable, `kubectl get
 nodes`, `talosctl`, and `terraform init && terraform plan` run *from
 devbox2* — is what confirms this sequence actually landed, and it has to
-pass before §5 step 3 stops devbox.
+pass before §5 gets anywhere near stopping devbox.
 
 Implementation follows the repository's existing one-file-per-role Terraform
 layout (`dev-vm-node.tf`, `haproxy-node.tf`, `gpu-node.tf`) with a new
@@ -296,47 +301,115 @@ start of the VM. A reboot from inside the guest will not re-read the allocation.
 
 ## 5. Ordering
 
+### Standing state drift — read this before any apply
+
+An untargeted `terraform apply` in this repository does **not** currently do
+only what this design asks for. Planned 2026-09-05 against live state, on
+`main` and on this design's branch:
+
+```
+Plan: 6 to add, 3 to change, 6 to destroy    # main, without devbox2
+Plan: 9 to add, 3 to change, 6 to destroy    # with devbox2 added
+```
+
+The three extra creates are devbox2's image, snippet and VM. This design is
+purely additive: it adds nothing to the change or destroy columns. Those six
+destroys already stand on `main` — and one of them is devbox itself:
+
+```
+  # proxmox_virtual_environment_vm.dev_vm must be replaced
+      ~ user_data_file_id = "local:snippets/devbox-cloud-init.yaml" -> (known after apply) # forces replacement
+```
+
+The cause is line endings, not configuration. The snippet recorded in state
+was uploaded with CRLF and the template renders LF today, so `source_raw.data`
+differs on every line while the content is byte-identical after
+normalisation. That attribute forces replacement of the snippet file, which
+makes `user_data_file_id` unknown, which forces replacement of the VM — a
+destroy and recreate of devbox, losing its disk. The `haproxy-1` snippet
+carries the same drift, and the three `download_file` resources replace
+because a checksum was added to config after they were last applied.
+
+Two consequences for the ordering below:
+
+- **Step 1 must be `-target`ed.** An untargeted apply destroys devbox while
+  ostensibly only adding a VM.
+- **The resize in step 3 cannot be applied until that drift is cleared**,
+  because any plan that touches `dev_vm` carries the replacement with it.
+  Clearing it is its own reviewed change, not part of this one: replace the
+  snippet file alone
+  (`-target=proxmox_virtual_environment_file.dev_vm_cloud_init`), which
+  recreates it at the same datastore ID and leaves the running guest
+  untouched, then re-plan. Treat "`dev_vm` now shows an in-place `memory`
+  change and nothing else" as something to confirm against that fresh plan,
+  not to assume.
+
+`.gitattributes` pins `*.tftpl` to LF so a CRLF checkout cannot reintroduce
+the divergence, but it does not retroactively fix state written before it
+existed.
+
+### The sequence
+
 The ordering is not incidental — the reclaim stops the machine the operator
 works from, so the lifeboat has to exist and be proven able to actually do
 the job it exists for — including run Terraform — before that happens. The
 operator should discover a broken lifeboat while devbox is still up to fix
 it from, not after.
 
-1. `terraform apply` devbox2 on pve1. No downtime for anything existing.
+1. Apply devbox2 on pve1, scoped to its own three resources so the standing
+   drift above stays untouched. No downtime for anything existing:
+   ```sh
+   terraform plan \
+     -target=proxmox_virtual_environment_download_file.devbox2_cloud_image \
+     -target=proxmox_virtual_environment_file.devbox2_cloud_init \
+     -target=proxmox_virtual_environment_vm.devbox2 \
+     -out=tfplan
+   terraform show tfplan   # confirm: 3 to add, 0 to change, 0 to destroy
+   terraform apply tfplan
+   ```
+   Read the plan before applying it. Three creates and nothing else is the
+   whole acceptance criterion for this step.
 2. Bootstrap devbox2 (post-boot sequence above) and run §6's pre-resize
    verification, ending with `terraform init && terraform plan` executed
-   *from devbox2*, showing only the intended `dev_vm_memory` diff. Stop here
-   if any of it doesn't come back clean — nothing has been touched on devbox
-   or pve5 yet.
-3. Commit and push any in-progress work on devbox — the next step powers it
-   off. From devbox2: `terraform apply` the `dev_vm_memory` change, then
-   force a full stop/start of devbox (a reboot from inside the guest will
-   not re-read a `balloon: 0` allocation change; `qm shutdown` rather than
-   `qm stop` because this is a hard power-off of the operator's own
-   workstation and the guest agent is available to shut down cleanly):
+   *from devbox2*. Stop here if any of it doesn't come back clean — nothing
+   has been touched on devbox or pve5 yet.
+3. Clear the snippet drift (above) as a separate reviewed change, and confirm
+   by fresh plan that `dev_vm` is down to an in-place `memory` change. Until
+   that plan is clean, do not continue: applying the resize on top of the
+   drift destroys the VM it is meant to resize.
+4. Commit and push any in-progress work on devbox — the next step powers it
+   off. From devbox2, apply the `dev_vm_memory` change scoped to the VM
+   (`-target=proxmox_virtual_environment_vm.dev_vm`), then force a full
+   stop/start of devbox (a reboot from inside the guest will not re-read a
+   `balloon: 0` allocation change; `qm shutdown` rather than `qm stop`
+   because this is a hard power-off of the operator's own workstation and the
+   guest agent is available to shut down cleanly):
    ```sh
    ssh root@pve5 'qm shutdown 111'
    ssh root@pve5 'qm start 111'
    ```
-4. Verify pve5 and devbox.
+5. Verify pve5 and devbox.
 
 ## 6. Verification
 
 **Before touching devbox — all of this has to pass first, per §5 step 2:**
 
-- `terraform fmt` and `terraform validate` clean; the devbox2 plan reviewed
-  by a human before any apply.
+- `terraform fmt -check` and `terraform validate` clean; the `-target`ed
+  devbox2 plan (§5 step 1) reviewed by a human and showing three creates and
+  nothing else before any apply.
 - devbox2 answers on both the tailnet and 192.168.1.57.
 - From devbox2: `kubectl get nodes` returns 8 Ready; `talosctl` reaches the
   control planes.
-- From devbox2: `terraform init` succeeds against the MinIO state backend
-  and `terraform plan` shows only the intended `dev_vm_memory` diff. This is
-  the real test of the post-boot bootstrap's Terraform/`sops`/age/repo-clone
-  steps — that the binaries installed is not the same claim as that they can
-  actually reach the backend and decrypt the vault. `claude` is not part of
-  this gate: the lifeboat's job (`ssh`, `kubectl`, `talosctl`, `terraform`)
-  doesn't need it, and there's no verified install method for it yet (post-
-  boot step 5) — it stays a best-effort follow-up, not a blocker.
+- From devbox2: `terraform init` succeeds against the MinIO state backend and
+  `terraform plan` runs to completion. Expect it to reproduce the standing
+  drift described in §5, not a clean `dev_vm_memory`-only diff — what this
+  step verifies is that devbox2 can reach the backend and decrypt the vault
+  at all, which is a different claim from the binaries having installed. The
+  plan is clean enough to proceed on only after §5 step 3 clears the drift.
+- `claude` is not part of this gate: the lifeboat's job (`ssh`, `kubectl`,
+  `talosctl`, `terraform`) doesn't need it, and there's no verified install
+  method for it yet (post-boot step 5) — it stays a best-effort follow-up,
+  not a blocker.
 
 **After the resize:**
 
