@@ -252,10 +252,10 @@ against Tailscale's per-node request limits; there is no reason to spend five.
 
 - Paste the five `openssl` blocks from Step 5 and the Step 7 rotation evidence
   onto the ticket.
-- Update the **Status** line at the top of
-  [docs/proxmox-tls-certificates.md](../docs/proxmox-tls-certificates.md) and
-  its "Current state" table, and the "Nothing here has been executed" note at
-  the top of this file.
+- Update the **Status** line and the "Applied state" table at the top of
+  [docs/proxmox-tls-certificates.md](../docs/proxmox-tls-certificates.md), and
+  the "This has been executed" line at the top of this file, with the new
+  date and the hosts covered.
 - If the tailnet name or any node's assigned name differed from the assumptions
   here, correct them in both documents and in
   [`files/tailscale-pveproxy-cert.sh`](files/tailscale-pveproxy-cert.sh).
