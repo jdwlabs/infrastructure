@@ -57,11 +57,18 @@ fi
 # The cluster filesystem sets ownership and mode itself (root:www-data 0640),
 # so writing the contents is the whole install — no chown/chmod to get wrong.
 #
-# pveproxy only uses the custom pair when both files are present, and it reads
-# them once at startup. Writing the key first means a restart racing this write
-# falls back to the built-in certificate rather than serving a mismatched pair.
-cat "${STAGE_DIR}/key.pem" >"${LIVE_KEY}"
-cat "${STAGE_DIR}/cert.pem" >"${LIVE_CERT}"
+# Write each file next to its destination and rename into place rather than
+# writing straight into the live path: pmxcfs (the /etc/pve FUSE filesystem)
+# supports rename(2) as an atomic swap of the directory entry, so a process
+# killed mid-write can only ever see the old file or the new one, never a
+# truncated one. pveproxy only uses the custom pair when both files are
+# present, and it reads them once at startup, so renaming the key into place
+# first means a restart racing this install falls back to the built-in
+# certificate rather than serving a mismatched pair.
+cat "${STAGE_DIR}/key.pem" >"${LIVE_KEY}.new"
+cat "${STAGE_DIR}/cert.pem" >"${LIVE_CERT}.new"
+mv -f "${LIVE_KEY}.new" "${LIVE_KEY}"
+mv -f "${LIVE_CERT}.new" "${LIVE_CERT}"
 
 echo "installed certificate for ${FQDN}; reloading pveproxy"
 systemctl reload pveproxy
