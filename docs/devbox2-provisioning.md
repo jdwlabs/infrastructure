@@ -362,19 +362,23 @@ the job it exists for — including run Terraform — before that happens. The
 operator should discover a broken lifeboat while devbox is still up to fix
 it from, not after.
 
-1. Apply devbox2 on pve1, scoped to its own three resources so the standing
-   drift above stays untouched. No downtime for anything existing:
+1. **Done.** Applied on pve1, scoped to devbox2's own three resources so the
+   standing drift stayed untouched:
    ```sh
    terraform plan \
      -target=proxmox_virtual_environment_download_file.devbox2_cloud_image \
      -target=proxmox_virtual_environment_file.devbox2_cloud_init \
      -target=proxmox_virtual_environment_vm.devbox2 \
      -out=tfplan
-   terraform show tfplan   # confirm: 3 to add, 0 to change, 0 to destroy
+   terraform show tfplan
    terraform apply tfplan
    ```
-   Read the plan before applying it. Three creates and nothing else is the
-   whole acceptance criterion for this step.
+   `3 to add, 0 to change, 0 to destroy` was the plan at apply time, and three
+   creates and nothing else was the acceptance criterion. Re-running that same
+   targeted plan today shows `0 to add, 1 to change, 0 to destroy` instead —
+   the in-place `overwrite` true -> false on `devbox2_cloud_image` that the
+   `lifecycle` guards introduce. That is the expected result now, not a
+   regression.
 2. Bootstrap devbox2 (post-boot sequence above) and run §6's pre-resize
    verification, ending with `terraform init && terraform plan` executed
    *from devbox2*. Stop here if any of it doesn't come back clean — nothing

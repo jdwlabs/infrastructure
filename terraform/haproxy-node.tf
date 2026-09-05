@@ -156,10 +156,13 @@ resource "proxmox_virtual_environment_vm" "haproxy" {
   # terraform/README.md has the sequencing.
   # ignore_changes does not apply at resource creation, so a genuinely new
   # VM (new vm_name/vmid — an HA peer, or the next full rebuild) still picks
-  # up whatever cloud-init content is current at that time. Landing a
-  # cloud-init change on an already-live VM stays a human-run SSH runbook
-  # (scenarios/lan-dns-resolver-deploy.md is the current example), not a
-  # `terraform apply`.
+  # up whatever cloud-init content is current at that time. For an already-live
+  # VM there are two paths, and they differ in when the change lands, not in
+  # whether it does: the SSH runbook
+  # (scenarios/lan-dns-resolver-deploy.md is the current example) applies it
+  # now and is the one to reach for; a `terraform apply` of the snippet applies
+  # it at the VM's next boot, whenever that turns out to be. The second is only
+  # safe if that boot is part of the plan.
   lifecycle {
     ignore_changes = [initialization[0].user_data_file_id]
   }
