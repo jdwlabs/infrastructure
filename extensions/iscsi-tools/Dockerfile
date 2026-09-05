@@ -17,7 +17,7 @@
 # for Talos v1.13.4 resolves for siderolabs/iscsi-tools — the same bits the
 # fleet runs today — not the floating v0.2.0 tag, which has been re-pushed
 # since and no longer matches.
-FROM ghcr.io/siderolabs/iscsi-tools:v0.2.0@sha256:1ca2a5a5d9fd6b47bb3a4ba50e63668b7a875fa33a57dbe03a023f017d6983e8
+FROM ghcr.io/siderolabs/iscsi-tools:v0.2.0@sha256:3a121a4451e746fe50eaee4089429814fdc199ad90758fd11958b3340c70e8f9
 
 COPY manifest.yaml /manifest.yaml
 COPY iscsid.yaml /rootfs/usr/local/etc/containers/iscsid.yaml
