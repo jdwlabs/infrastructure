@@ -15,7 +15,7 @@ hosts were joined by browser login, which cannot apply a tag, so all five are
 untagged and their node keys would have expired — and an expired node key stops
 renewal, after which the certificate lapses quietly. Key expiry was disabled on
 all five the same day, so this is closed, but prefer an auth key carrying
-`tag:pve-host` when repeating these steps: a tagged node never expires in the
+`tag:pve` when repeating these steps: a tagged node never expires in the
 first place, and the toggle has to be remembered per host.
 
 For the *why* — why not Proxmox's own ACME client with the Porkbun plugin, why
