@@ -61,7 +61,7 @@ through a peer.
 
 ### Nodes are untagged, and node-key expiry is the consequence
 
-The design below calls for a `tag:pve-host` on each hypervisor. The hosts were
+The design below calls for a `tag:pve` on each hypervisor. The hosts were
 joined interactively through a browser login instead, which cannot apply a tag,
 so all five are untagged and owned by the joining user account.
 
