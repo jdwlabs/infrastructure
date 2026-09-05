@@ -263,7 +263,7 @@ variable "haproxy_cloud_image_url" {
 variable "haproxy_cloud_image_checksum" {
   description = "SHA256 of haproxy_cloud_image_url's current contents. Update together — a URL change with no matching checksum change fails the download intentionally."
   type        = string
-  default     = "0533b0655c32e68b31d792ecd6ccfca95abdbc536c4446874fe0513bd4140ffe"
+  default     = "d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30"
 }
 
 variable "haproxy_image_datastore" {
@@ -355,7 +355,7 @@ variable "dev_vm_cloud_image_url" {
 variable "dev_vm_cloud_image_checksum" {
   description = "SHA256 of dev_vm_cloud_image_url's current contents. Update together — a URL change with no matching checksum change fails the download intentionally."
   type        = string
-  default     = "0533b0655c32e68b31d792ecd6ccfca95abdbc536c4446874fe0513bd4140ffe"
+  default     = "d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30"
 }
 
 variable "dev_vm_image_datastore" {
