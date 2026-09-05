@@ -24,6 +24,16 @@ resource "proxmox_virtual_environment_download_file" "haproxy_cloud_image" {
   url                = var.haproxy_cloud_image_url
   checksum           = var.haproxy_cloud_image_checksum
   checksum_algorithm = "sha256"
+  overwrite          = false
+
+  # Create-time verification only. Neither a checksum edit nor an upstream
+  # respin of this rolling URL should replace an image that VMs have already
+  # copied from — under the provider's defaults both do, and that replacement
+  # used to cascade into the VMs. terraform/README.md: "Image downloads
+  # replace themselves", and how to roll an image deliberately.
+  lifecycle {
+    ignore_changes = [checksum, checksum_algorithm]
+  }
 }
 
 # Snippets cannot live on an LVM-thin pool; they need a directory-backed
@@ -132,11 +142,18 @@ resource "proxmox_virtual_environment_vm" "haproxy" {
   # `terraform plan`/`apply` would do it silently — CI here only runs
   # `terraform validate`, which cannot see it.
   #
-  # This also matches reality, not just papers over Terraform's view of it:
-  # cloud-init only runs at first boot, so an in-place edit to the snippet
-  # was never going to reach an already-running VM anyway (see "Day-0 is the
-  # gap" in docs/haproxy-vm-provisioning.md). Ignoring the field means
-  # Terraform stops proposing a change it could never actually deliver.
+  # This also matches reality for as long as the VM stays up: cloud-init only
+  # runs per instance, so an edit to the snippet does not reach a running
+  # guest (see "Day-0 is the gap" in docs/haproxy-vm-provisioning.md).
+  # It does reach it across a reboot, though, and that is the part worth
+  # spelling out: PVE rebuilds the NoCloud seed from this snippet on every VM
+  # start and derives instance-id as a digest of the user-data and
+  # network-data, so replacing the *file* gives the guest a new instance-id
+  # and cloud-init re-runs its per-instance modules at the next boot. The
+  # guard below stops the VM being destroyed; it does not make a snippet
+  # replacement a no-op for the guest. Applying one is therefore scheduled
+  # alongside the reboot it implies, not folded into an unrelated apply —
+  # terraform/README.md has the sequencing.
   # ignore_changes does not apply at resource creation, so a genuinely new
   # VM (new vm_name/vmid — an HA peer, or the next full rebuild) still picks
   # up whatever cloud-init content is current at that time. Landing a

@@ -17,6 +17,16 @@ resource "proxmox_virtual_environment_download_file" "dev_vm_cloud_image" {
   url                = var.dev_vm_cloud_image_url
   checksum           = var.dev_vm_cloud_image_checksum
   checksum_algorithm = "sha256"
+  overwrite          = false
+
+  # Create-time verification only. Neither a checksum edit nor an upstream
+  # respin of this rolling URL should replace an image that VMs have already
+  # copied from — under the provider's defaults both do, and that replacement
+  # used to cascade into the VMs. terraform/README.md: "Image downloads
+  # replace themselves", and how to roll an image deliberately.
+  lifecycle {
+    ignore_changes = [checksum, checksum_algorithm]
+  }
 }
 
 # Snippets cannot live on an LVM-thin pool; they need a directory-backed
@@ -97,6 +107,18 @@ resource "proxmox_virtual_environment_vm" "dev_vm" {
   scsi_hardware   = "virtio-scsi-single"
   boot_order      = ["scsi0"]
   tags            = ["dev", "workstation"]
+  # user_data_file_id is ForceNew, and the snippet resource behind it replaces
+  # on any byte change to source_raw.data — so editing the cloud-init template,
+  # or merely checking it out with CRLF endings, destroys and rebuilds this VM
+  # and loses its 300G disk. This is the box the operator's own sessions run
+  # on, which makes an unnoticed replacement in a routine plan the worst
+  # failure mode in this file. Same guard, and the same ForceNew reasoning,
+  # as the HAProxy VM — see the longer note there, including why replacing
+  # the snippet still reaches the guest across a reboot even though this
+  # guard keeps the VM itself intact.
+  lifecycle {
+    ignore_changes = [initialization[0].user_data_file_id]
+  }
 }
 
 output "dev_vm_address" {

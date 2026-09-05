@@ -1,14 +1,15 @@
 # devbox2 — Lifeboat VM Provisioning and the pve5 Memory Reclaim
 
-Status: **DESIGN — approved, not yet applied.** No `terraform apply` has been
-performed or is proposed by this document. Capacity figures captured live
-2026-09-01 via `pvesh` and `kubectl`; re-verify before acting if reading this
-more than a few weeks later.
+Status: **§5 step 1 applied — devbox2 is live on pve1 as VMID 112
+(192.168.1.57). The pve5 memory reclaim is not yet applied.** Capacity figures
+captured live 2026-09-01 via `pvesh` and `kubectl`; re-verify before acting if
+reading this more than a few weeks later.
 
 **Read §5's "Standing state drift" before running any `terraform apply` from
-this document.** An untargeted apply against current state destroys and
-recreates devbox, for reasons that predate this design and are not fixed by
-it.
+this document.** An untargeted apply no longer destroys devbox — the
+`lifecycle` guards in `terraform/` closed that — but it still replaces
+cloud-init snippets, which arms a cloud-init re-run on the next boot of every
+guest whose snippet it touches, including the production load balancer.
 
 Companion runbook: `scenarios/host-restart-coordination.md`.
 Related: `docs/dev-vm-provisioning.md` (devbox itself),
@@ -303,50 +304,55 @@ start of the VM. A reboot from inside the guest will not re-read the allocation.
 
 ### Standing state drift — read this before any apply
 
-An untargeted `terraform apply` in this repository does **not** currently do
-only what this design asks for. Planned 2026-09-05 against live state, on
-`main` and on this design's branch:
+devbox2 has since been provisioned, and the drift this section warned about
+has been narrowed by the `lifecycle` guards now carried in `terraform/`. What
+follows is the state of it, not history: read `terraform/README.md` for why
+the guards are shaped the way they are.
+
+Planned against live state, 2026-09-05:
 
 ```
-Plan: 6 to add, 3 to change, 6 to destroy    # main, without devbox2
-Plan: 9 to add, 3 to change, 6 to destroy    # with devbox2 added
+Plan: 6 to add, 2 to change, 6 to destroy    # before the guards
+Plan: 2 to add, 6 to change, 2 to destroy    # with the guards
 ```
 
-The three extra creates are devbox2's image, snippet and VM. This design is
-purely additive: it adds nothing to the change or destroy columns. Those six
-destroys already stand on `main` — and one of them is devbox itself:
+The six destroys included devbox itself:
 
 ```
   # proxmox_virtual_environment_vm.dev_vm must be replaced
       ~ user_data_file_id = "local:snippets/devbox-cloud-init.yaml" -> (known after apply) # forces replacement
 ```
 
-The cause is line endings, not configuration. The snippet recorded in state
+The cause was line endings, not configuration. The snippet recorded in state
 was uploaded with CRLF and the template renders LF today, so `source_raw.data`
 differs on every line while the content is byte-identical after
 normalisation. That attribute forces replacement of the snippet file, which
 makes `user_data_file_id` unknown, which forces replacement of the VM — a
-destroy and recreate of devbox, losing its disk. The `haproxy-1` snippet
-carries the same drift, and the three `download_file` resources replace
-because a checksum was added to config after they were last applied.
+destroy and recreate of devbox, losing its disk. `.gitattributes` pins
+`*.tftpl` to LF so a CRLF checkout cannot reintroduce the divergence, but it
+does not retroactively fix state written before it existed.
+
+`ignore_changes` on `initialization[0].user_data_file_id` now breaks that
+cascade for devbox, devbox2 and haproxy-1, and `overwrite = false` plus
+`ignore_changes` on the image checksums removes the three `download_file`
+replacements. What remains in the destroy column is the two snippet files
+themselves, and neither is drift to be suppressed: devbox's is the CRLF
+record, and haproxy-1's is the real, still-unapplied LAN split-horizon DNS
+content.
 
 Two consequences for the ordering below:
 
-- **Step 1 must be `-target`ed.** An untargeted apply destroys devbox while
-  ostensibly only adding a VM.
-- **The resize in step 3 cannot be applied until that drift is cleared**,
-  because any plan that touches `dev_vm` carries the replacement with it.
-  Clearing it is its own reviewed change, not part of this one: replace the
-  snippet file alone
-  (`-target=proxmox_virtual_environment_file.dev_vm_cloud_init`), which
-  recreates it at the same datastore ID and leaves the running guest
-  untouched, then re-plan. Treat "`dev_vm` now shows an in-place `memory`
-  change and nothing else" as something to confirm against that fresh plan,
-  not to assume.
-
-`.gitattributes` pins `*.tftpl` to LF so a CRLF checkout cannot reintroduce
-the divergence, but it does not retroactively fix state written before it
-existed.
+- **Anything touching devbox must still be `-target`ed.** Replacing a snippet
+  gives its guest a new cloud-init `instance-id`, so cloud-init re-runs its
+  per-instance modules at that guest's next boot. An untargeted apply would
+  arm that on the production load balancer as a side effect of resizing a
+  dev VM.
+- **Clear devbox's snippet record before the resize**, so the resize reboot
+  is not also a cloud-init re-run. The repair is a state correction, not a
+  file replacement — `terraform/README.md` has the procedure and the
+  alternatives that were rejected. Treat "`dev_vm` shows an in-place `memory`
+  change and nothing else" as something to confirm against a fresh plan, not
+  to assume.
 
 ### The sequence
 
@@ -373,13 +379,15 @@ it from, not after.
    verification, ending with `terraform init && terraform plan` executed
    *from devbox2*. Stop here if any of it doesn't come back clean — nothing
    has been touched on devbox or pve5 yet.
-3. Clear the snippet drift (above) as a separate reviewed change, and confirm
-   by fresh plan that `dev_vm` is down to an in-place `memory` change. Until
-   that plan is clean, do not continue: applying the resize on top of the
-   drift destroys the VM it is meant to resize.
+3. Clear devbox's snippet record (above) as a separate reviewed change, and
+   confirm by fresh plan that `dev_vm_cloud_init` no longer appears and
+   `dev_vm` is down to an in-place `memory` change. The `lifecycle` guards
+   mean the resize no longer destroys the VM if this is skipped, but skipping
+   it spends a cloud-init re-run on the resize reboot for nothing.
 4. Commit and push any in-progress work on devbox — the next step powers it
    off. From devbox2, apply the `dev_vm_memory` change scoped to the VM
-   (`-target=proxmox_virtual_environment_vm.dev_vm`), then force a full
+   (`-target=proxmox_virtual_environment_vm.dev_vm`, expecting `0 to add,
+   2 to change, 0 to destroy`), then force a full
    stop/start of devbox (a reboot from inside the guest will not re-read a
    `balloon: 0` allocation change; `qm shutdown` rather than `qm stop`
    because this is a hard power-off of the operator's own workstation and the
@@ -405,7 +413,7 @@ it from, not after.
   drift described in §5, not a clean `dev_vm_memory`-only diff — what this
   step verifies is that devbox2 can reach the backend and decrypt the vault
   at all, which is a different claim from the binaries having installed. The
-  plan is clean enough to proceed on only after §5 step 3 clears the drift.
+  plan is clean enough to proceed on only after §5 step 3 clears the record.
 - `claude` is not part of this gate: the lifeboat's job (`ssh`, `kubectl`,
   `talosctl`, `terraform`) doesn't need it, and there's no verified install
   method for it yet (post-boot step 5) — it stays a best-effort follow-up,

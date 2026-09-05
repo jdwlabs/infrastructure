@@ -15,6 +15,16 @@ resource "proxmox_virtual_environment_download_file" "devbox2_cloud_image" {
   url                = var.dev_vm_cloud_image_url
   checksum           = var.dev_vm_cloud_image_checksum
   checksum_algorithm = "sha256"
+  overwrite          = false
+
+  # Create-time verification only. Neither a checksum edit nor an upstream
+  # respin of this rolling URL should replace an image that VMs have already
+  # copied from — under the provider's defaults both do, and that replacement
+  # used to cascade into the VMs. terraform/README.md: "Image downloads
+  # replace themselves", and how to roll an image deliberately.
+  lifecycle {
+    ignore_changes = [checksum, checksum_algorithm]
+  }
 }
 
 resource "proxmox_virtual_environment_file" "devbox2_cloud_init" {
@@ -88,6 +98,15 @@ resource "proxmox_virtual_environment_vm" "devbox2" {
   scsi_hardware   = "virtio-scsi-single"
   boot_order      = ["scsi0"]
   tags            = ["dev", "lifeboat"]
+  # Same ForceNew trap and same guard as the dev VM and the HAProxy VM: a
+  # cloud-init template edit would otherwise destroy and rebuild this VM. It
+  # matters more here than the sizing suggests — this is the lifeboat, and it
+  # is worth least at exactly the moment it gets rebuilt, which is while the
+  # operator is using it to drive a change to the other box. See the HAProxy
+  # VM for the mechanism and the reboot caveat.
+  lifecycle {
+    ignore_changes = [initialization[0].user_data_file_id]
+  }
 }
 
 output "devbox2_address" {
