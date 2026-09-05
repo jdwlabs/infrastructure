@@ -13,7 +13,7 @@ resource "proxmox_virtual_environment_download_file" "ubuntu_cloud_image" {
   node_name          = var.gpu_vm_node
   file_name          = "ubuntu-24.04-server-cloudimg-amd64.qcow2"
   url                = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
-  checksum           = "0533b0655c32e68b31d792ecd6ccfca95abdbc536c4446874fe0513bd4140ffe"
+  checksum           = "d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30"
   checksum_algorithm = "sha256"
 }
 
