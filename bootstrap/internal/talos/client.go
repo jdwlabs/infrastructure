@@ -100,14 +100,12 @@ func (c *Client) ApplyConfig(ctx context.Context, ip net.IP, configPath string, 
 	}
 	defer func() { _ = tc.Close() }()
 
-	mode := machine.ApplyConfigurationRequest_AUTO
-	if insecure {
-		mode = machine.ApplyConfigurationRequest_REBOOT
-	}
-
+	// AUTO reboots when the applied config requires it; a maintenance-mode
+	// apply (insecure) always requires one, so this preserves the prior
+	// unconditional-reboot behavior without the deprecated REBOOT mode.
 	resp, err := tc.ApplyConfiguration(ctx, &machine.ApplyConfigurationRequest{
 		Data: configData,
-		Mode: mode,
+		Mode: machine.ApplyConfigurationRequest_AUTO,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to apply configuration: %w", err)
