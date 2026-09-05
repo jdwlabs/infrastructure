@@ -44,9 +44,10 @@ correct state or the files already on the datastores.
   every image resource plan as a replacement — indefinitely, and unprompted.
 
 A replaced image also makes `disk.import_from` unknown on each VM that
-imported from it. That plans as an in-place update rather than a replacement,
-so it is not fatal, but it is a diff on a live VM whose apply-time behaviour
-is not worth discovering by experiment.
+imported from it. That is a spurious in-place diff rather than a rebuild —
+`import_from` is `ForceNew: false` and is only read when the disk is created,
+so the update is a no-op for a live VM — but it is noise in every plan, and
+noise is what let the real replacement above go unnoticed.
 
 ## What is guarded, and why that is the right shape
 
@@ -74,13 +75,57 @@ creation, so a genuinely new VM, or a rebuilt one, still gets whatever
 cloud-init content and checksum are current at that time. What is suppressed
 is only the proposal to reconcile an existing resource.
 
+#### The case where the VM guard bites
+
+`user_data_file_id` is not an opaque handle. Its value is
+`<datastore>:snippets/<file_name>`, and `file_name` is derived from the VM
+name variable — so **renaming a VM, or moving its snippet datastore, changes
+the path, not just the resource's identity.** Terraform will destroy the old
+snippet and create the new one, the guard will suppress the VM's side of it,
+and the running VM's `cicustom` will keep pointing at a path that no longer
+exists. Nothing fails at apply time. It fails at the next `qm start`.
+
+So whenever `*_name` or `*_snippet_datastore` moves for a VM that is already
+built, the snippet rename is not a self-contained change. Either rebuild the
+VM deliberately:
+
+```sh
+terraform plan -target=proxmox_virtual_environment_vm.<vm> \
+  -replace=proxmox_virtual_environment_vm.<vm> -out=tfplan
+```
+
+or, if the VM must survive, repoint it by hand after the apply and before it
+next stops:
+
+```sh
+ssh root@<node> 'qm set <vmid> --cicustom user=<datastore>:snippets/<new-name>'
+```
+
+The guard is deliberately narrow: it protects against content churn, which is
+constant, at the cost of not noticing a path change, which is rare and
+deliberate. Renames are the one case that has to be driven, not planned.
+
 For the images the guard restates what the attributes actually mean: the
 checksum is a download-time integrity gate, not a continuously enforced
 property, and nothing verifies it against the datastore afterwards. Rolling
-an image is therefore a deliberate act, not a plan side effect — bump the URL
-and checksum, then `terraform apply -replace=<address>` for each image, and
-expect a fresh download. Existing VMs are unaffected: `import_from` copies the
-image into the VM's own disk at creation and never reads it again.
+an image is therefore a deliberate act, not a plan side effect: bump the URL
+and checksum, then, for each image,
+
+```sh
+terraform plan -target=<address> -replace=<address> -out=tfplan
+terraform show tfplan
+terraform apply tfplan
+```
+
+`-replace` marks a resource for replacement; it does not narrow what else the
+plan picks up. Without `-target` an image roll would carry every other pending
+change with it — today that means the `haproxy-1` snippet replacement and the
+dnsmasq rollout it arms, which is exactly the coupling the sequencing below
+exists to prevent. Both flags, every time.
+
+Existing VMs are unaffected by the re-download: `import_from` is
+`ForceNew: false` and is read only when the disk is created, so the image is
+copied into the VM's own disk once and never consulted again.
 
 ### The part the guards do not fix
 
@@ -111,23 +156,56 @@ the next boot — which is the resize reboot, the one boot where the operator
 most needs the box to come back exactly as it left.
 
 Run from devbox2, not from devbox, and keep the backup until a plan confirms
-the result:
+the result. The `.tfstate` extensions are load-bearing: `.gitignore` matches
+them on `*.tfstate` but ignores nothing named `state-*.json`, and these files
+hold the whole infrastructure state including secrets — so the same runbook
+written with `.json` names puts them one `git add .` away from being
+committed.
 
 ```sh
-terraform state pull > state-backup.json
+terraform state pull > state-backup.tfstate
+
 python3 - <<'EOF'
-import json
-d = json.load(open('state-backup.json'))
+import json, sys
+
+d = json.load(open('state-backup.tfstate'))
+hits = 0
 for r in d['resources']:
     if r['type'] == 'proxmox_virtual_environment_file' and r['name'] == 'dev_vm_cloud_init':
         for i in r['instances']:
-            s = i['attributes']['source_raw'][0]
-            s['data'] = s['data'].replace('\r\n', '\n')
+            a = i['attributes']['source_raw'][0]
+            fixed = a['data'].replace('\r\n', '\n')
+            if fixed != a['data']:
+                a['data'] = fixed
+                hits += 1
+
+# Without this the script is a no-op that still bumps the serial and pushes
+# byte-identical state — which reads as a successful repair and is not one.
+if hits != 1:
+    sys.exit(f'expected exactly 1 CRLF rewrite, made {hits}; check the resource address')
+
 d['serial'] += 1
-json.dump(d, open('state-fixed.json', 'w'), indent=2)
+json.dump(d, open('state-fixed.tfstate', 'w'), indent=2)
 EOF
-terraform state push state-fixed.json
+
+terraform state push state-fixed.tfstate
 terraform plan   # dev_vm_cloud_init must now be absent from the plan
+```
+
+If the plan is wrong and the push has to be undone, the backup's serial is now
+behind the remote's and a plain push is refused. Force it — this is the one
+place that flag is correct, because the backup is known-good state that was
+deliberately superseded:
+
+```sh
+terraform state push -force state-backup.tfstate
+```
+
+Then shred both files; they are full state, and they do not belong in a
+working tree any longer than the repair takes:
+
+```sh
+shred -u state-backup.tfstate state-fixed.tfstate
 ```
 
 This touches no Proxmox object. The file on the datastore keeps its CRLF bytes
