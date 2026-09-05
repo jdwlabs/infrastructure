@@ -1,0 +1,5 @@
+# Terraform renders these verbatim into Proxmox snippet files, and
+# source_raw.data forces resource replacement on any byte difference. A CRLF
+# checkout therefore makes a VM that references the snippet plan as
+# destroy-and-recreate even when the content is unchanged.
+*.tftpl text eol=lf
