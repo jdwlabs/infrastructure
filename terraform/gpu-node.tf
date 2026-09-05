@@ -15,6 +15,16 @@ resource "proxmox_virtual_environment_download_file" "ubuntu_cloud_image" {
   url                = "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
   checksum           = "d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30"
   checksum_algorithm = "sha256"
+  overwrite          = false
+
+  # Create-time verification only. Neither a checksum edit nor an upstream
+  # respin of this rolling URL should replace an image that VMs have already
+  # copied from — under the provider's defaults both do, and that replacement
+  # used to cascade into the VMs. terraform/README.md: "Image downloads
+  # replace themselves", and how to roll an image deliberately.
+  lifecycle {
+    ignore_changes = [checksum, checksum_algorithm]
+  }
 }
 
 resource "proxmox_virtual_environment_vm" "gpu_inference" {
