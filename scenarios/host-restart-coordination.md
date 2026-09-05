@@ -107,8 +107,8 @@ Kubernetes never moves a running pod back to rebalance. A host restart
 followed by uncordon leaves the fleet in whatever shape the drain left it,
 not restored to its pre-restart spread. If that reshuffle stacked replicas
 that used to be spread across hosts, or ate into the slack a *later* restart
-was counting on (see the drain-capacity check above), nothing in this
-runbook's post-flight fixes it automatically — a restart makes the next
+was counting on (see the drain-capacity check in Pre-flight, below), nothing
+in this runbook's post-flight fixes it automatically — a restart makes the next
 restart's capacity check more important, not less.
 
 ## Not in scope
@@ -191,8 +191,9 @@ $ kubectl describe node <every other worker> | grep -A3 'Allocated resources'
 
 Measured live 2026-09-02: `talos-lx0-6a4` (pve5) carries ~10.7 GiB of
 reschedulable non-DaemonSet memory requests. Of the other four workers, only
-`talos-4h8-zy6` (pve1) has room — ~11.8 GiB allocatable, others sit at ~98%
-requests with only ~20-30 MiB free each — no room to absorb anything. If the
+`talos-4h8-zy6` (pve1) has room — ~20 GiB allocatable against 41% requested,
+so ~11.8 GiB free — others sit at ~98% requests with only ~20-30 MiB free
+each, no room to absorb anything. If the
 worker you're about to drain, plus every worker with slack, doesn't clear
 this check, expect Pending pods, not a silent reschedule — see the pve5
 section below for what this looks like when it's genuinely marginal.

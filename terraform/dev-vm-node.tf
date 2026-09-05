@@ -90,7 +90,7 @@ resource "proxmox_virtual_environment_vm" "dev_vm" {
     user_data_file_id = proxmox_virtual_environment_file.dev_vm_cloud_init.id
   }
 
-  # A daily-driver box should come back up unattended after pve1 restarts.
+  # A daily-driver box should come back up unattended after its host restarts.
   on_boot = true
 
   stop_on_destroy = true
