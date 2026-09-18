@@ -7,7 +7,7 @@ class of problem recurs on another node.
 
 ## Why this mattered
 
-Since the 2026-08-06 pve5 IP-drift recovery (`docs/proxmox-host-ip-drift-and-dhcp.md`
+Since the 2026-08-06 pve5 IP-drift recovery (`docs/host-addressing.md`
 — pve5 moved `.169` → `.204`), every other Proxmox node's cluster filesystem
 still recorded pve5's address as the dead `192.168.1.169`. This broke the
 Proxmox API's inter-node proxy: any `/nodes/pve5/...` call routed through

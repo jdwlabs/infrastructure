@@ -536,13 +536,22 @@ workstation cannot distinguish a working resolver from that machine's own
 
 Separate mechanism, already working, and not affected by any of the above: the
 gateway publishes forward and reverse records for its DHCP clients under
-`attlocal.net`, so `https://pve<n>.attlocal.net:8006` reaches each Proxmox host
-and matches the certificate it serves, which the raw address does not.
+`attlocal.net`, so `https://pve<n>.attlocal.net:8006` reaches each Proxmox host.
 
-One defect remains there — `pve5.attlocal.net` still returns two addresses, and
-`192.168.1.204` is dead. Re-confirmed 2026-08-04; the resolver alternates
-between the two, so a single query can look healthy. Details and the gateway
-step that clears it are in [host-addressing.md](host-addressing.md).
+It does **not** match the certificate that host serves, and an earlier version
+of this section saying it did (while the raw address did not) is now wrong.
+Since 2026-09-01 every host serves a Let's Encrypt certificate whose only name
+is `pve<n>.tail5bbd6f.ts.net`, and `pveproxy` serves that one certificate for
+every name a client uses — so the `attlocal.net` name mismatches exactly as the
+raw address does. The tailnet name is the only warning-free URL. See
+[host-addressing.md](host-addressing.md) and
+[proxmox-tls-certificates.md](proxmox-tls-certificates.md).
+
+The defect this section used to record — `pve5.attlocal.net` returning two
+addresses — is **gone as of 2026-09-18**; every host name now returns exactly
+one. That entry also had the two addresses the wrong way round: `192.168.1.204`
+is pve5's live address and `192.168.1.169` was the dead one. Details in
+[host-addressing.md](host-addressing.md).
 
 No public record should be created for a hypervisor management interface. The
 `attlocal.net` names are LAN-only, which is the correct scope, and `8006` is not

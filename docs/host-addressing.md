@@ -59,14 +59,14 @@ core recommendation — reservations over host-static config) was already
 carried out at some point after this document was written; it just never got
 updated here. Nothing left to do on this front.
 
-What's still live: `pve5.attlocal.net` round-robins between `.204` and the
-dead `.169` at the gateway's DNS layer, and — separately, more seriously —
-pve1/pve2's Proxmox cluster filesystem (pmxcfs) still has `.169` cached as
-pve5's address, breaking inter-node API proxying to pve5. Neither is fixable
-from the gateway's IP Allocation or Device List UI (no stale-lease entry
-exists in either table to remove). The DNS symptom has a workaround
-(`/etc/hosts` pins on pve1-pve4); the pmxcfs one is the real blocker and has
-its own runbook: `scenarios/pve-stale-node-ip-corosync.md`.
+**Nothing is still live here as of 2026-09-18.** Two `.169` leftovers used to
+be: a gateway DNS answer that returned `.169` alongside `.204` for pve5's name,
+and pve1/pve2's cluster filesystem caching `.169` as pve5's address, which broke
+inter-node API proxying. The pmxcfs one was fixed at source on 2026-08-09 — the
+cause was pve5's own `/etc/hosts` self-entry, not a cached value on the readers
+(`scenarios/pve-stale-node-ip-corosync.md`, itself marked resolved). The DNS one
+aged out of the gateway on its own. Both re-verified live; see "pve5's name was
+broken; it is not any more" below for the evidence.
 
 The pool is observed to span roughly `.64`-`.253` — the BGW320-500 default, and
 consistent with every address the reconciler has ever seen a VM receive. The
@@ -261,7 +261,7 @@ for h in pve1:192.168.1.200 pve2:192.168.1.201 pve3:192.168.1.202 \
          pve4:192.168.1.203 pve5:192.168.1.204; do
   name=${h%%:*}; ip=${h##*:}
   echo | openssl s_client -connect "$ip":8006 2>/dev/null \
-    | openssl x509 -noout -subject | grep -q "CN=$name" \
+    | openssl x509 -noout -subject | grep -qE "CN ?= ?$name" \
     && echo "$name $ip OK" || echo "$name $ip MISMATCH"
 done
 ```
@@ -269,9 +269,16 @@ done
 Each host answering on `:8006` with its own name in the certificate subject is
 the check that matters — it proves the address maps to the host the repo thinks
 it does, which a ping cannot. The subject is now
-`CN=pve<n>.tail5bbd6f.ts.net` rather than `CN=pve<n>.attlocal.net`, so the
-`grep "CN=$name"` above still matches on the host-number prefix; it no longer
-says anything about which *domain* the certificate covers.
+`CN=pve<n>.tail5bbd6f.ts.net` rather than `CN=pve<n>.attlocal.net`, so the grep
+still matches on the host-number prefix; it no longer says anything about which
+*domain* the certificate covers.
+
+The grep is `CN ?= ?$name` rather than `CN=$name` because OpenSSL ≥ 1.1.0 prints
+the subject with spaces around the `=` (`subject=CN = pve1.tail5bbd6f.ts.net`),
+so the tighter pattern matches nothing and reports `MISMATCH` for every host —
+the exact false alarm this check exists to rule out. Reproduced on OpenSSL
+3.0.13; the hypervisors run Debian 13's OpenSSL 3.5, so it fails there too.
+`-nameopt compat` restores the old spacing if a stricter pattern is wanted.
 
 Then confirm each name resolves to exactly one address, which is what proves the
 stale `.169` record is gone:
