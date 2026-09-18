@@ -13,6 +13,18 @@
 # scenarios/pve-stale-node-ip-corosync.md for how this credential is used
 # once it exists.
 #
+# STATUS: superseded for the fleet-wide case. The credential this wizard
+# exists to create is already in place on pve1-pve5 as of 2026-08-30, set
+# non-interactively with a generated 32-char password
+# (`openssl rand -base64 32 | tr -d '/+=' | cut -c1-32`) written to Vault
+# first and applied with `chpasswd` second — see the "Evidence" and
+# "Rotation" sections of scenarios/host-remote-power-recovery.md, which is
+# the procedure to follow for a rotation. Prefer that: it never routes the
+# password through a human's keyboard, and a generated value is stronger
+# than a typed one. This wizard remains the right tool for the case that
+# snippet cannot cover — a host where key auth is already dead, so the
+# password must be set at a physical console and only then stored.
+#
 # This is a HUMAN-RUN script, same gating as `terraform apply` and
 # scenarios/vault-unseal-backup.sh in this repo — it sets real root
 # credentials on production hypervisors. The wizard automates the Vault

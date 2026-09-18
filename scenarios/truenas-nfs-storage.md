@@ -6,12 +6,16 @@ secondary tier for Proxmox (ISOs, templates, backups, and live-migratable VMs) a
 for Kubernetes bulk/RWX workloads via `democratic-csi`.
 
 **TrueNAS address:** `192.168.1.205`  
-**Proxmox cluster:** `pve1`–`pve4` (`192.168.1.200`–`203`), `pve5` (`192.168.1.169`)  
+**Proxmox cluster:** `pve1`–`pve5` (`192.168.1.200`–`204`)  
 **Network:** 1GbE end-to-end — NFS is the only supported protocol here.
 
-The host addresses are not a contiguous range and `192.168.1.204` belongs to no
-host. See [../docs/host-addressing.md](../docs/host-addressing.md) before using
-any address here — the four DHCP hosts can move.
+All five hypervisors are contiguous on `.200`–`.204`; an earlier version of this
+header put pve5 at `192.168.1.169` and called `.204` unassigned, which is
+backwards — `.169` is dead and `.204` is pve5. Every host address is held by a
+gateway Fixed Allocation rather than host-static config. See
+[../docs/host-addressing.md](../docs/host-addressing.md) before using any
+address here; it is the authority, and reservations depend on gateway
+configuration surviving.
 
 ---
 
