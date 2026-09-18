@@ -48,10 +48,20 @@ pve4 http=200 tls_verify=0
 pve5 http=200 tls_verify=0
 ```
 
-The LAN address path is untouched and still answers on all five
-(`https://192.168.1.20x:8006/` → `200`), still with the cluster CA's
-certificate. That is deliberate: the tailnet name is an addition, not a
-replacement, so losing the tailnet costs the warning-free UI and nothing else.
+The LAN address path still answers on all five (`https://192.168.1.20x:8006/` →
+`200`, re-verified 2026-09-18), so losing the tailnet costs the warning-free URL
+and nothing else — reachability is unaffected.
+
+It does **not** still serve the cluster CA's certificate, though, and an earlier
+version of this paragraph claiming it did was wrong. `pveproxy` serves one
+certificate for every name a client might use (see "The constraint everything
+else follows from" below), so installing the tailnet certificate replaced what
+the LAN address and the `attlocal.net` name get as well. Verified live
+2026-09-18 on all five LAN addresses: issuer `O=Let's Encrypt`, subject
+`CN=pve<n>.tail5bbd6f.ts.net`, sole SAN `DNS:pve<n>.tail5bbd6f.ts.net`. Those
+two paths therefore now fail on a **hostname mismatch** rather than an unknown
+issuer — a browser warning either way, but a different one, and one that no CA
+import can clear.
 
 Each host joined with `--accept-dns=false --accept-routes=false`, so no
 hypervisor's name resolution or routing table changed. The subnet router on the

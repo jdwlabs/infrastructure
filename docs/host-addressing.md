@@ -76,9 +76,12 @@ unreachable by DHCP.
 
 ## Reaching a host by name
 
-Every host already answers to a name on the LAN, and **the name is the better
+Every host already answers to a name on the LAN, and **a name is the better
 address to use** — not merely a convenience. This is easy to miss because
-nothing in this repository references it.
+nothing in this repository references it. Which name depends on what you need:
+`pve<n>.tail5bbd6f.ts.net` is the only one that resolves from anywhere on the
+tailnet *and* matches the certificate served on `:8006`; the `attlocal.net`
+names below are LAN-only and mismatch it.
 
 The gateway at `192.168.1.254` publishes forward and reverse records for its
 DHCP clients under `attlocal.net`. Verified against that resolver directly:
@@ -89,59 +92,100 @@ DHCP clients under `attlocal.net`. Verified against that resolver directly:
 | `pve2.attlocal.net` | 192.168.1.201 | `pve2.attlocal.net` |
 | `pve3.attlocal.net` | 192.168.1.202 | `pve3.attlocal.net` |
 | `pve4.attlocal.net` | 192.168.1.203 | `pve4.attlocal.net` |
-| `pve5.attlocal.net` | 192.168.1.204 **and 192.168.1.169**, round-robin | both → `pve5` / `pve5.attlocal.net` |
+| `pve5.attlocal.net` | 192.168.1.204 | `pve5.attlocal.net` |
+
+Re-verified 2026-09-18: one address per name, including pve5 (see "pve5's name
+was broken" below for what changed).
 
 The records only exist on that resolver. A client pointed at a public resolver
 gets `NXDOMAIN`, so this is a LAN-only path — which is the correct scope for a
 hypervisor management interface, and the reason no public record should be
 created for one.
 
+### The resolver caveat: `dig @192.168.1.254` is not the same as your system resolver
+
+"Verified against that resolver directly" is load-bearing. A client only gets
+these records if it actually queries `192.168.1.254` for them, and not every LAN
+client does.
+
+The devbox is the worked example: `dig pve1.attlocal.net @192.168.1.254` answers,
+while `curl https://pve1.attlocal.net:8006/` fails outright with
+`curl: (6) Could not resolve host` — its configured resolvers do not include the
+gateway for this zone. So on the devbox the `attlocal.net` names are not usable
+at all, and the choices are the tailnet name (which MagicDNS resolves, and which
+is also the only one that matches the served certificate) or the raw address.
+
+Check before relying on a name from any given machine:
+
+```bash
+getent hosts pve1.attlocal.net || echo "this machine cannot resolve it"
+```
+
 This is a different mechanism from how `*.jdwlabs.com` names resolve on the LAN,
 which the same gateway cannot help with at all — see
 [lan-name-resolution.md](lan-name-resolution.md).
 
-### The name matches the certificate; the address does not
+### Only the tailnet name matches the certificate
 
-Each host serves a certificate on `:8006` whose subject is
-`CN=pve<n>.attlocal.net`, with `DNS:pve<n>` and `DNS:pve<n>.attlocal.net` in the
-subject alternative names. Browsing to `https://pve1.attlocal.net:8006` therefore
-produces a hostname *match*; browsing to `https://192.168.1.200:8006` produces a
-mismatch, because the only IP in that certificate is `192.168.1.233`.
+Since 2026-09-01 every host serves one publicly trusted Let's Encrypt
+certificate on `:8006`, issued for its tailnet name. `pveproxy` serves a single
+certificate for every name a client might reach it by, so this is what the LAN
+address and the `attlocal.net` name get too — there is no per-name selection.
+Verified live 2026-09-18 on all five: subject `CN=pve<n>.tail5bbd6f.ts.net`,
+sole SAN `DNS:pve<n>.tail5bbd6f.ts.net`, issuer `O=Let's Encrypt`, expiring
+2026-11-30.
 
-Either way the issuer is the Proxmox cluster's own CA, so a browser still warns
-until that CA is trusted once. The point is that the name removes a second,
-permanent warning that the address cannot.
+What that means per URL:
 
-That warning is now avoidable on a fourth name. As of 2026-09-01 each host also
-serves a publicly trusted Let's Encrypt certificate under its tailnet name, so
-`https://pve<n>.tail5bbd6f.ts.net:8006` needs no CA import at all — see
-[proxmox-tls-certificates.md](proxmox-tls-certificates.md) for what is live and
-why, and [scenarios/proxmox-tailscale-tls.md](../scenarios/proxmox-tailscale-tls.md)
-for the steps and rollback. Everything in this section still describes the
-LAN-address and `attlocal.net` paths, which are unchanged.
+| URL | Browser result |
+| --- | --- |
+| `https://pve<n>.tail5bbd6f.ts.net:8006` | clean — publicly trusted, name matches |
+| `https://pve<n>.attlocal.net:8006` | hostname mismatch |
+| `https://192.168.1.20x:8006` | hostname mismatch |
 
-Those embedded addresses are also evidence in their own right. pve1-pve4 carry
-`.233`, `.222`, `.221` and `.223` — addresses none of them holds now. The
-certificates were minted when the hosts were there. **All five hosts have now
-moved at least once under DHCP**; the risk described above is not hypothetical
-for any of them. pve5's certificate still carries `192.168.1.169` (verified
-live, `openssl s_client` against `.204:8006`) — the address it held under its
-old host-static config, from before the 2026-08-06 outage moved it onto plain
-DHCP. Unlike pve1-pve4, the cert has not been reissued since, so it now
-mismatches pve5's live address the same way theirs do.
+The mismatch is not fixable by importing anything: the issuer is already
+publicly trusted, so the Proxmox cluster CA is no longer part of the browser
+path at all. That removes the "import the cluster CA once" advice this section
+used to give — and that fallback never worked for pve1-pve4 anyway, see
+[proxmox-tls-certificates.md](proxmox-tls-certificates.md) (also the source for
+what is live and why, with [scenarios/proxmox-tailscale-tls.md](../scenarios/proxmox-tailscale-tls.md)
+for steps and rollback).
 
-### pve5's name is currently broken
+**Superseded:** this section previously stated that the `attlocal.net` name
+produced a hostname *match* against a `CN=pve<n>.attlocal.net` cluster-CA
+certificate served on `:8006`. True until the tailnet certificate landed; false
+since.
 
-`pve5.attlocal.net` resolves to two addresses. `192.168.1.169` accepts no
-connection on `22` or `8006` — it is a leftover record from before the outage
-that the gateway never retired. Clients that fall through to the second
-address recover after a connect timeout; clients that try only the first fail
-outright. Either way the name is unreliable in a way the address is not, which
-is the one place where preferring the name is currently the wrong advice.
+The cluster-CA node certificates still exist at `/etc/pve/nodes/<n>/pve-ssl.pem`
+and are still what inter-node proxying uses. They carry stale embedded addresses
+— `.233`, `.222`, `.221`, `.223` for pve1-pve4 and `.169` for pve5 — which is
+evidence in its own right that **all five hosts have moved at least once under
+DHCP**; the risk described above is not hypothetical for any of them. They are
+simply no longer what a browser sees.
 
-Clearing it is part of the same gateway visit as the reservations below: the
-stale lease has to be released there. Until then, prefer `192.168.1.204` for
-pve5 specifically, and the name for the other four.
+### pve5's name was broken; it is not any more
+
+**Resolved as of 2026-09-18.** `pve5.attlocal.net` now returns exactly one
+address, `192.168.1.204`, and so does every other host's name. The dead
+`192.168.1.169` answer the gateway used to serve alongside it is gone — nobody
+released it by hand (it was never visible in the gateway UI to release), so it
+aged out of the gateway's DNS layer on its own.
+
+The deeper pmxcfs-level staleness this was tangled up with is also gone, fixed
+at its real source on 2026-08-09 (`scenarios/pve-stale-node-ip-corosync.md` —
+pve5's own `/etc/hosts` self-entry). Confirmed live 2026-09-18 from pve1:
+`/etc/pve/.members` and `corosync.conf` both record pve5 at `.204`, the cluster
+is quorate 5/5, and `pvesh get /nodes/pve5/status` proxies through successfully.
+
+So the advice is now uniform: prefer the name over the address for all five
+hosts, subject to the resolver caveat above.
+
+The `/etc/hosts` pins on pve1-pve4 (`192.168.1.204 pve5.attlocal.net pve5`) are
+redundant now that gateway DNS answers correctly, and still accurate. Left in
+place deliberately — removing them is a change on four hypervisors that buys
+nothing, and they are a cheap hedge if the stale record ever returns. Revisit
+only if pve5's address changes, when they become the wrong answer instead of a
+duplicate of the right one.
 
 ### Why the repository still uses addresses
 
@@ -201,14 +245,14 @@ with console access available, not as a same-sitting change.
 the gateway's IP Allocation page (`192.168.1.254`). No further reservation
 work needed here.
 
-The stale `192.168.1.169` record was checked for on both the IP Allocation
-page and the Device List / LAN Host Discovery page — it exists on **neither**.
-There's no UI-exposed lease or discovery entry to release; the round-robin
-DNS answer is coming from somewhere inside the gateway's DNS layer that this
-consumer UI doesn't expose. Worked around via `/etc/hosts` pins on pve1-pve4
-(`192.168.1.204 pve5.attlocal.net pve5`) rather than chased further at the
-gateway — see `scenarios/pve-stale-node-ip-corosync.md` for why that
-workaround alone didn't fix the more serious pmxcfs-level staleness.
+The stale `192.168.1.169` DNS answer that used to accompany pve5's name is
+**gone as of 2026-09-18** — nothing was done at the gateway to remove it (it
+appeared on neither the IP Allocation page nor the Device List / LAN Host
+Discovery page, so there was never a UI-exposed entry to release); it aged out
+of the gateway's DNS layer on its own. The `/etc/hosts` pins on pve1-pve4 that
+worked around it are still in place and now redundant. The more serious
+pmxcfs-level staleness it was confused with had a different cause entirely and
+was fixed at source on 2026-08-09 — `scenarios/pve-stale-node-ip-corosync.md`.
 
 Verify afterwards, from any host that can reach the LAN:
 
@@ -224,7 +268,10 @@ done
 
 Each host answering on `:8006` with its own name in the certificate subject is
 the check that matters — it proves the address maps to the host the repo thinks
-it does, which a ping cannot.
+it does, which a ping cannot. The subject is now
+`CN=pve<n>.tail5bbd6f.ts.net` rather than `CN=pve<n>.attlocal.net`, so the
+`grep "CN=$name"` above still matches on the host-number prefix; it no longer
+says anything about which *domain* the certificate covers.
 
 Then confirm each name resolves to exactly one address, which is what proves the
 stale `.169` record is gone:
@@ -236,7 +283,7 @@ for n in pve1 pve2 pve3 pve4 pve5; do
 done   # expect exactly one address per host
 ```
 
-Today that loop returns two addresses for `pve5` and one for each of the others.
+As of 2026-09-18 that loop returns exactly one address for every host.
 
 Then confirm the reconciler sees the whole fleet:
 

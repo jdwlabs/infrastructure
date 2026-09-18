@@ -42,16 +42,20 @@ update-initramfs -u -k all
 systemctl reboot
 ```
 
-**pve5 is static at `192.168.1.169`** (`iface vmbr0 inet static`), so a reboot
-returns it to the same address. The `.204` → `.169` move recorded here earlier
-was the one-time switch to that static config, not recurring DHCP churn — do
-not expect the address to wander on the next reboot.
+**pve5 is at `192.168.1.204`**, held by a gateway Fixed Allocation against a
+plain `iface vmbr0 inet dhcp` host config. An earlier version of this paragraph
+said it was `inet static` at `192.168.1.169` and would return there after a
+reboot — that is wrong and now dangerously so: `.169` is dead, accepting no
+connection on `22` or `8006`. The host-static config at `.169` sat inside the
+DHCP pool and caused the 2026-08-06 duplicate-address outage; recovery moved
+pve5 off it entirely.
 
 It is still worth re-deriving live (`pvesh get /cluster/status` from another
-node) before relying on it for SSH: the address is static on the host but sits
-inside the DHCP pool, so it is pinned only against reboots, not against the
-gateway leasing it elsewhere. `docs/host-addressing.md` covers that gap. VM and
-mapping config keyed by node name is unaffected either way.
+node) before relying on any of these addresses for SSH: the reservations live in
+the gateway's configuration, which a firmware update or factory reset can drop.
+`docs/host-addressing.md` is the authority for all five host addresses and how
+each is held. VM and mapping config keyed by node name is unaffected either
+way.
 
 Verify after reboot: `lspci -k -s 01:00.0 | grep "in use"` → `vfio-pci`.
 
