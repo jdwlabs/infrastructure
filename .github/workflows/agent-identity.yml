@@ -104,10 +104,12 @@ jobs:
             # Anchored to line start because the trailer's literal text also
             # appears in prose — the ADRs specifying this check quote it — and
             # an unanchored scan of the whole message flags a commit that
-            # merely discusses attribution. Any @anthropic.com sender counts,
-            # matching what tools/audit-admin-bypass.py looks for rather than
-            # only the noreply@ address agent tooling happens to use today.
-            if printf '%s' "${b64msg}" | base64 -d | grep -iqP '^Co-Authored-By:.*<[^>]*@anthropic\.com>'; then
+            # merely discusses attribution. Any well-formed trailer counts,
+            # whatever the address domain: a self-hosted model has no vendor
+            # domain to put there, and since the trailer is self-asserted the
+            # domain never proved which agent wrote the commit anyway. Kept
+            # identical to AGENT_TRAILER in tools/audit-admin-bypass.py.
+            if printf '%s' "${b64msg}" | base64 -d | grep -iqP '^Co-Authored-By:[ \t]*\S.*<[^<>@\s]+@[^<>@\s]+>\s*$'; then
               attributed=$((attributed + 1))
               continue
             fi
@@ -160,7 +162,7 @@ jobs:
 
           if [ -n "${unattributed_sha}" ]; then
             echo "::error::Commit ${unattributed_sha:0:9} carries the registered agent identity (${AGENT_IDENTITY}) but no agent co-author trailer — the attribution that identity is meant to prove is missing."
-            echo "Restore the 'Co-Authored-By: <agent name> <...@anthropic.com>' trailer on that commit — see jdwlabs/platform docs/adr/0027-agent-identity-tripwire-catches-missing-attribution.md."
+            echo "Restore the 'Co-Authored-By: <agent name> <email>' trailer on that commit — see jdwlabs/platform docs/adr/0027-agent-identity-tripwire-catches-missing-attribution.md."
             exit 1
           fi
 
