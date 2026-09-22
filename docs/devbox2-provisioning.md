@@ -142,6 +142,19 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
    Interactive login, or an auth key entered here rather than shipped in the
    snippet.
 
+   An interactive login joins the node untagged, and untagged node keys
+   expire — 180 days out, with no warning before the node drops off the
+   tailnet. devbox2 is unattended infrastructure like devbox and the pve
+   hosts, so disable key expiry for it in the Tailscale admin console
+   (Machines → devbox2 → ⋯ → *Disable key expiry*) straight after joining.
+   Confirm from any tailnet node rather than trusting the console badge:
+
+   ```sh
+   tailscale status --json | jq -r '.Peer[] | select(.HostName=="devbox2") | .KeyExpiry // "(none)"'
+   ```
+
+   `(none)` is the pass. A timestamp means the key will still lapse.
+
 2. Pull the dotfiles via chezmoi, personal role, **`installDevTooling` left
    at its default `false`**:
 
@@ -268,6 +281,45 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
     to reach the backend — only the backend *credentials* and tfvars are
     required to authenticate and plan.
 
+### T3 Code host (added after first boot)
+
+devbox2 has since taken on a second job the original design did not plan
+for: a T3 Code server, so agent threads can move to it when devbox is down
+rather than stopping altogether. That needs the Node toolchain the paragraph
+above ruled out — T3 itself and the npm-kind rows in the dotfiles repo's
+`agentClis` table (`codex`, `grok`, `opencode`) all run on it. Docker and
+the rest of the `installDevTooling` bundle remain absent.
+
+Setup follows the dotfiles repo's `docs/t3code.md` unchanged:
+`npx t3@latest service install`, Tailscale Serve in front of the loopback
+listener (`sudo tailscale serve --bg http://127.0.0.1:3773`), and the
+chezmoi scripts that add the provider `PATH` drop-in and the session-expiry
+timer. State observed on 2026-09-22:
+
+| Check | Result |
+|---|---|
+| `t3code.service`, `t3-session-expiry.timer` | both `active` |
+| `~/.config/systemd/user/t3code.service.d/` | `10-provider-path.conf` present |
+| Linger | `yes` |
+| Provider binaries | `claude`, `codex`, `cursor-agent`, `grok`, `opencode` all on `PATH` |
+| `https://devbox2.<tailnet>.ts.net/.well-known/t3/environment` | 200, label `devbox2` |
+
+Clients reach it as a separate environment: run `npx t3@latest pair
+--tailscale` on devbox2 and add the result under Settings → Connections →
+Remote environments in whichever client is in use. Pairing tokens are
+credentials, so run that in a terminal of your own, not through an agent.
+Each CLI still needs its own sign-in on devbox2; a binary being on `PATH`
+does not mean it is authenticated.
+
+This is where the 2 GB budget below starts to bind. The same day, with the
+T3 server running and no agent thread open, `free -h` reported 697 MiB used,
+1.2 GiB available and **no swap**. One agent thread fits. Two, or one thread
+running a heavy build, reaches the OOM killer, and if the killer picks
+`t3code` every session on the box ends with it. The two remedies are a swap
+file (cheap, local to the guest, no Terraform change) or a larger
+`devbox2_memory`, which costs pve1 some of its 3.2 GB reserve and has to go
+through the `-target`ed apply described in §5.
+
 §6's pre-resize verification list — tailnet + `.57` reachable, `kubectl get
 nodes`, `talosctl`, and `terraform init && terraform plan` run *from
 devbox2* — is what confirms this sequence actually landed, and it has to
@@ -288,7 +340,8 @@ radius from "add a VM" to "resize a Kubernetes node", and the smaller VM is
 sufficient for the stated job. A single Claude Code session is roughly 600 MB
 resident, so 2 GB covers a shell, the tooling, and one working agent session.
 It will feel cramped with several concurrent sessions; that is the accepted
-trade.
+trade. The T3 Code server added since (§3, "T3 Code host") takes part of
+that headroom, which leaves room for one working session, not several.
 
 ## 4. Design — the pve5 reclaim
 
