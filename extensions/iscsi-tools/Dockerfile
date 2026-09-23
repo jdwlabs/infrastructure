@@ -13,11 +13,14 @@
 # the node from joining the cluster at all. Baking the file into the
 # extension image needs no runtime write, so neither failure mode exists.
 #
-# The base is pinned to the exact digest the Image Factory extensions bundle
-# for Talos v1.13.4 resolves for siderolabs/iscsi-tools — the same bits the
-# fleet runs today — not the floating v0.2.0 tag, which has been re-pushed
-# since and no longer matches.
-FROM ghcr.io/siderolabs/iscsi-tools:v0.2.0@sha256:97794a8b6064e24d8053b6d424662ccd844052ee57e1b3efc795889ec21bcb0b
+# The base is the digest the Image Factory extensions bundle resolves for the
+# TALOS_VERSION the extension workflow builds against — the same bits the
+# fleet runs — never whatever the v0.2.0 tag currently points at, which
+# upstream re-pushes for each Talos release and which therefore names a
+# different Talos version's build most of the time. Moving TALOS_VERSION
+# means re-deriving this digest; the workflow fails the build when the two
+# disagree and prints the value to paste.
+FROM ghcr.io/siderolabs/iscsi-tools:v0.2.0@sha256:12521145e65403037a7412bf9abce1efd08583e018e5eed8e1c5b9faf52d1da4
 
 COPY manifest.yaml /manifest.yaml
 COPY iscsid.yaml /rootfs/usr/local/etc/containers/iscsid.yaml

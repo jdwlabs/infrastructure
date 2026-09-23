@@ -52,6 +52,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      # Both base images are pinned by digest to what the Image Factory
+      # resolves for TALOS_VERSION, so the extension carries the same bits the
+      # fleet's own Talos release ships. Their upstream tags are re-pushed per
+      # Talos release, so a digest bump that follows a tag silently builds one
+      # Talos version's extension into another's installer — proven by three
+      # such bumps landing here before this check existed. Comparing against
+      # the factory is the only way to tell the two apart.
+      - name: Verify base digests match TALOS_VERSION
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, sys, urllib.request
+
+          talos = os.environ["TALOS_VERSION"]
+          url = f"https://factory.talos.dev/version/{talos}/extensions/official"
+          with urllib.request.urlopen(url, timeout=30) as response:
+              official = {e["name"]: e["digest"] for e in json.load(response)}
+
+          dockerfile = open("extensions/iscsi-tools/Dockerfile").read()
+          pinned = {
+              "siderolabs/iscsi-tools": re.search(r"^FROM \S+@(sha256:[0-9a-f]+)", dockerfile, re.M).group(1),
+              "siderolabs/qemu-guest-agent": os.environ["QEMU_GUEST_AGENT_IMAGE"].split("@")[1],
+          }
+
+          drift = [(n, p, official.get(n)) for n, p in pinned.items() if p != official.get(n)]
+          for name, have, want in drift:
+              where = "extensions/iscsi-tools/Dockerfile" if "iscsi" in name else "QEMU_GUEST_AGENT_IMAGE in this workflow"
+              print(f"::error::{name} is pinned to {have}, but Talos {talos} ships {want}. Update {where}.")
+          sys.exit(1 if drift else 0)
+          EOF
+
       - name: Build extension image
         run: docker build -t "$EXTENSION_IMAGE:$EXTENSION_TAG" extensions/iscsi-tools
 
