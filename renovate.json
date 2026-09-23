@@ -29,6 +29,14 @@
       "allowedVersions": "/^v\\d+\\.\\d+\\.\\d+$/"
     },
     {
+      "description": [
+        "The iscsi-tools base digest belongs to the extension workflow's TALOS_VERSION, not to the upstream tag: siderolabs re-pushes v0.2.0 for every Talos release, so a digest that follows the tag bakes one Talos version's build into another's installer.",
+        "Renovate moved it three times before a check existed. The Talos upgrade runbook re-derives it from the Image Factory, and the extension build fails while the two disagree."
+      ],
+      "matchDepNames": ["ghcr.io/siderolabs/iscsi-tools"],
+      "enabled": false
+    },
+    {
       "description": "A new Kubernetes minor can exceed the range the pinned Talos version supports, while a patch inside the running minor is always safe. Splitting them keeps the bump that needs a compatibility check from riding along with one that does not.",
       "matchDepNames": ["kubernetes/kubernetes"],
       "matchUpdateTypes": ["minor", "major"],

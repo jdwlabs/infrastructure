@@ -426,7 +426,10 @@ at a time.
    follow-up change. A future Talos version bump rebuilds the fork first: bump
    `TALOS_VERSION`, the base digests, and both tags in
    `.github/workflows/extension-image.yml`, merge, then upgrade nodes to the
-   new installer tag.
+   new installer tag. Both base digests come from
+   `https://factory.talos.dev/version/<TALOS_VERSION>/extensions/official`;
+   the build compares them against that list and fails with the expected
+   values rather than producing an extension built on another release's bits.
 
 ### iSCSI rollback
 
