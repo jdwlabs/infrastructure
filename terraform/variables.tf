@@ -370,6 +370,12 @@ variable "dev_vm_snippet_datastore" {
   default     = "local"
 }
 
+variable "dev_vm_cloudinit_datastore" {
+  description = "Datastore for the generated cloud-init drive. Local on purpose, unlike dev_vm_storage_pool: Proxmox deletes and recreates this drive on every VM start, and on the NFS datastore that recreate races the mount coming up at boot, failing the guest's autostart with `disk image ... already exists` (observed on both pve5 boots on 2026-09-23). The root disk on NFS is unaffected because it is only ever opened, never created. Local LVM is available before any network storage, so there is nothing to race. Cost: an online migration now has one 4 MB local volume and needs --with-local-disks."
+  type        = string
+  default     = "local-lvm"
+}
+
 variable "devbox2_node" {
   description = "Proxmox node hosting the lifeboat VM. Must not be devbox's host (pve5) — a lifeboat that dies with the machine it exists to survive is not a lifeboat. pve1 is the only non-control-plane host with unallocated memory: 23G of its 28.2G is committed to talos-worker-01 and haproxy-1."
   type        = string
@@ -440,4 +446,10 @@ variable "devbox2_snippet_datastore" {
   description = "Datastore holding the cloud-init user-data snippet. Needs the 'snippets' content type, which an LVM-thin pool cannot provide. Host-local, same as haproxy-1's on this node — see docs/devbox2-provisioning.md on why that is a drift risk rather than a migration blocker."
   type        = string
   default     = "local"
+}
+
+variable "devbox2_cloudinit_datastore" {
+  description = "Datastore for the generated cloud-init drive, local for the same reason as dev_vm_cloudinit_datastore — the drive is recreated on every start and that recreate races an NFS mount at boot. Untested here rather than observed: pve1 has not booted since 2026-06-08, which predates this VM, so the failure has never had the chance to fire. Fixed pre-emptively because a lifeboat VM that does not come back when its own host reboots is not doing its job."
+  type        = string
+  default     = "local-lvm"
 }

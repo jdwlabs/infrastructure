@@ -1,9 +1,17 @@
 # Daily-driver dev VM on pve5 — SSH + VS Code Remote-SSH target for git/build/
 # Claude Code sessions, off the Windows workstation. See
-# docs/dev-vm-provisioning.md for the full design and phase plan. Disk lives
-# on the NFS-backed datastore (var.dev_vm_storage_pool), not local/local-lvm,
-# so the VM can `qm migrate --online` between Proxmox hosts with only RAM
-# state to transfer.
+# docs/dev-vm-provisioning.md for the full design and phase plan. The root disk
+# lives on the NFS-backed datastore (var.dev_vm_storage_pool), not
+# local/local-lvm, so the VM can `qm migrate --online` between Proxmox hosts
+# without copying 300 GB.
+#
+# The cloud-init drive is the one exception: it sits on local storage
+# (var.dev_vm_cloudinit_datastore) because Proxmox recreates it on every start
+# and that recreate cannot survive an NFS mount coming up underneath it at boot.
+# So a migration is no longer RAM-only as this comment once claimed — it carries
+# one 4 MB local volume and needs `--with-local-disks`. That is the accepted
+# price of the guest actually autostarting after its host reboots, which
+# `on_boot = true` below is there to promise.
 
 # content_type "import": API-based import_from instead of the provider's
 # node-SSH importdisk path, which cannot reach an ssh-agent from this
@@ -86,7 +94,11 @@ resource "proxmox_virtual_environment_vm" "dev_vm" {
   }
 
   initialization {
-    datastore_id = var.dev_vm_storage_pool
+    # Local, not the NFS pool the root disk uses: this drive is deleted and
+    # recreated on every start, and against NFS that recreate collides with the
+    # mount arriving mid-operation, failing the guest's autostart. See the
+    # variable's description for the evidence and the migration cost.
+    datastore_id = var.dev_vm_cloudinit_datastore
 
     # Static, never a DHCP lease — same rule as every other VM here, and this
     # one specifically needs a stable address for Remote-SSH host entries.

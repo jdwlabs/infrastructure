@@ -78,7 +78,12 @@ resource "proxmox_virtual_environment_vm" "devbox2" {
   }
 
   initialization {
-    datastore_id = var.devbox2_storage_pool
+    # Local, not the NFS pool the root disk uses — same reasoning as the dev VM:
+    # this drive is recreated on every start and that recreate races an NFS
+    # mount at boot. Not yet observed on pve1, which has not booted since before
+    # this VM existed; fixed pre-emptively because a lifeboat that does not
+    # return when its own host reboots is not a lifeboat.
+    datastore_id = var.devbox2_cloudinit_datastore
 
     ip_config {
       ipv4 {
