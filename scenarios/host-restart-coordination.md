@@ -339,30 +339,60 @@ itself is going down as part of this procedure.
    'Allocated resources'`) before draining — a drain that doesn't fit
    leaves pods `Pending`, not silently spread across the other three, which
    have nothing to give.
+
+   Confirmed still marginal on 2026-09-23. `talos-4h8-zy6` had ~11.6 GiB
+   free and the three small workers ~25-35 MiB each, matching the picture
+   above. The drain did land, but two pods
+   (`platform-postgresql-cluster-prd-6`, `platform-vault-1`) stayed
+   `Pending` until the host returned — so "roughly 1 GiB of slack" means
+   this drain does not fully fit, and has not for some time. Expect a
+   couple of stragglers rather than a clean board.
 4. Drain the worker. This host runs most of the monitoring stack — Grafana,
    Prometheus, Loki, Alertmanager, Tempo — so expect those to be unreachable
    from drain until the post-flight uncordon; `kube-state-metrics`, the
    `kube-prometheus-stack` operator, `github-repo-health-exporter`, and the
    `am-check` pods live on pve1's worker instead and are unaffected. There's
    no ordering trick that avoids the dashboards/alerting gap, it's what "the
-   heavy one" means for this host:
+   heavy one" means for this host.
+
+   The drain will **not** run to completion, and waiting longer will not
+   help. `platform-litellm-db-cluster` and `platform-postgresql-cluster-non`
+   are single-instance, so their CNPG `-primary` PodDisruptionBudget allows
+   zero disruptions permanently; every Longhorn `instance-manager` carries
+   one at zero too while its volumes are attached. Eviction of those never
+   succeeds — give the drain a bounded timeout, then shut the databases down
+   yourself with a direct delete, which is not checked against a PDB and
+   still gives Postgres a clean checkpoint:
    ```
-   kubectl drain talos-lx0-6a4 --ignore-daemonsets --delete-emptydir-data
-   kubectl get pods -A --field-selector status.phase=Pending
-                                            # empty output — confirm before continuing
+   kubectl drain talos-lx0-6a4 --ignore-daemonsets --delete-emptydir-data \
+     --force --timeout=360s        # expect it to fail on the PDB-bound pods
+   kubectl delete pod -n ai-sre platform-litellm-db-cluster-1 --grace-period=60
+   kubectl delete pod -n database platform-postgresql-cluster-non-3 --grace-period=60
+   kubectl get pods -A --field-selector spec.nodeName=talos-lx0-6a4 | grep -v Completed
+                                            # DaemonSets + instance-managers only
    ```
+   The full reasoning, and why eviction cannot be made to work here, is in
+   the platform repo's `docs/OPERATIONS.md` under "Draining a node that
+   hosts a single-instance CNPG cluster".
 5. Shut down guests, GPU-passthrough first since it can't migrate and has
    nothing left to lose by going first, then devbox, then the drained
-   worker:
+   worker. Note the worker takes `qm stop`, not `qm shutdown`: Talos does
+   not act on an ACPI powerdown request and the graceful call just returns
+   `VM quit/powerdown failed`. `talosctl shutdown` would be the clean route,
+   but the talosconfig on devbox is empty, so there is no authenticated
+   client to issue it. By this point the node is drained and its databases
+   are already stopped, so the hard stop costs nothing:
    ```
    ssh root@pve5 'qm shutdown 500'
    ssh root@pve5 'qm shutdown 111'
-   ssh root@pve5 'qm shutdown 304'
+   ssh root@pve5 'qm stop 304'
    ```
-6. Reboot pve5.
+6. Reboot pve5 — **unless** you are here to recover a wedged GPU, in which
+   case a warm reboot will not clear it and you need a cold power cycle
+   instead. See `gpu-passthrough-wedge-recovery.md`.
 7. Post-flight, from devbox2 until devbox answers again:
    ```
-   ssh root@pve5 'qm list'                 # 111, 304, 500 running again
+   ssh root@pve5 'qm list'                 # 304 and 500 running; 111 will NOT be
    kubectl uncordon talos-lx0-6a4
    kubectl get nodes                       # 8 Ready
    kubectl -n longhorn-system get volumes.longhorn.io   # healthy
@@ -371,6 +401,20 @@ itself is going down as part of this procedure.
    kubectl get applications.argoproj.io -A --no-headers | awk '$3!="Synced" || $4!="Healthy"'
    ssh dev-admin@192.168.1.56 'uptime'     # devbox reachable again
    ```
+   **devbox (111) does not autostart, on any pve5 boot.** `pve-guests` fails it
+   with `disk image '/mnt/pve/truenas-vmdisks/images/111/vm-111-cloudinit.qcow2'
+   already exists` — its cloud-init drive lives on the NFS datastore, and that
+   drive is deleted and recreated on every start, so the recreate collides with
+   the mount arriving mid-operation. Observed on both boots that reached
+   `pve-guests` (2026-09-23, 00:39:56 and 01:05:35). Start it by hand once the
+   host is up, which succeeds because the mount has settled by then:
+   ```
+   ssh root@pve5 'qm start 111'
+   ```
+   This stops being necessary once that cloud-init drive moves off the NFS
+   datastore. Until then, expect it every time and do not read it as a failed
+   power cycle.
+
    Uncordon re-enables scheduling on `talos-lx0-6a4`; it does not move the
    pods the drain relocated to `talos-4h8-zy6` back. That worker stays more
    loaded than before until something else redistributes it — which makes a
@@ -380,6 +424,9 @@ itself is going down as part of this procedure.
 
 vllm-inference does not come back on its own guarantee — its GPU passthrough
 means the guest firmware has to re-claim the RTX 5090 on boot. If `qm list`
-shows it running but inference requests fail, that's a separate problem from
-this runbook (start with `ssh root@pve5 'qm config 500 | grep hostpci'` and
-the guest's own boot log, not with anything here).
+shows it running but inference requests fail, the first thing to establish is
+whether the card is answering at all: read `PMC_BOOT_0` per
+`gpu-passthrough-wedge-recovery.md`. Zeros there with healthy PCI config space
+means the GPU is wedged and no amount of resetting from this host will fix it —
+that runbook covers it, and its recovery is a cold power cycle rather than the
+reboot in step 6. Do not reach for `rombar=1`; it hangs the guest in OVMF.
