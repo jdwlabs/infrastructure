@@ -1,6 +1,6 @@
 terraform {
   # use_lockfile (native S3 state locking) requires Terraform >= 1.10
-  required_version = ">= 1.16.3"
+  required_version = ">= 1.16.4"
   required_providers {
     proxmox = {
       source = "bpg/proxmox"
