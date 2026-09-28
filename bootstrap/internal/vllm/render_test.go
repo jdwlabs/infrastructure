@@ -45,7 +45,7 @@ func TestExecArgsOrder(t *testing.T) {
 
 func TestQuadletMatchesGolden(t *testing.T) {
 	got := Quadlet(sampleSpec())
-	golden, err := os.ReadFile("testdata/vllm.container.golden")
+	golden, err := os.ReadFile("testdata/vllm-server.container.golden")
 	require.NoError(t, err)
 	assert.Equal(t, string(golden), got)
 }

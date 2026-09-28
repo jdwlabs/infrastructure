@@ -335,27 +335,78 @@ func ReadApplied(ctx context.Context, r hostconverge.Runner) (*Applied, error) {
 	return &a, nil
 }
 
-// LegacyActive reports whether the pre-Quadlet vllm.service systemd unit is
-// still the one serving, or still winding down from serving: active,
-// activating, reloading, and deactivating all mean it hasn't finished
-// stepping aside yet and still needs disabling. systemctl is-active exits
-// non-zero for every status but "active", so the reported status string is
-// read first, regardless of the runner's error. A status this function
-// doesn't recognise is never silently read as "not active" — that's an
-// error whether or not the runner itself reported one, since guessing
-// wrong here means never migrating away from a unit that's actually still
-// serving.
-func LegacyActive(ctx context.Context, r hostconverge.Runner) (bool, error) {
+// LegacyPresent reports whether the pre-Quadlet vllm.service unit still has
+// a claim on the host: running or winding up or down (active, activating,
+// reloading, deactivating), or enabled to start at the next boot. An
+// enabled-but-stopped legacy unit counts, because left alone it starts at
+// boot beside the Quadlet server and fights it for the port and the GPU.
+//
+// systemctl is-active and is-enabled exit non-zero for most states, so the
+// printed state is read first, regardless of the runner's error. A state
+// this function does not recognise is an error, never "absent": guessing
+// wrong means never migrating away from a unit that still serves.
+func LegacyPresent(ctx context.Context, r hostconverge.Runner) (bool, error) {
+	active, err := legacyActive(ctx, r)
+	if err != nil || active {
+		return active, err
+	}
+	return legacyEnabled(ctx, r)
+}
+
+// LegacyState is the legacy unit's running and boot-time state, read apart
+// because a rollback has to put back exactly the pair it found: a unit that
+// was enabled but stopped served nothing, and starting it on rollback would
+// report a server as restored that never ran before the apply.
+type LegacyState struct {
+	Active  bool
+	Enabled bool
+}
+
+// Present is LegacyPresent's answer for this state.
+func (l LegacyState) Present() bool { return l.Active || l.Enabled }
+
+// ReadLegacy reads both halves of the legacy unit's state, under the same
+// recognition rules as LegacyPresent.
+func ReadLegacy(ctx context.Context, r hostconverge.Runner) (LegacyState, error) {
+	active, err := legacyActive(ctx, r)
+	if err != nil {
+		return LegacyState{}, err
+	}
+	enabled, err := legacyEnabled(ctx, r)
+	if err != nil {
+		return LegacyState{}, err
+	}
+	return LegacyState{Active: active, Enabled: enabled}, nil
+}
+
+func legacyActive(ctx context.Context, r hostconverge.Runner) (bool, error) {
 	out, err := r.Run(ctx, "systemctl is-active vllm.service 2>/dev/null")
-	status := strings.TrimSpace(out)
-	switch status {
+	switch status := strings.TrimSpace(out); status {
 	case "active", "activating", "reloading", "deactivating":
 		return true, nil
 	case "inactive", "failed", "unknown", "maintenance":
 		return false, nil
+	default:
+		return false, legacyStateError("is-active", status, err)
 	}
-	if err != nil {
-		return false, fmt.Errorf("check legacy vllm.service: %w", err)
+}
+
+func legacyEnabled(ctx context.Context, r hostconverge.Runner) (bool, error) {
+	out, err := r.Run(ctx, "systemctl is-enabled vllm.service 2>/dev/null")
+	switch state := strings.TrimSpace(out); state {
+	case "enabled", "enabled-runtime":
+		return true, nil
+	case "disabled", "static", "masked", "masked-runtime", "indirect", "generated",
+		"transient", "linked", "linked-runtime", "alias", "not-found":
+		return false, nil
+	default:
+		return false, legacyStateError("is-enabled", state, err)
 	}
-	return false, fmt.Errorf("check legacy vllm.service: unrecognised status %q", status)
+}
+
+func legacyStateError(query, state string, err error) error {
+	if state == "" && err != nil {
+		return fmt.Errorf("check legacy vllm.service (%s): %w", query, err)
+	}
+	return fmt.Errorf("check legacy vllm.service (%s): unrecognised state %q", query, state)
 }

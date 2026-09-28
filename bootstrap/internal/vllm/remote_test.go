@@ -41,9 +41,8 @@ func (f *fakeRunner) Run(ctx context.Context, cmd string) (string, error) {
 
 // scriptedOutErrRunner answers every command with a fixed output AND a
 // fixed error, which fakeRunner's fail map can't do (a matched fail key
-// always answers with ""): LegacyActive needs this to prove a recognised
-// status string wins even when the runner also reports the command failed,
-// the way systemctl is-active does for every state but "active".
+// always answers with ""): LegacyPresent needs this to prove a recognised
+// state wins even when the runner reports no error alongside it.
 type scriptedOutErrRunner struct {
 	out string
 	err error
@@ -90,7 +89,8 @@ const (
 	wantProbeAppliedCmd = "sudo sh -c 'test -e /etc/vllm/applied.json || echo absent'"
 	wantCatAppliedCmd   = "sudo cat /etc/vllm/applied.json 2>/dev/null"
 
-	wantIsActiveCmd = "systemctl is-active vllm.service 2>/dev/null"
+	wantIsActiveCmd  = "systemctl is-active vllm.service 2>/dev/null"
+	wantIsEnabledCmd = "systemctl is-enabled vllm.service 2>/dev/null"
 )
 
 func wantCDIRecordWriteCmd(version string) string {
@@ -690,54 +690,136 @@ func TestReadAppliedMalformedJSONReturnsError(t *testing.T) {
 	assert.Equal(t, []string{wantProbeAppliedCmd, wantCatAppliedCmd}, r.cmds)
 }
 
-// ---- LegacyActive ----
+// ---- LegacyPresent ----
 
-func TestLegacyActiveRecognizedStates(t *testing.T) {
-	cases := map[string]bool{
-		"active":       true,
-		"activating":   true,
-		"reloading":    true,
-		"deactivating": true,
-		"inactive":     false,
-		"failed":       false,
-		"unknown":      false,
-		"maintenance":  false,
+// pairRunner answers each command with the output AND error scripted for
+// the first key it contains: systemctl is-active and is-enabled both exit
+// non-zero for most states while still printing them, so the two must be
+// scripted together, per command.
+type pairRunner struct {
+	cmds    []string
+	answers map[string]struct {
+		out string
+		err error
 	}
-	for status, want := range cases {
+}
+
+func (p *pairRunner) Run(_ context.Context, cmd string) (string, error) {
+	p.cmds = append(p.cmds, cmd)
+	for k, a := range p.answers {
+		if strings.Contains(cmd, k) {
+			return a.out, a.err
+		}
+	}
+	return "", errFail
+}
+
+func legacyRunner(active, enabled string) *pairRunner {
+	return &pairRunner{answers: map[string]struct {
+		out string
+		err error
+	}{
+		// Non-zero exits alongside the printed state, as systemctl does for
+		// everything but active/enabled: the printed state must still win.
+		"is-active vllm.service":  {out: active + "\n", err: errFail},
+		"is-enabled vllm.service": {out: enabled + "\n", err: errFail},
+	}}
+}
+
+func TestLegacyPresentWhenActiveInAnyForm(t *testing.T) {
+	for _, status := range []string{"active", "activating", "reloading", "deactivating"} {
 		t.Run(status, func(t *testing.T) {
-			r := &fakeRunner{out: map[string]string{"is-active vllm.service": status + "\n"}}
-			active, err := LegacyActive(context.Background(), r)
+			r := legacyRunner(status, "disabled")
+			present, err := LegacyPresent(context.Background(), r)
 			require.NoError(t, err)
-			assert.Equal(t, want, active)
-			assert.Equal(t, []string{wantIsActiveCmd}, r.cmds)
+			assert.True(t, present)
+			assert.Equal(t, []string{wantIsActiveCmd}, r.cmds, "an active unit needs no enablement check")
 		})
 	}
 }
 
-func TestLegacyActiveRecognizedOutputWinsOverRunnerError(t *testing.T) {
-	r := scriptedOutErrRunner{out: "deactivating\n", err: errFail}
-	active, err := LegacyActive(context.Background(), r)
-	require.NoError(t, err)
-	assert.True(t, active)
+// An enabled unit that is not running right now still starts at the next
+// boot, beside the Quadlet server, so it is as present as a running one.
+func TestLegacyPresentWhenEnabledButNotActive(t *testing.T) {
+	for _, active := range []string{"inactive", "failed", "unknown", "maintenance"} {
+		for _, enabled := range []string{"enabled", "enabled-runtime"} {
+			t.Run(active+"/"+enabled, func(t *testing.T) {
+				r := legacyRunner(active, enabled)
+				present, err := LegacyPresent(context.Background(), r)
+				require.NoError(t, err)
+				assert.True(t, present)
+				assert.Equal(t, []string{wantIsActiveCmd, wantIsEnabledCmd}, r.cmds)
+			})
+		}
+	}
 }
 
-func TestLegacyActiveUnrecognizedOutputWithRunnerErrorIsAnError(t *testing.T) {
-	r := &fakeRunner{fail: map[string]error{"is-active vllm.service": errFail}}
-	active, err := LegacyActive(context.Background(), r)
-	require.Error(t, err)
-	assert.False(t, active)
-	assert.Contains(t, err.Error(), "check legacy vllm.service")
+func TestLegacyAbsentWhenNeitherActiveNorEnabled(t *testing.T) {
+	notEnabled := []string{"disabled", "static", "masked", "masked-runtime", "indirect", "generated", "transient", "linked", "linked-runtime", "alias", "not-found"}
+	for _, enabled := range notEnabled {
+		t.Run(enabled, func(t *testing.T) {
+			r := legacyRunner("inactive", enabled)
+			present, err := LegacyPresent(context.Background(), r)
+			require.NoError(t, err)
+			assert.False(t, present)
+		})
+	}
 }
 
-// TestLegacyActiveUnrecognizedOutputWithNilErrorIsAnError covers N2: an
-// output that's neither a known-active nor a known-inactive status must
-// never be silently read as "not active", even when the runner itself
-// reported no error.
-func TestLegacyActiveUnrecognizedOutputWithNilErrorIsAnError(t *testing.T) {
+// A state this function does not recognise is never read as "absent":
+// guessing wrong leaves a legacy server that starts at boot beside the new one.
+func TestLegacyPresentUnrecognisedStateIsAnError(t *testing.T) {
+	cases := map[string]struct{ active, enabled, want string }{
+		"is-active unrecognised":  {active: "some-future-state", enabled: "disabled", want: `"some-future-state"`},
+		"is-active empty":         {active: "", enabled: "disabled", want: "check legacy vllm.service"},
+		"is-enabled unrecognised": {active: "inactive", enabled: "bad", want: `"bad"`},
+		"is-enabled empty":        {active: "inactive", enabled: "", want: "check legacy vllm.service"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			present, err := LegacyPresent(context.Background(), legacyRunner(tc.active, tc.enabled))
+			require.Error(t, err)
+			assert.False(t, present)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestLegacyPresentUnrecognisedWithNilErrorIsAnError(t *testing.T) {
 	r := scriptedOutErrRunner{out: "some-future-systemd-state\n", err: nil}
-	active, err := LegacyActive(context.Background(), r)
+	_, err := LegacyPresent(context.Background(), r)
 	require.Error(t, err)
-	assert.False(t, active)
-	assert.Contains(t, err.Error(), "check legacy vllm.service")
 	assert.Contains(t, err.Error(), "some-future-systemd-state")
+}
+
+// ReadLegacy reads both halves even when the unit is active: a rollback
+// restores enablement and running state separately.
+func TestReadLegacyReadsBothHalves(t *testing.T) {
+	cases := map[string]struct {
+		active, enabled string
+		want            LegacyState
+	}{
+		"active and enabled":  {"active", "enabled", LegacyState{Active: true, Enabled: true}},
+		"active, not enabled": {"active", "disabled", LegacyState{Active: true}},
+		"enabled, stopped":    {"inactive", "enabled", LegacyState{Enabled: true}},
+		"absent":              {"inactive", "not-found", LegacyState{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := legacyRunner(tc.active, tc.enabled)
+			got, err := ReadLegacy(context.Background(), r)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want.Active || tc.want.Enabled, got.Present())
+			assert.Equal(t, []string{wantIsActiveCmd, wantIsEnabledCmd}, r.cmds)
+		})
+	}
+}
+
+func TestReadLegacyUnrecognisedStateIsAnError(t *testing.T) {
+	for _, tc := range [][2]string{{"weird", "enabled"}, {"active", "bad"}} {
+		_, err := ReadLegacy(context.Background(), legacyRunner(tc[0], tc[1]))
+		require.Error(t, err, "%v", tc)
+		assert.Contains(t, err.Error(), "check legacy vllm.service")
+	}
 }
