@@ -117,4 +117,7 @@ fi
         "$commit" "$image_digest" "$model_revision" "$served_name"
     printf 'vllm_serving_drift_check_timestamp_seconds %s\n' "$(date +%s)"
 } > "$tmp"
+# mktemp creates 0600, but node-exporter reads this as an unprivileged user and
+# would silently export none of it.
+chmod 0644 "$tmp"
 mv "$tmp" "$dir/vllm_serving.prom"

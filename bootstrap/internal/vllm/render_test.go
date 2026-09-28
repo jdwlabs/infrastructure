@@ -284,7 +284,14 @@ func TestDriftCheckScriptReasons(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		require.NoErrorf(t, err, "script output: %s", out)
 
-		data, err := os.ReadFile(filepath.Join(textfileDir, "vllm_serving.prom"))
+		promPath := filepath.Join(textfileDir, "vllm_serving.prom")
+		info, err := os.Stat(promPath)
+		require.NoError(t, err)
+		// node-exporter runs unprivileged and reads this file; mktemp's 0600
+		// would make every metric in it silently absent.
+		assert.Equalf(t, os.FileMode(0o644), info.Mode().Perm(), "mode of %s", promPath)
+
+		data, err := os.ReadFile(promPath)
 		require.NoError(t, err)
 		return string(data)
 	}
