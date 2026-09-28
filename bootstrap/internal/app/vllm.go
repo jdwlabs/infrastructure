@@ -428,10 +428,13 @@ func (app *App) RunVLLMApply(ctx context.Context, opts VLLMOptions) error {
 		return app.emitVLLMApply(opts, res)
 	}
 
+	notes := unmergedCommitNotes(vctx.repoRoot)
+
 	client, failure := app.vllmClient(vctx.cfg, vctx.host)
 	if failure != nil {
 		res.Failure = failure
 		res.Help = helpForVLLMFailure(failure)
+		res.Notes = notes
 		return app.emitVLLMApply(opts, res)
 	}
 
@@ -445,7 +448,24 @@ func (app *App) RunVLLMApply(ctx context.Context, opts VLLMOptions) error {
 		By:     operatorIdentity(),
 	}
 
-	return app.emitVLLMApply(opts, vllm.Apply(ctx, target, vctx.spec))
+	res = vllm.Apply(ctx, target, vctx.spec)
+	res.Notes = append(notes, res.Notes...)
+	return app.emitVLLMApply(opts, res)
+}
+
+// unmergedCommitNotes says when the commit being recorded is not on
+// origin/main. Applying a branch is legitimate (testing a change before it
+// merges), so this never refuses; but the record then names a commit that
+// main may never contain, and a later apply from main undoes the change.
+// origin/main is read as the checkout last fetched it, with no fetch here.
+func unmergedCommitNotes(repoRoot string) []string {
+	if _, err := runGit(repoRoot, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"); err != nil {
+		return []string{"cannot tell whether HEAD is merged: this checkout has no origin/main; the applied record names a commit main may not contain"}
+	}
+	if _, err := runGit(repoRoot, "merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/main"); err != nil {
+		return []string{"HEAD is not on origin/main (as last fetched): the applied record names an unmerged commit, and a later apply from main undoes whatever it changed"}
+	}
+	return nil
 }
 
 func (app *App) emitVLLMApply(opts VLLMOptions, res vllm.ApplyResult) error {

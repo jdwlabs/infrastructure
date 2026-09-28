@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -434,4 +435,46 @@ func TestVLLMApplyThroughASymlinkedRepoRootStillPassesGitChecks(t *testing.T) {
 
 	assert.Equal(t, "ssh_auth_unconfigured", applyFailureCode(t, err),
 		"a clean spec reached through a symlinked repo root must still pass every git check")
+}
+
+// applyNotes runs apply against the fixture as far as the host step and
+// returns the notes its report carried.
+func applyNotes(t *testing.T, root string) []string {
+	t.Helper()
+	chdir(t, root)
+	a := vllmApplyTestApp(t, root, "10.0.0.9")
+	buf := &bytes.Buffer{}
+
+	err := a.RunVLLMApply(context.Background(), VLLMOptions{Confirm: true, JSON: true, Out: buf})
+	require.Equal(t, "ssh_auth_unconfigured", applyFailureCode(t, err))
+
+	var got struct {
+		Notes []string `json:"notes"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &got), buf.String())
+	return got.Notes
+}
+
+func TestVLLMApplyNotesACommitNotOnOriginMain(t *testing.T) {
+	t.Run("HEAD is on origin/main", func(t *testing.T) {
+		root := gitRepoFixture(t)
+		runGitFixture(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+		assert.Empty(t, applyNotes(t, root))
+	})
+
+	t.Run("HEAD is ahead of origin/main", func(t *testing.T) {
+		root := gitRepoFixture(t)
+		runGitFixture(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+		runGitFixture(t, root, "commit", "-q", "--allow-empty", "-m", "unmerged")
+		notes := applyNotes(t, root)
+		require.Len(t, notes, 1)
+		assert.Contains(t, notes[0], "not on origin/main")
+	})
+
+	t.Run("no origin/main to compare against", func(t *testing.T) {
+		root := gitRepoFixture(t)
+		notes := applyNotes(t, root)
+		require.Len(t, notes, 1)
+		assert.Contains(t, notes[0], "origin/main")
+	})
 }
