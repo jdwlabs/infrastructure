@@ -76,7 +76,12 @@ relative `--tfvars` means "relative to where you ran `talops` from," not
 this repo, tracked by git, and committed with no uncommitted changes
 (`spec_outside_repo`, `spec_untracked`, `dirty_spec`) — an apply is recorded
 on the host against the git commit it came from, so an uncommitted or
-out-of-repo spec has no commit to record.
+out-of-repo spec has no commit to record. Applying a commit that is not on
+`origin/main` (as the checkout last fetched it — `apply` does not fetch), or
+from a checkout with no `origin/main` at all, is allowed, since trying a
+change before it merges is legitimate, but the report carries a note saying
+so: the record then names a commit `main` may never contain, and a later
+apply from `main` undoes the change.
 
 ## Changing the model or version
 
