@@ -253,6 +253,14 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 		err := t.Gate.Check(ctx, s)
 		phase("gate", start)
 		if err != nil {
+			// An interrupted check is not evidence the server is down —
+			// nothing was restarted here either way, so treat a cancel the
+			// same as every other pre-swap interrupt rather than sending
+			// the operator to the down-server runbook for a server that
+			// was never examined.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return failApply(res, CodeStage, cancelledMsg(ctxErr))
+			}
 			res.Serving = ServingNone
 			res.Failure = &Failure{Code: CodeGate, Msg: err.Error()}
 			res.Help = []string{
