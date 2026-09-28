@@ -207,8 +207,9 @@ func sshAuthUnconfigured() *vllm.Failure {
 }
 
 // vllmGate builds the health gate for the port serving.yaml declares.
-// Production sets both Target.Gate and Target.Models to it, per Task 8's
-// carried ruling C5: Status needs Models to read the live served name.
+// Production sets both Target.Gate and Target.Models to it: Status needs
+// Models to read the live served name, and without it that column would
+// only ever say unknown.
 func vllmGate(host string, spec vllm.Spec) vllm.HealthGate {
 	return vllm.HealthGate{BaseURL: fmt.Sprintf("http://%s:%d", host, spec.Port)}
 }
@@ -273,9 +274,10 @@ func (app *App) RunVLLMStatus(ctx context.Context, opts VLLMOptions) error {
 	return app.emitVLLMStatus(opts, vllm.Status(ctx, target, vctx.spec))
 }
 
-// errVLLMDrift is status's own exit-code contract (ruling C3): the report
-// already carries the reason (drift: true and the fields that disagree), so
-// this error is never printed on its own — it only has to be non-nil.
+// errVLLMDrift is status's own exit-code contract, so a script can gate on
+// drift without parsing the report. The report already carries the reason
+// (drift: true and the fields that disagree), so this error is never
+// printed on its own — it only has to be non-nil.
 var errVLLMDrift = errors.New("vllm status: drift against serving.yaml")
 
 // emitVLLMStatus prints the report and maps the outcome to the caller's exit

@@ -402,7 +402,7 @@ against it.
      reformat files first.) `talops infra plan` is not a substitute for
      this review.
 
-   > **Ruling (Task 14 plan gate)**: gpu_inference must show ONLY `~
+   > **Plan gate**: gpu_inference must show ONLY `~
    > reboot_after_update = true -> false`, plus `+
    > proxmox_virtual_environment_file.gpu_cloud_init`; overall `Plan: 1 to
    > add, 1 to change, 0 to destroy`; refuse on any initialization hunk,
