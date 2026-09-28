@@ -78,6 +78,26 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
+// TestParseRejectsModelFlagWithPositionalMessage locks in --model's own
+// error message: model.repo is passed positionally by ExecArgs, not via a
+// --model flag, so reusing the generic "already sets it" wording (accurate
+// for --port/--served-model-name/--host, which are real flags) would be
+// misleading for this one.
+func TestParseRejectsModelFlagWithPositionalMessage(t *testing.T) {
+	m := map[string]string{
+		"image": "docker.io/vllm/vllm-openai:v0.24.0@sha256:" + strings.Repeat("a", 64),
+		"rev":   strings.Repeat("b", 40),
+		"name":  "qwen/qwen3-coder-30b-a3b",
+		"args":  "[--model=x]",
+	}
+	data := []byte(fmt.Sprintf("image: %s\nmodel: {repo: Org/M, revision: %s}\nservedName: %s\nargs: %s\n",
+		m["image"], m["rev"], m["name"], m["args"]))
+
+	_, err := Parse(data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model.repo is already passed positionally")
+}
+
 func TestParseRejectsMalformedYAML(t *testing.T) {
 	cases := map[string]string{
 		"healthgate lowercase": `image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `

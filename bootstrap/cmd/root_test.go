@@ -432,7 +432,7 @@ func TestGlobalFlags(t *testing.T) {
 		// Create root command similar to Execute()
 		rootCmd := &cobra.Command{
 			Use:          "talops",
-			Short:        "Smart reconciliation for Talos clusters",
+			Short:        "Provision and operate the jdwlabs infrastructure",
 			SilenceUsage: true,
 		}
 
@@ -510,7 +510,7 @@ func TestCommandExecutionFlow(t *testing.T) {
 	t.Run("help command works", func(t *testing.T) {
 		rootCmd := &cobra.Command{
 			Use:   "talops",
-			Short: "Smart reconciliation for Talos clusters",
+			Short: "Provision and operate the jdwlabs infrastructure",
 		}
 
 		buf := new(bytes.Buffer)
@@ -521,7 +521,7 @@ func TestCommandExecutionFlow(t *testing.T) {
 		require.NoError(t, err)
 
 		output := buf.String()
-		assert.Contains(t, output, "Smart reconciliation for Talos clusters")
+		assert.Contains(t, output, "Provision and operate the jdwlabs infrastructure")
 	})
 
 	t.Run("version flag works", func(t *testing.T) {

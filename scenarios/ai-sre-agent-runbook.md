@@ -22,7 +22,9 @@ bridge but never getting a reply, check this first before anything more exotic.
 ## 2. Host prerequisite — GPU bound to vfio-pci
 
 Before the VM can start, the RTX 5090 must be off `nouveau` and bound to
-`vfio-pci` on `pve5`:
+`vfio-pci` on `pve5`. Run this block on `pve5` itself (SSH in, or the
+Proxmox node's own console) — it is hypervisor config, not something the
+`vllm-inference` VM or a workstation checkout of this repo ever touches:
 
 ```bash
 cat > /etc/modprobe.d/vfio.conf <<'EOF'
@@ -60,7 +62,12 @@ way.
 Verify after reboot: `lspci -k -s 01:00.0 | grep "in use"` → `vfio-pci`.
 
 The cluster PCI mapping also needs a `subsystem-id` or first VM start fails
-with `PCI device mapping invalid ... missing expected property 'subsystem-id'`:
+with `PCI device mapping invalid ... missing expected property 'subsystem-id'`.
+Run this on `pve5` too, after that reboot (the block above ends with
+`systemctl reboot`, which ends whatever session ran it): `lspci` reads the
+local PCI bus, so the `SUB=` line only produces a real value when it runs
+on the host the card is physically in, and `pvesh` here is being used as
+`pve5`'s own node CLI, not called remotely against the cluster API:
 
 ```bash
 SUB=$(lspci -s 01:00.0 -vn | sed -n 's/.*Subsystem: \([0-9a-f:]*\).*/\1/p')
@@ -70,111 +77,51 @@ pvesh set /cluster/mapping/pci/gpu-rtx5090 \
 
 ## 3. VM setup (fresh boot, e.g. after a terraform recreate)
 
-Driver + CUDA toolkit + vLLM. Ubuntu 24.04, cloud-init user from
-`gpu_vm_ssh_public_key`.
+Driver only. Ubuntu 24.04, cloud-init user from `gpu_vm_ssh_public_key`. Run
+this on the `vllm-inference` VM itself, over SSH. This part is host-level —
+`talops` does not install a GPU driver — so it stays a manual step even
+though everything downstream of it is now automated.
+
+vLLM itself runs containerized (`talops vllm apply`, see §4), so unlike the
+old bare-metal venv this VM never JIT-compiles Triton/CUDA kernels and needs
+no host-side CUDA toolkit or Python build chain — the container image
+carries its own. `build-essential` and `linux-headers` remain, because the
+driver package itself builds a kernel module against them:
 
 ```bash
-# 1. NVIDIA driver (Blackwell needs 570+ open kernel modules) + build deps.
-# python3-dev and ninja-build are NOT optional — vLLM JIT-compiles Triton/CUDA
-# kernels on first request; without them it crash-loops with
-# "No such file or directory: 'ninja'" or a gcc failure citing a missing
-# Python.h, both well after the driver/model already loaded successfully.
+# NVIDIA driver (Blackwell needs 570+ open kernel modules) + build deps for
+# the driver's own kernel module build, plus curl for the NVIDIA Container
+# Toolkit apt-repo step that follows (docs/vllm-serving.md#host-prerequisites).
 sudo apt-get update
-sudo apt-get install -y build-essential linux-headers-$(uname -r) curl \
-  python3-dev ninja-build
+sudo apt-get install -y build-essential linux-headers-$(uname -r) curl
 sudo apt-get install -y nvidia-driver-580-open || sudo apt-get install -y nvidia-driver-570-open
-
-# 2. CUDA toolkit — the Ubuntu-repo nvidia-cuda-toolkit package predates
-# Blackwell (sm_120) support. Use NVIDIA's own repo, matched to the driver.
-wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
-sudo apt-get update
-sudo apt-get install -y cuda-toolkit-13-0
-
-# 3. uv + vLLM in an isolated venv.
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-uv venv /home/vllm/vllm-env --python 3.12
-uv pip install --python /home/vllm/vllm-env/bin/python vllm hf_transfer
-
-# 4. systemd unit.
-sudo tee /etc/systemd/system/vllm.service >/dev/null <<'EOF'
-[Unit]
-Description=vLLM OpenAI-compatible inference server (AI-SRE local tier)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=vllm
-ExecStart=/home/vllm/vllm-env/bin/vllm serve QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ \
-  --served-model-name qwen/qwen3-coder-30b-a3b \
-  --host 0.0.0.0 --port 8000 \
-  --quantization awq_marlin \
-  --max-model-len 32768 \
-  --enable-auto-tool-choice --tool-call-parser qwen3_xml
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# systemd units do not read /etc/profile.d — nvcc and CUDA_HOME must be set
-# here explicitly, or vLLM fails at model-load time with
-# "Could not find nvcc and default cuda_home='/usr/local/cuda' doesn't exist"
-# even though nvcc is installed and on the interactive-shell PATH.
-sudo mkdir -p /etc/systemd/system/vllm.service.d
-sudo tee /etc/systemd/system/vllm.service.d/cuda-path.conf >/dev/null <<'EOF'
-[Service]
-Environment=PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=CUDA_HOME=/usr/local/cuda
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable vllm
 sudo reboot   # picks up the driver cleanly
 ```
 
-After reboot: `sudo systemctl start vllm`.
+The NVIDIA Container Toolkit's own apt repository is a second, separate
+manual step, also run on the VM, that this runbook does not cover — see
+[docs/vllm-serving.md#host-prerequisites](../docs/vllm-serving.md#host-prerequisites).
 
-## 4. First-boot model download
+## 4. Serving
 
-The model download (~13GiB for the original `gpt-oss-20b`; ~16GiB for the
-`Qwen3-Coder-30B-A3B-Instruct-AWQ` weights) over the default `huggingface_hub`
-requests backend hung indefinitely for us — connections sat in `CLOSE-WAIT` against the
-AWS CloudFront edge IPs backing the HF CDN with zero bytes moving, both on the
-full download and on the lighter revision/etag re-check that runs on every
-`vllm serve` start even once the model is cached. **This is separate from the
-`.254` gateway issue** — it reproduced with correct routing in place.
-
-Fix: force the Rust-based transfer client, which uses a different HTTP stack
-and did not hang.
-
-```bash
-uv pip install --python /home/vllm/vllm-env/bin/python hf_transfer
-# (older huggingface_hub: HF_HUB_ENABLE_HF_TRANSFER=1 env var. Recent versions
-# use hf_transfer automatically once installed and warn the env var is
-# deprecated — either way, having the package installed is what matters.)
-```
-
-If a download was interrupted mid-file under the old backend, clear the
-partial snapshot before retrying — a stale `.incomplete` blob does not resume
-cleanly and `HF_HUB_OFFLINE=1` will refuse to start with
-`IncompleteSnapshotError` against it:
-
-```bash
-rm -rf ~/.cache/huggingface/hub/models--QuantTrio--Qwen3-Coder-30B-A3B-Instruct-AWQ
-sudo systemctl restart vllm
-```
+Everything past the driver is no longer a venv and a hand-written systemd
+unit: serving is defined in
+[`inference/vllm/serving.yaml`](../inference/vllm/serving.yaml) and converged
+by `talops vllm apply --confirm` — run from a workstation checkout of this
+repo, not on the VM. It installs a Podman Quadlet unit (`vllm-server.service`),
+stages the pinned image and model revision while the previous server keeps
+running, then stops the previous server, starts the new one, and only then
+checks it answers serving.yaml's model — a failed check rolls back
+automatically. See [docs/vllm-serving.md](../docs/vllm-serving.md) for the
+model/version change procedure, the status columns, and rollback.
 
 ## 5. Verify
 
+From a workstation checkout of this repo (SSHes to the VM itself):
+
 ```bash
-curl -s http://192.168.1.50:8000/v1/models | grep qwen
-curl -s http://192.168.1.50:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen/qwen3-coder-30b-a3b","messages":[{"role":"user","content":"say ok"}],"max_tokens":20}'
+talops vllm status
 ```
 
-`nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader` should
-show ~30GiB used once a request is in flight.
+On the VM, `nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader`
+should show ~30GiB used once a request is in flight.

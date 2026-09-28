@@ -95,13 +95,29 @@ talops
 │   └── --plan      # Preview changes
 ├── status          # Cluster health overview
 ├── reset           # Local state cleanup
+├── prune-nodes     # Cleanup stale K8s node objects
+├── upgrade-k8s     # Upgrade Kubernetes, prune-guarded and previewed by default
 ├── infra           # Terraform wrapper commands
 │   ├── deploy
 │   ├── destroy
 │   ├── plan
 │   ├── status
 │   └── cleanup
-└── prune-nodes     # Cleanup stale K8s node objects
+├── haproxy         # Inspect/converge the HAProxy load balancer (outside the cluster)
+│   ├── status
+│   ├── plan
+│   └── apply
+├── vllm            # Inspect/converge the vLLM GPU host (outside the cluster)
+│   ├── status
+│   ├── plan
+│   └── apply --confirm
+└── secrets         # SOPS+age vault management
+    ├── status
+    ├── hydrate
+    ├── seal
+    ├── lock
+    ├── edit
+    └── add-device
 ```
 
 #### 2.2 Internal Architecture
@@ -114,12 +130,15 @@ bootstrap/
 │   ├── app/               # Application orchestration
 │   ├── discovery/         # Node discovery
 │   ├── haproxy/           # Load balancer management
+│   ├── hostconverge/      # Backup/validate/activate/verify/rollback for hosts outside the cluster
 │   ├── kubectl/           # Kubernetes management
 │   ├── logging/           # Structured logging
+│   ├── sshutil/           # Shared SSH dial, auth and known_hosts handling
 │   ├── state/             # State management
 │   ├── talos/             # Talos management
 │   ├── terraform/         # Terraform management
-│   └── types/             # Core type definitions
+│   ├── types/             # Core type definitions
+│   └── vllm/              # vLLM GPU host: spec, render, converge, health gate
 └── main.go                # Entry point
 ```
 
@@ -344,7 +363,10 @@ Three properties are load-bearing:
 `apply` shares its install path with `reconcile`, so a fix to one is a fix to
 both, and it records the pushed config's hash in cluster state. That record is
 a hint about what talops last pushed — it cannot see a change made on the host,
-so drift is always confirmed against the live file when SSH is available.
+so drift is always confirmed against the live file when SSH is available. The
+write/backup/validate/activate/verify/rollback mechanics behind `apply` are
+`internal/hostconverge`, shared with the vLLM host below — see "Host
+Convergence" (§7).
 
 **Configuration Template**:
 
@@ -370,7 +392,58 @@ backend talos-controlplane
     server talos-cp-203 192.168.1.12:50000 check
 ```
 
-### 7. Configuration Management
+### 7. Host Convergence
+
+**Purpose**: One backup/validate/activate/verify/rollback sequence for every
+host talops configures outside the Talos cluster, so HAProxy and the vLLM GPU
+host share a single, well-tested path instead of each growing its own.
+
+**Implementation**: `internal/hostconverge`. `Apply` takes a `Change` — the
+files to install plus optional `Validate`, `Activate`, and `Verify` hooks —
+and runs them in a fixed order:
+
+1. **Write** each file to a temp path next to its destination, over SSH.
+2. **Back up** the existing file (skipped for a file that doesn't exist yet —
+   its absence is recorded instead, so restore knows to delete it rather
+   than copy back a backup that was never made), then move the temp file
+   into place.
+3. **Validate** the new configuration (a syntax check, for example) before
+   anything is activated. A validation failure restores the backup and stops.
+4. **Activate** the change (a service reload or restart).
+5. **Verify** the activated change is actually working.
+
+A failure at `Activate` or `Verify` restores every file `Apply` touched —
+copying back its backup for a file that had one, and deleting a file that
+didn't exist before the attempt — then re-runs `Activate`/`Verify` against
+the restored configuration, so a host is never left on a change that didn't
+work. `Result.RolledBack` and `Result.RollbackErr` tell the caller whether
+recovery itself succeeded. `Unchanged` compares the files a `Change` would
+install against what's on disk (by content hash) without writing anything;
+vLLM's `plan` and `apply` are its only callers (`pendingReasons` in
+`internal/vllm/converge.go`), which is how they report installed-file drift
+without installing anything — HAProxy's `plan` compares configs with its own
+`Diff()` instead, and neither command group's `status` calls `Unchanged` at
+all.
+
+Content is limited to roughly 96 KiB per file (`MAX_ARG_STRLEN` for the `sh
+-c` argument used to write it), which comfortably covers a Quadlet unit or an
+haproxy.cfg but rules out shipping large files through this path.
+
+**Two users, two configurations of the same sequence**:
+
+| | Validate | Activate | Verify |
+|---|---|---|---|
+| HAProxy (`internal/haproxy`) | `haproxy -c` against the rendered config | reload the service | none — a reload that returns is trusted |
+| vLLM (`internal/vllm`) | none — a Quadlet unit has no offline syntax check | `daemon-reload` + swap the systemd unit + restart | the health gate: model present, a real completion, a real tool call — see [docs/vllm-serving.md](vllm-serving.md) |
+
+HAProxy's `Verify` is `nil`, so a failed `Activate` there is returned as-is
+rather than triggering a rollback — matching the config push's historical
+behavior before it moved onto `hostconverge`. vLLM always sets `Verify`
+(the health gate), so its `Activate` failures do roll back, and a rollback
+re-activates and re-verifies the previous Quadlet unit before reporting
+which server ended up serving.
+
+### 8. Configuration Management
 
 **Config Precedence** (lowest to highest):
 1. Default values (`types.DefaultConfig()`)
