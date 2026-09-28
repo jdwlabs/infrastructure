@@ -129,7 +129,10 @@ func validate(s Spec) error {
 		}
 
 		if forbiddenFlags[flagName] {
-			return fmt.Errorf("args must not contain %s: these are set by the host provisioning script", flagName)
+			if flagName == "--model" {
+				return fmt.Errorf("args must not contain %s: model.repo is already passed positionally by talops's rendered Exec= line", flagName)
+			}
+			return fmt.Errorf("args must not contain %s: talops's rendered Exec= line already sets it", flagName)
 		}
 	}
 

@@ -22,10 +22,12 @@ func vllmCmd(a *app.App) *cobra.Command {
 		Long: `Read and converge the GPU host's vLLM Quadlet unit to inference/vllm/serving.yaml.
 
 ` + "`status`" + ` and ` + "`plan`" + ` read only. ` + "`apply`" + ` restarts the server through the
-same validated, auto-rollback path hostconverge uses elsewhere, gated on the
-new server answering serving.yaml's model before the previous one is torn
-down. It interrupts whatever currently calls the server — ` + "`talops vllm plan`" + `
-names them — until the health gate passes.`,
+same validated, auto-rollback path hostconverge uses elsewhere: it stops
+whatever is currently serving, starts the new server, and only then checks
+that it answers serving.yaml's model — a failed check rolls back
+automatically to whatever was serving before. It interrupts whatever
+currently calls the server — ` + "`talops vllm plan`" + ` names them — for the length
+of that restart and check.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -47,7 +49,8 @@ names them — until the health gate passes.`,
 	cmd.PersistentFlags().StringVar(&opts.Host, "host", "",
 		"GPU VM address to target (default: gpu_vm_ip from tfvars)")
 	cmd.PersistentFlags().StringVar(&opts.Spec, "spec", "",
-		"Path to serving.yaml (default: inference/vllm/serving.yaml at the repo root)")
+		"Path to serving.yaml (default: inference/vllm/serving.yaml at the repo root; "+
+			"a relative path resolves from the repo root, since talops chdirs there before every command)")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false,
 		"Emit newline-delimited JSON, one object per state transition")
 
@@ -74,8 +77,9 @@ func vllmStatusCmd(a *app.App, opts *app.VLLMOptions) *cobra.Command {
 		Use:   "status",
 		Short: "Compare serving.yaml, the applied record and the running container",
 		Long: `One-shot comparison across serving.yaml (git), what was last applied, and what
-the container is actually running. A layer that could not be read reports
-"unknown" rather than a clean result.
+the container is actually running. A read that fails reports "unknown" (the
+applied record) rather than a clean result; a container that isn't running
+reports "(not running)", not "unknown".
 
 Exits non-zero when the layers disagree (drift: true), even when nothing
 else failed: drift is what a caller acts on next.`,
@@ -125,13 +129,17 @@ func vllmApplyCmd(a *app.App, opts *app.VLLMOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Restart the server to match serving.yaml (health-gated, rolled back on failure)",
-		Long: `Install the Quadlet unit rendered from serving.yaml and restart the server,
-gated on it answering serving.yaml's model before anything already serving is
-torn down. A failed gate rolls back to the previous unit automatically.
+		Long: `Install the Quadlet unit rendered from serving.yaml: stop whatever server is
+currently running, start the new one, and only then check that it answers
+serving.yaml's model. A failed check rolls back automatically — to the
+previous Quadlet unit on a later apply, or to whatever vllm.service's prior
+enabled/active state was on a host's first apply. A no-op apply (host
+already matches serving.yaml) runs one health check and restarts nothing.
 
 Requires --confirm: this restarts the server and interrupts every consumer
-until the health gate passes. Also requires inference/vllm/serving.yaml to be
-committed — an apply is recorded on the host against the commit it came from.`,
+for the length of the restart and health check. Also requires
+inference/vllm/serving.yaml to be committed — an apply is recorded on the
+host against the commit it came from.`,
 		Example: `  talops vllm apply --confirm
   talops vllm apply --confirm --host 192.168.1.50`,
 		Args: cobra.NoArgs,

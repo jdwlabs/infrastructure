@@ -29,8 +29,12 @@ func Execute() error {
 	}()
 
 	rootCmd := &cobra.Command{
-		Use:          "talops",
-		Short:        "Smart reconciliation for Talos clusters",
+		Use:   "talops",
+		Short: "Provision and operate the jdwlabs infrastructure",
+		Long: `talops covers four areas: Terraform provisioning of every VM (` + "`infra`" + `), the
+Talos cluster's own lifecycle (` + "`bootstrap`" + `, ` + "`reconcile`" + `, ` + "`upgrade-k8s`" + `, ` + "`status`" + `, ...),
+and the two hosts it converges outside that cluster — the HAProxy load
+balancer (` + "`haproxy`" + `) and the vLLM GPU host (` + "`vllm`" + `).`,
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Anchor to the repo root first so clusters/, terraform/, and the
