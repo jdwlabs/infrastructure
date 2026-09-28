@@ -1,0 +1,361 @@
+package vllm
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/hostconverge"
+)
+
+// hostPackages are the apt packages EnsureHost requires on the GPU host.
+var hostPackages = []string{"podman", "nvidia-container-toolkit", "prometheus-node-exporter"}
+
+// dpkgStatusFormat pairs each reported line with the package it describes:
+// checking status lines against a fixed count only proves N status lines
+// came back, not that each of the N *requested* packages is one of them
+// (dpkg-query can duplicate or omit a line independent of that count).
+// The "\n" here must reach dpkg-query as the two literal characters
+// (backslash, n) so dpkg-query itself turns it into the newline that
+// separates one package's line from the next — a Go-escaped actual newline
+// would collapse every package's output onto one line.
+const dpkgStatusFormat = `${Package} ${db:Status-Status}\n`
+
+// imageIDPattern is what a genuine podman image ID looks like; ReadLive
+// refuses to build a second command around whatever `{{.Image}}` printed
+// unless it matches this exactly.
+var imageIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// driverVersionPattern is what a genuine nvidia-smi driver_version reading
+// looks like. EnsureHost interpolates this value into commands it runs as
+// root over SSH (the CDI record write), so it's validated before use the
+// same way the image reference is.
+var driverVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
+
+const giB = 1024 * 1024 * 1024
+
+// Staging space requirements, checked on the two filesystems Stage
+// actually writes to: the model download (only needed when the marker is
+// absent) lands under /var/lib/vllm, while every podman pull — staged or
+// not — lands image layers under /var/lib/containers.
+const (
+	stageRequiredModelBytes = 30 * giB
+	stageRequiredImageBytes = 12 * giB
+)
+
+// EnsureHost prepares the GPU host for vLLM: it installs the required
+// packages, creates the directories hostconverge and the Quadlet unit write
+// into, keeps the NVIDIA Container Device Interface spec in step with the
+// installed driver, and checks (without rewriting) node-exporter's
+// textfile collector config. It returns a description of what it changed —
+// an empty slice means the host already matched.
+//
+// Directory creation runs before anything that writes under a directory it
+// creates (the CDI record write under /etc/vllm): on a fresh host neither
+// exists yet, so writing first would fail permanently.
+func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
+	var changed []string
+
+	if !packagesInstalled(ctx, r) {
+		installCmd := "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y " + strings.Join(hostPackages, " ")
+		if _, err := r.Run(ctx, installCmd); err != nil {
+			// A missing apt candidate for the toolkit fails the install with
+			// a generic apt error; diagnose that specific, common cause so
+			// the operator is pointed at the manual step instead of a bare
+			// apt-get failure. A policy read that itself fails can't tell us
+			// which case this is, so it's folded into the install error
+			// rather than misreported as either verdict.
+			policy, policyErr := r.Run(ctx, "apt-cache policy nvidia-container-toolkit 2>/dev/null")
+			if policyErr != nil {
+				return changed, fmt.Errorf("install host packages: %w (diagnosing candidate: %v)", err, policyErr)
+			}
+			if !strings.Contains(policy, "Candidate:") || strings.Contains(policy, "Candidate: (none)") {
+				return changed, fmt.Errorf("nvidia-container-toolkit has no apt installation candidate: add the NVIDIA Container Toolkit apt repository first (talops does not add apt repositories from code) — see docs/vllm-serving.md#host-prerequisites")
+			}
+			return changed, fmt.Errorf("install host packages: %w", err)
+		}
+		changed = append(changed, "installed "+strings.Join(hostPackages, ", "))
+	}
+
+	if _, err := r.Run(ctx, "sudo mkdir -p /usr/local/libexec /etc/containers/systemd /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter"); err != nil {
+		return changed, fmt.Errorf("create host directories: %w", err)
+	}
+
+	driverOut, err := r.Run(ctx, "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null")
+	if err != nil {
+		return changed, fmt.Errorf("read GPU driver version: %w", err)
+	}
+	driverVersion := firstNonEmptyLine(driverOut)
+	if driverVersion == "" {
+		return changed, fmt.Errorf("nvidia-smi returned no driver version")
+	}
+	if !driverVersionPattern.MatchString(driverVersion) {
+		return changed, fmt.Errorf("nvidia-smi returned a malformed driver version %q", driverVersion)
+	}
+
+	// talops records the driver version it last generated the CDI spec
+	// for, rather than parsing that spec back out of /etc/cdi/nvidia.yaml:
+	// the generated YAML's shape isn't part of nvidia-ctk's contract, so
+	// scraping a key out of it is one nvidia-ctk release away from silently
+	// never matching again.
+	recordOut, recErr := r.Run(ctx, "sudo cat /etc/vllm/cdi-driver-version 2>/dev/null")
+	if recErr != nil || strings.TrimSpace(recordOut) != driverVersion {
+		if _, err := r.Run(ctx, "sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"); err != nil {
+			return changed, fmt.Errorf("generate CDI spec: %w", err)
+		}
+		if _, err := r.Run(ctx, "printf '%s' '"+driverVersion+"' | sudo tee /etc/vllm/cdi-driver-version >/dev/null"); err != nil {
+			return changed, fmt.Errorf("record CDI driver version: %w", err)
+		}
+		changed = append(changed, "regenerated /etc/cdi/nvidia.yaml for driver "+driverVersion)
+	}
+
+	// The package default already sets this on Ubuntu; a mismatch is
+	// reported for a human to fix, not rewritten, since /etc/default files
+	// are exactly the kind of local edit hostconverge is not meant to own.
+	neOut, neErr := r.Run(ctx, "grep '^ARGS=' /etc/default/prometheus-node-exporter 2>/dev/null")
+	if neErr != nil || !strings.Contains(neOut, "/var/lib/prometheus/node-exporter") {
+		changed = append(changed, "warning: prometheus-node-exporter's --collector.textfile.directory does not match /var/lib/prometheus/node-exporter; check /etc/default/prometheus-node-exporter")
+	}
+
+	return changed, nil
+}
+
+// packagesInstalled reports whether every package in hostPackages has at
+// least one "installed" status line naming it — checked per package, not
+// by counting lines: a query that duplicates one package's line while
+// silently dropping another's would still produce the "right" number of
+// installed-looking lines, and a positional line-to-package mapping can't
+// tell that apart from every package actually being present.
+func packagesInstalled(ctx context.Context, r hostconverge.Runner) bool {
+	out, _ := r.Run(ctx, "dpkg-query -W -f='"+dpkgStatusFormat+"' "+strings.Join(hostPackages, " ")+" 2>/dev/null")
+
+	installed := make(map[string]bool, len(hostPackages))
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		pkg, status, ok := strings.Cut(line, " ")
+		if ok && status == "installed" {
+			installed[pkg] = true
+		}
+	}
+
+	for _, pkg := range hostPackages {
+		if !installed[pkg] {
+			return false
+		}
+	}
+	return true
+}
+
+// firstNonEmptyLine returns the first non-blank line of s, trimmed. A
+// multi-GPU host prints one driver_version line per GPU; they're always
+// identical, so the first one is enough.
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// checkFreeSpace fails with an error naming path and the exact shortfall
+// when fewer than required bytes are free there.
+func checkFreeSpace(ctx context.Context, r hostconverge.Runner, path string, required int64) error {
+	avail, err := r.Run(ctx, "df --output=avail -B1 "+path+" 2>/dev/null | tail -1")
+	if err != nil {
+		return fmt.Errorf("check free space on %s: %w", path, err)
+	}
+	availBytes, perr := strconv.ParseInt(strings.TrimSpace(avail), 10, 64)
+	if perr != nil {
+		return fmt.Errorf("parse free space on %s (%q): %w", path, avail, perr)
+	}
+	if availBytes < required {
+		shortfallGiB := (required - availBytes + giB - 1) / giB
+		return fmt.Errorf("only %d GiB free on %s, %d GiB short of the %d GiB required to stage the model",
+			availBytes/giB, path, shortfallGiB, required/giB)
+	}
+	return nil
+}
+
+// Stage pulls the image and, unless the model revision is already staged,
+// downloads it — all while the previous server keeps running, so a slow
+// pull or download never causes an outage.
+func Stage(ctx context.Context, r hostconverge.Runner, s Spec) error {
+	marker := "/var/lib/vllm/hf/.staged-" + s.Model.Revision
+	_, markerErr := r.Run(ctx, "sudo test -e "+marker)
+	staged := markerErr == nil
+
+	// The model download only happens when unstaged, so that's the only
+	// time it needs to be checked; the image pull happens every run and
+	// lands on a different filesystem entirely, so it's checked
+	// unconditionally against its own path.
+	if !staged {
+		if err := checkFreeSpace(ctx, r, "/var/lib/vllm", stageRequiredModelBytes); err != nil {
+			return err
+		}
+	}
+	if err := checkFreeSpace(ctx, r, "/var/lib/containers", stageRequiredImageBytes); err != nil {
+		return err
+	}
+
+	// The image itself is validated against spec.go's OCI-reference regex,
+	// which excludes shell metacharacters entirely; the quotes here are
+	// defence in depth against that regex ever loosening, not a substitute
+	// for it.
+	if _, err := r.Run(ctx, "sudo podman pull '"+s.Image+"'"); err != nil {
+		return fmt.Errorf("pull image: %w", err)
+	}
+
+	if staged {
+		return nil
+	}
+
+	download := fmt.Sprintf(
+		"sudo podman run --rm --entrypoint python3 -v /var/lib/vllm/hf:/root/.cache/huggingface '%s' -c \"from huggingface_hub import snapshot_download; snapshot_download('%s', revision='%s')\"",
+		s.Image, s.Model.Repo, s.Model.Revision,
+	)
+	if _, err := r.Run(ctx, download); err != nil {
+		return fmt.Errorf("download model: %w", err)
+	}
+
+	// Written only once snapshot_download has actually returned success:
+	// the directory it downloads into can exist half-populated after a
+	// killed or failed run, so its mere presence must never be read as
+	// "already staged" (snapshot_download itself is idempotent, so a
+	// re-download of a partial directory is the safe, cheap outcome). A
+	// failure here must propagate too — otherwise a marker that silently
+	// never got written is read as "unstaged" forever, or worse, a
+	// filesystem error here is masked as if staging fully succeeded.
+	if _, err := r.Run(ctx, "sudo touch "+marker); err != nil {
+		return fmt.Errorf("record staged marker: %w", err)
+	}
+	return nil
+}
+
+// Live is the state of the running vllm container, read the same way and
+// under the same rules as the embedded drift-check script: RepoDigests
+// carries the full-image reference list `podman pull` populates from the
+// pinned index digest, and ArgsHash is comparable directly against
+// ArgsHash(Spec) and against Applied.ArgsHash.
+type Live struct {
+	Running     bool
+	RepoDigests []string
+	ArgsHash    string
+}
+
+// HasDigest reports whether d — a bare "sha256:..." digest, as recorded in
+// Applied.ImageDigest — is one of the running image's RepoDigests. That's
+// a suffix match, not equality, because d names the multi-arch index digest
+// `podman pull` was given, while each RepoDigests entry is a full
+// "repo@sha256:<per-arch instance digest>" reference.
+func (l Live) HasDigest(d string) bool {
+	suffix := "@" + d
+	for _, rd := range l.RepoDigests {
+		if strings.HasSuffix(rd, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadLive reads the running vllm container's state. Any podman failure —
+// container absent, stopped, or an inspect error — reads as Live{} with no
+// error, exactly like the drift script's own not_running case: an SSH
+// runner can't tell "container never existed" from "container removed"
+// from "podman itself is broken", and none of those is this function's
+// failure to report.
+func ReadLive(ctx context.Context, r hostconverge.Runner) (Live, error) {
+	runningOut, err := r.Run(ctx, "sudo podman inspect --format '{{.State.Running}}' vllm 2>/dev/null")
+	if err != nil || strings.TrimSpace(runningOut) != "true" {
+		return Live{}, nil
+	}
+
+	imageIDOut, err := r.Run(ctx, "sudo podman inspect --format '{{.Image}}' vllm 2>/dev/null")
+	if err != nil {
+		return Live{}, nil
+	}
+	imageID := strings.TrimSpace(imageIDOut)
+	if !imageIDPattern.MatchString(imageID) {
+		return Live{}, nil
+	}
+
+	repoDigestsOut, err := r.Run(ctx, "sudo podman image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "+imageID+" 2>/dev/null")
+	if err != nil {
+		return Live{}, nil
+	}
+	var repoDigests []string
+	for _, line := range strings.Split(strings.TrimRight(repoDigestsOut, "\n"), "\n") {
+		if line != "" {
+			repoDigests = append(repoDigests, line)
+		}
+	}
+
+	argsOut, err := r.Run(ctx, "sudo podman inspect --format '"+ArgsInspectFormat+"' vllm 2>/dev/null")
+	if err != nil {
+		return Live{}, nil
+	}
+	// Strip ONLY podman's own trailing "\n" after the whole --format
+	// output (TrimSuffix, not TrimRight): the NUL-joined args must reach
+	// the hash exactly as podman printed them, or this drifts from
+	// ArgsHash(Spec) and the drift script the same way it did before.
+	argsRaw := strings.TrimSuffix(argsOut, "\n")
+	sum := sha256.Sum256([]byte(argsRaw))
+
+	return Live{Running: true, RepoDigests: repoDigests, ArgsHash: hex.EncodeToString(sum[:])}, nil
+}
+
+// ReadApplied reads back the record apply last wrote. A missing file is not
+// an error: it means nothing has ever been applied. Existence is probed
+// separately from the read (the same probe hostconverge.Apply uses) so a
+// real read failure — permissions, a truncated file the shell chokes on —
+// isn't silently folded into "never applied".
+func ReadApplied(ctx context.Context, r hostconverge.Runner) (*Applied, error) {
+	probeOut, err := r.Run(ctx, "sudo sh -c 'test -e /etc/vllm/applied.json || echo absent'")
+	if err != nil {
+		return nil, fmt.Errorf("check applied record: %w", err)
+	}
+	if strings.Contains(probeOut, "absent") {
+		return nil, nil
+	}
+
+	out, err := r.Run(ctx, "sudo cat /etc/vllm/applied.json 2>/dev/null")
+	if err != nil {
+		return nil, fmt.Errorf("read applied record: %w", err)
+	}
+
+	var a Applied
+	if err := json.Unmarshal([]byte(out), &a); err != nil {
+		return nil, fmt.Errorf("parse applied record: %w", err)
+	}
+	return &a, nil
+}
+
+// LegacyActive reports whether the pre-Quadlet vllm.service systemd unit is
+// still the one serving, or still winding down from serving: active,
+// activating, reloading, and deactivating all mean it hasn't finished
+// stepping aside yet and still needs disabling. systemctl is-active exits
+// non-zero for every status but "active", so the reported status string is
+// read first, regardless of the runner's error. A status this function
+// doesn't recognise is never silently read as "not active" — that's an
+// error whether or not the runner itself reported one, since guessing
+// wrong here means never migrating away from a unit that's actually still
+// serving.
+func LegacyActive(ctx context.Context, r hostconverge.Runner) (bool, error) {
+	out, err := r.Run(ctx, "systemctl is-active vllm.service 2>/dev/null")
+	status := strings.TrimSpace(out)
+	switch status {
+	case "active", "activating", "reloading", "deactivating":
+		return true, nil
+	case "inactive", "failed", "unknown", "maintenance":
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check legacy vllm.service: %w", err)
+	}
+	return false, fmt.Errorf("check legacy vllm.service: unrecognised status %q", status)
+}

@@ -69,7 +69,11 @@ func (s Spec) ImageDigest() string {
 }
 
 func validate(s Spec) error {
-	imageRegex := regexp.MustCompile(`^([^@\s]*/)?[^@/\s:]+:[^@/\s:]+@sha256:[0-9a-f]{64}$`)
+	// Restricted to the OCI reference charset (no ; $ ` or other shell
+	// metacharacters): remote.go interpolates this value into commands it
+	// runs as root over SSH, so a character the regex would let through is
+	// a root shell injection, not just a malformed reference.
+	imageRegex := regexp.MustCompile(`^[a-z0-9.:/_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$`)
 	if !imageRegex.MatchString(s.Image) {
 		return fmt.Errorf("image must be <repo>:<tag>@sha256:<64 hex>, got %q: the digest pins what runs and the tag is what Renovate reads", s.Image)
 	}

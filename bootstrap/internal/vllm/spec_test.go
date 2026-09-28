@@ -58,6 +58,15 @@ func TestParseRejects(t *testing.T) {
 		"--port in args":      func(m map[string]string) { m["args"] = "[--port, '9000']" },
 		"--served-model-name": func(m map[string]string) { m["args"] = "[--served-model-name=y]" },
 		"--host in args":      func(m map[string]string) { m["args"] = "[--host=0.0.0.0]" },
+		"image contains semicolon": func(m map[string]string) {
+			m["image"] = "docker.io/vllm/vllm-openai:v0.24.0;id@sha256:" + strings.Repeat("a", 64)
+		},
+		"image contains dollar": func(m map[string]string) {
+			m["image"] = "docker.io/vllm/vllm-openai:v0.24.0$(id)@sha256:" + strings.Repeat("a", 64)
+		},
+		"image contains backtick": func(m map[string]string) {
+			m["image"] = "docker.io/vllm/vllm-openai:v0.24.0`id`@sha256:" + strings.Repeat("a", 64)
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
