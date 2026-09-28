@@ -618,6 +618,70 @@ func TestApplyStagingFailureTouchesNothing(t *testing.T) {
 	assert.Contains(t, res.Help, "nothing changed on the running server")
 }
 
+// cancelOn cancels the apply's context once a command containing sub has
+// run, the way an operator's Ctrl-C lands while that step is in flight. The
+// fake host ignores ctx, so the step itself still completes: what is under
+// test is that apply does not go on to the swap.
+type cancelOn struct {
+	*fakeHost
+	sub    string
+	cancel context.CancelFunc
+}
+
+func (c cancelOn) Run(ctx context.Context, cmd string) (string, error) {
+	out, err := c.fakeHost.Run(ctx, cmd)
+	if strings.Contains(cmd, c.sub) {
+		c.cancel()
+	}
+	return out, err
+}
+
+func TestApplyInterruptedBeforeTheSwapTouchesNothing(t *testing.T) {
+	for name, sub := range map[string]string{
+		"during host prerequisites": "nvidia-smi",
+		"during staging":            "sudo podman pull",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := install(newHost("inactive"), sampleSpec())
+			before := map[string]string{}
+			for p, b := range h.files {
+				before[p] = string(b)
+			}
+			g := &fakeGate{h: h}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			tg := target(h, g)
+			tg.Runner = cancelOn{fakeHost: h, sub: sub, cancel: cancel}
+
+			res := Apply(ctx, tg, newerSpec())
+
+			require.NotNil(t, res.Failure)
+			assert.Equal(t, CodeStage, res.Failure.Code)
+			assert.Contains(t, res.Failure.Msg, "cancelled before the swap")
+			assert.Equal(t, ServingPrevious, res.Serving)
+			assert.False(t, res.RolledBack)
+			assert.Zero(t, g.calls)
+			assert.Zero(t, countContaining(h.cmds, "sudo systemctl"), "nothing may be restarted")
+			assert.Zero(t, countContaining(h.cmds, "sudo mv"))
+			assert.Zero(t, countContaining(h.cmds, "base64 -d"))
+			last := -1
+			for i, c := range h.cmds {
+				if strings.Contains(c, sub) {
+					last = i
+				}
+			}
+			require.GreaterOrEqual(t, last, 0)
+			assert.Zero(t, countContaining(h.cmds[last:], wantIsActiveCmd), "legacy state is only re-read on the way to the swap")
+			after := map[string]string{}
+			for p, b := range h.files {
+				after[p] = string(b)
+			}
+			assert.Equal(t, before, after)
+			assert.Contains(t, res.Help, "nothing changed on the running server")
+		})
+	}
+}
+
 func TestApplyDownloadFailureTouchesNothing(t *testing.T) {
 	h := newHost("active") // legacy serving, model never staged
 	h.fail("snapshot_download")

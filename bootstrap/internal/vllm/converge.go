@@ -238,6 +238,9 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 	if err != nil {
 		return failApply(res, CodeHostPrereq, err.Error())
 	}
+	if err := ctx.Err(); err != nil {
+		return failApply(res, CodeStage, cancelledMsg(err))
+	}
 
 	reasons, prior, f := pendingReasons(ctx, r, s)
 	if f != nil {
@@ -270,6 +273,12 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 	phase("stage", start)
 	if err != nil {
 		return failApply(res, CodeStage, err.Error())
+	}
+	// A runner that ignores ctx, or a step that finished just as the
+	// operator interrupted, still returns success; the swap is the one step
+	// that interrupts consumers, so an interrupt must never reach it.
+	if err := ctx.Err(); err != nil {
+		return failApply(res, CodeStage, cancelledMsg(err))
 	}
 
 	// Read again after staging rather than reusing pendingReasons' answer:
@@ -358,6 +367,10 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 		res.Notes = append(res.Notes, fmt.Sprintf("drift check did not run once after apply (the timer runs it next): %v", err))
 	}
 	return res
+}
+
+func cancelledMsg(err error) string {
+	return fmt.Sprintf("cancelled before the swap; nothing on the running server changed: %v", err)
 }
 
 // Rollback outcomes that leave the host without a server, each named so the
