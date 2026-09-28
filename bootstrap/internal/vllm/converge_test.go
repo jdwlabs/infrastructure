@@ -747,6 +747,51 @@ func TestApplyReportsRolledBackButUnhealthy(t *testing.T) {
 	assert.NotContains(t, help, "previous server is serving")
 }
 
+// identityGate passes Wait only for a spec naming the identity the server
+// on the host actually has, the way the real gate reads /v1/models, and
+// records which identity every Wait was asked about.
+type identityGate struct {
+	h          *fakeHost
+	servedName string
+	modelRepo  string
+	asked      []string
+}
+
+func (g *identityGate) Check(context.Context, Spec) error { return nil }
+
+func (g *identityGate) Wait(_ context.Context, s Spec) error {
+	g.h.cmds = append(g.h.cmds, "<gate>")
+	g.asked = append(g.asked, s.ServedName+" "+s.Model.Repo)
+	if s.ServedName != g.servedName || s.Model.Repo != g.modelRepo {
+		return fmt.Errorf("models check: no entry with id %q", s.ServedName)
+	}
+	return nil
+}
+
+func TestApplyRollbackGatesTheRestoredServersIdentity(t *testing.T) {
+	pinBackupSuffix(t)
+	old := sampleSpec()
+	s := newerSpec()
+	s.ServedName = "qwen/qwen3-next"
+	s.Model = Model{Repo: "Qwen/Qwen3-Next-80B-A3B-Instruct-AWQ", Revision: strings.Repeat("c", 40)}
+	h := install(newHost("inactive"), old)
+	// The new model never comes up, so the old one is all that ever answers.
+	g := &identityGate{h: h, servedName: old.ServedName, modelRepo: old.Model.Repo}
+
+	res := Apply(context.Background(), target(h, g), s)
+
+	require.NotNil(t, res.Failure)
+	assert.Equal(t, CodeGate, res.Failure.Code)
+	assert.True(t, res.RolledBack)
+	assert.Equal(t, ServingPrevious, res.Serving, "the restored server serves the previous model and must be gated as that model")
+	assert.Equal(t, []string{
+		s.ServedName + " " + s.Model.Repo,
+		old.ServedName + " " + old.Model.Repo,
+	}, g.asked)
+	assert.Equal(t, Quadlet(old), string(h.files[QuadletPath]))
+	assert.Contains(t, res.Help, "the previous server is serving again and passed the health gate")
+}
+
 func TestApplyFirstRunRollbackRestoresLegacyUnit(t *testing.T) {
 	pinBackupSuffix(t)
 	s := sampleSpec()
