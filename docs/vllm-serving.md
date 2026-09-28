@@ -286,6 +286,16 @@ it:
   otherwise fail the restored server's check even though it is healthy.
   Only when there is no record does the rollback check use `serving.yaml`'s
   identity.
+
+  This identity comes from the record, not from the Quadlet that rollback
+  actually restores, and the two can disagree in two rare cases: after a
+  `record_failed` apply, the installed unit is newer than the last record
+  written; and a change to `port` is never captured in `applied.json` at
+  all, so the rollback gate's `BaseURL` is still built from the new,
+  rolled-back-from `spec.Port`. In either case a healthy restored server
+  can fail `gate-rollback`, and the report says `serving: none` with
+  "recover by hand" for a server that is actually up — check `talops vllm
+  status` before trusting that verdict in those two cases.
 - **The first apply on a host** has no previous Quadlet unit to restore, so
   rollback instead restores `vllm.service` to the exact active/enabled state
   it had before the apply started — the vLLM `Activate` hook (`activate` in
