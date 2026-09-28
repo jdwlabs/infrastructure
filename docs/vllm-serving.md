@@ -113,6 +113,20 @@ start the new one in the first place. `phases` times the restart and the
 check (and the rollback's own re-check, `gate-rollback`, when one happens)
 separately from staging.
 
+The health check has three parts, all against the served name: `/v1/models`
+lists it with `root` equal to `model.repo`; a 1-token chat completion
+finishes with `stop` or `length`; and a request offering one `get_time`
+tool comes back with at least one parsed `tool_calls` entry. That last
+request sends `tool_choice: "auto"`, the way consumers do, because only
+`auto` passes the model's reply through `--tool-call-parser`;
+`"required"` would have vLLM constrain the output to the tool schema itself
+and pass with a parser that parses nothing. With `auto` the model is free to
+answer in prose, so the request's system and user messages tell it to call
+`get_time`, and after a swap the check is retried until
+`healthGate.timeout`. The single check on an apply with nothing to change
+is not retried, so a model that answers in prose once reads as
+`gate_failed` there; re-running `apply` checks again.
+
 ### Apply outcomes: failure codes, `serving`, and exit codes
 
 `rolledBack` is always printed (`report.go`'s `ReportApply` writes it

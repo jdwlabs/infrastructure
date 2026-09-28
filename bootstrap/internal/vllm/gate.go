@@ -186,12 +186,20 @@ func (g HealthGate) checkCompletion(ctx context.Context, s Spec) error {
 // checkToolCall asks the model to use a trivial tool and requires at least
 // one parsed tool_calls entry back — proof the server's tool-calling parser
 // works end to end, not just that the model itself is up.
+//
+// tool_choice is "auto" because that is what consumers send, and only auto
+// hands the model's free-form reply to --tool-call-parser to extract the
+// calls; "required" makes vLLM constrain the output to the tool schema
+// itself, which passes even with a parser that can parse nothing. With auto
+// the model may answer in prose instead, so the prompt leaves it no other
+// answer to give, and Wait retries a miss.
 func (g HealthGate) checkToolCall(ctx context.Context, s Spec) error {
 	reqBody := map[string]any{
 		"model":      s.ServedName,
 		"max_tokens": 64,
 		"messages": []map[string]string{
-			{"role": "user", "content": "What time is it? Use the tool."},
+			{"role": "system", "content": "You cannot know the time yourself. When asked for it, call get_time and reply with nothing else."},
+			{"role": "user", "content": "What time is it? Call get_time."},
 		},
 		"tools": []map[string]any{
 			{
@@ -206,7 +214,7 @@ func (g HealthGate) checkToolCall(ctx context.Context, s Spec) error {
 				},
 			},
 		},
-		"tool_choice": "required",
+		"tool_choice": "auto",
 	}
 
 	_, toolCalls, err := g.chatCompletion(ctx, reqBody)

@@ -101,6 +101,43 @@ func TestCheckFailsNamingToolCallWhenAbsent(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool call")
 }
 
+func TestToolCallCheckLeavesTheChoiceToTheParser(t *testing.T) {
+	var toolReq map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "qwen/qwen3-coder-30b-a3b", "root": "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"}},
+		})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			return
+		}
+		if _, ok := body["tools"]; ok {
+			toolReq = body
+		}
+		_, _ = w.Write([]byte(chatResponse("stop", sampleToolCall)))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	require.NoError(t, HealthGate{BaseURL: srv.URL}.Check(context.Background(), testSpec(time.Minute)))
+
+	require.NotNil(t, toolReq, "the gate sent no request with tools")
+	assert.Equal(t, "auto", toolReq["tool_choice"], "only auto routes the reply through --tool-call-parser, as consumers' requests do")
+	msgs, ok := toolReq["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "system", msgs[0].(map[string]any)["role"])
+	assert.Equal(t, "user", msgs[1].(map[string]any)["role"])
+	var text strings.Builder
+	for _, m := range msgs {
+		text.WriteString(m.(map[string]any)["content"].(string))
+	}
+	assert.Contains(t, text.String(), "get_time", "with auto, the prompt is what makes the model call the tool")
+}
+
 func TestWaitSucceedsAfterServerTurnsHealthy(t *testing.T) {
 	var calls atomic.Int32
 	mux := http.NewServeMux()
