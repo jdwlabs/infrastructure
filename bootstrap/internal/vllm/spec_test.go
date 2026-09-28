@@ -218,3 +218,12 @@ servedName: qwen/qwen3-coder-30b-a3b
 		})
 	}
 }
+
+// CI fails if the committed serving.yaml ever stops loading or validating.
+// It deliberately doesn't freeze values: model and image changes arrive as
+// reviewed PRs, including Renovate's, and this test must not force an edit
+// on every one of them.
+func TestCommittedServingSpecIsValid(t *testing.T) {
+	_, err := Load("../../../inference/vllm/serving.yaml")
+	require.NoError(t, err)
+}

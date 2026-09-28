@@ -102,6 +102,14 @@
       "matchStrings": ["kubernetes_version\\s*=\\s*\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""],
       "depNameTemplate": "kubernetes/kubernetes",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "vLLM server image pinned in the serving spec (digest-pinned; applied by hand in a window)",
+      "managerFilePatterns": ["/^inference/vllm/serving\\.yaml$/"],
+      "matchStrings": ["image:\\s*(?<depName>docker\\.io/vllm/vllm-openai):(?<currentValue>v[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver"
     }
   ]
 }
