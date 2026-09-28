@@ -49,7 +49,7 @@ healthGate:
 | Field | Required | Rule | Why |
 |---|---|---|---|
 | `image` | yes | `<repo>:<tag>@sha256:<64 hex>`, lowercase OCI reference charset | The digest pins what runs; the tag is what Renovate reads. |
-| `model.repo` | yes | `[A-Za-z0-9._:/=,+@-]+` | Ends up as a literal word on the Quadlet's `Exec=` line — a systemd command line that splits on whitespace and quotes and expands `%` and `$`. |
+| `model.repo` | yes | `[A-Za-z0-9._:/=,+@-]+`, not starting with `-` | Ends up as a literal word on the Quadlet's `Exec=` line — a systemd command line that splits on whitespace and quotes and expands `%` and `$` — and as `vllm serve`'s first argument, where a leading `-` would make it a flag. |
 | `model.revision` | yes | 40 hex characters | A branch moves; a commit pins what's downloaded. |
 | `servedName` | yes | non-empty, same charset as `model.repo` | Identifies the model in client requests, and lands unescaped in a Prometheus label the drift check emits. |
 | `port` | no (default `8000`) | 1–65535 | |
@@ -57,11 +57,13 @@ healthGate:
 | `healthGate.timeout` | no (default `10m`) | duration, must be `> 0` | Model load on this card is minutes, not seconds — the AWQ 30B-A3B MoE weights alone take a while to page onto the GPU. |
 
 Unknown keys are rejected outright (`KnownFields(true)`), and `args` may not
-set `--model`, `--port`, `--served-model-name`, or `--host` — talops's own
-rendered `Exec=` line already sets all four (`ExecArgs` in
+set `--model`, `--revision`, `--port`, `--served-model-name`, or `--host` —
+talops's own rendered `Exec=` line already sets all five (`ExecArgs` in
 `internal/vllm/render.go`): `model.repo` positionally, as `vllm serve`'s
 first argument, and the rest as flags. A duplicate in `args` would either
-conflict or silently lose to argument order.
+conflict or silently lose to argument order — a second `--revision` could
+load a revision other than the one `model.revision` pins and the applied
+record reports.
 
 `talops` chdirs to the repo root before every command, and a relative
 `--spec` is resolved **after** that chdir, so it's repo-root-relative.

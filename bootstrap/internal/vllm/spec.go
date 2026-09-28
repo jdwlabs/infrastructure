@@ -93,6 +93,9 @@ func validate(s Spec) error {
 	if !safeTokenRegex.MatchString(s.Model.Repo) {
 		return fmt.Errorf("model.repo must match %s, got %q: Exec= is a systemd command line that splits on whitespace and quotes and expands %% and $", safeTokenRegex.String(), s.Model.Repo)
 	}
+	if strings.HasPrefix(s.Model.Repo, "-") {
+		return fmt.Errorf("model.repo must not start with '-', got %q: it is vllm serve's first argument, and a leading dash would make it a flag", s.Model.Repo)
+	}
 
 	if s.ServedName == "" {
 		return fmt.Errorf("servedName must not be empty: it identifies the model in client requests")
@@ -114,6 +117,7 @@ func validate(s Spec) error {
 		"--port":              true,
 		"--served-model-name": true,
 		"--host":              true,
+		"--revision":          true,
 	}
 
 	for _, arg := range s.Args {
