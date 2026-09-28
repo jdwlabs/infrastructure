@@ -52,7 +52,7 @@ noise is what let the real replacement above go unnoticed.
 ## What is guarded, and why that is the right shape
 
 Every VM that takes its cloud-init from a snippet — devbox, devbox2,
-haproxy-1 — carries:
+haproxy-1, the GPU VM — carries:
 
 ```hcl
 lifecycle {

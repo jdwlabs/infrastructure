@@ -197,6 +197,12 @@ variable "gpu_vm_ssh_public_key" {
   type        = string
 }
 
+variable "gpu_vm_snippet_datastore" {
+  description = "Datastore holding the cloud-init user-data snippet. Needs the 'snippets' content type, which an LVM-thin pool cannot provide."
+  type        = string
+  default     = "local"
+}
+
 # HAPROXY LOAD BALANCER VM(S)
 # A LIST of objects, like the control-plane and worker variables. Empty by
 # default so a checkout without haproxy_vms in tfvars provisions nothing —

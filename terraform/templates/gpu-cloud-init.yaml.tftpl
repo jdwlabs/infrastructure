@@ -1,0 +1,38 @@
+#cloud-config
+# Day-0 only: OS/user/base-package bootstrap and the runtime directories vLLM
+# needs. Custom user-data fully replaces the Proxmox-generated cloud-init
+# config, so hostname and user creation must be carried here explicitly rather
+# than left to the provider's user_account block.
+#
+# The NVIDIA driver and container toolkit are deliberately NOT here — they
+# need the passthrough GPU present and a reboot to bind against it, which
+# cloud-init's first boot can't sequence. They're installed per
+# docs/vllm-serving.md. `talops vllm apply` converges everything else: the
+# Quadlet unit, the applied record, and the running container.
+hostname: ${hostname}
+fqdn: ${hostname}
+preserve_hostname: false
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - podman
+  - prometheus-node-exporter
+
+# Directories `talops vllm apply` and the Quadlet unit expect to already
+# exist: the model cache, the applied-record directory, and the
+# node-exporter textfile collector directory it writes drift metrics into.
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - mkdir -p /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter
