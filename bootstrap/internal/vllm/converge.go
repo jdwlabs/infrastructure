@@ -154,12 +154,13 @@ func quadletFile(s Spec) hostconverge.File {
 // pendingReasons says why apply would act, one reason per thing that
 // differs; empty means the host already matches s. Plan and Apply share it
 // so a plan that says "no change" can never precede an apply that restarts.
-func pendingReasons(ctx context.Context, r hostconverge.Runner, s Spec) ([]string, *Failure) {
+// It also returns the applied record it read, nil when there is none.
+func pendingReasons(ctx context.Context, r hostconverge.Runner, s Spec) ([]string, *Applied, *Failure) {
 	var reasons []string
 
 	same, err := hostconverge.Unchanged(ctx, r, []hostconverge.File{quadletFile(s)})
 	if err != nil {
-		return nil, &Failure{Code: CodeRead, Msg: fmt.Sprintf("read installed unit %s: %v", QuadletPath, err)}
+		return nil, nil, &Failure{Code: CodeRead, Msg: fmt.Sprintf("read installed unit %s: %v", QuadletPath, err)}
 	}
 	if !same {
 		reasons = append(reasons, "unit "+QuadletPath+" differs from serving.yaml")
@@ -167,7 +168,7 @@ func pendingReasons(ctx context.Context, r hostconverge.Runner, s Spec) ([]strin
 
 	same, err = hostconverge.Unchanged(ctx, r, DriftFiles())
 	if err != nil {
-		return nil, &Failure{Code: CodeRead, Msg: fmt.Sprintf("read installed drift check: %v", err)}
+		return nil, nil, &Failure{Code: CodeRead, Msg: fmt.Sprintf("read installed drift check: %v", err)}
 	}
 	if !same {
 		reasons = append(reasons, "drift check script or units differ from this talops build")
@@ -175,7 +176,7 @@ func pendingReasons(ctx context.Context, r hostconverge.Runner, s Spec) ([]strin
 
 	rec, err := ReadApplied(ctx, r)
 	if err != nil {
-		return nil, &Failure{Code: CodeRead, Msg: err.Error()}
+		return nil, nil, &Failure{Code: CodeRead, Msg: err.Error()}
 	}
 	switch {
 	case rec == nil:
@@ -186,12 +187,26 @@ func pendingReasons(ctx context.Context, r hostconverge.Runner, s Spec) ([]strin
 
 	legacy, err := LegacyPresent(ctx, r)
 	if err != nil {
-		return nil, &Failure{Code: CodeLegacyUnknown, Msg: err.Error()}
+		return nil, nil, &Failure{Code: CodeLegacyUnknown, Msg: err.Error()}
 	}
 	if legacy {
 		reasons = append(reasons, "legacy vllm.service is active or enabled and is replaced by the Quadlet unit")
 	}
-	return reasons, nil
+	return reasons, rec, nil
+}
+
+// previousIdentity is what the rollback gate must find serving: the server
+// the rollback restores answers under the name and model its own apply
+// recorded, and gating it as s would fail a healthy server whenever the
+// change being rolled back renamed or replaced the model. With no record
+// there is no better statement of the previous server than s.
+func previousIdentity(s Spec, prior *Applied) Spec {
+	if prior == nil {
+		return s
+	}
+	s.ServedName = prior.ServedName
+	s.Model.Repo = prior.ModelRepo
+	return s
 }
 
 func recordMatches(a Applied, s Spec) bool {
@@ -224,7 +239,7 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 		return failApply(res, CodeHostPrereq, err.Error())
 	}
 
-	reasons, f := pendingReasons(ctx, r, s)
+	reasons, prior, f := pendingReasons(ctx, r, s)
 	if f != nil {
 		return failApply(res, f.Code, f.Msg)
 	}
@@ -272,15 +287,16 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 	// server failing its gate, and what says which rollback step failed.
 	activations := 0
 	activateUnit := activate(s, legacy)
+	restored := previousIdentity(s, prior)
 	var gates []Phase
 	var forwardGateErr, rollbackActivateErr, rollbackGateErr error
 	verify := func(ctx context.Context, _ hostconverge.Runner) error {
-		name := "gate"
+		name, want := "gate", s
 		if activations > 1 {
-			name = "gate-rollback"
+			name, want = "gate-rollback", restored
 		}
 		vStart := t.now()
-		err := t.Gate.Wait(ctx, s)
+		err := t.Gate.Wait(ctx, want)
 		gates = append(gates, Phase{Name: name, Took: t.now().Sub(vStart)})
 		if name == "gate" {
 			forwardGateErr = err
@@ -666,7 +682,7 @@ func Plan(ctx context.Context, t Target, s Spec) PlanResult {
 	}
 	res.Diff = lineDiff(deployed, Quadlet(s), "deployed "+QuadletPath, "rendered")
 
-	reasons, f := pendingReasons(ctx, t.Runner, s)
+	reasons, _, f := pendingReasons(ctx, t.Runner, s)
 	if f != nil {
 		res.Failure = f
 		return res

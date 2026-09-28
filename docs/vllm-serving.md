@@ -248,12 +248,23 @@ it:
 - **A later apply that fails** restores the previous Quadlet unit, restarts
   it, and re-runs the health check against it (`phases` names this attempt
   `gate-rollback`). `serving: previous` in the report means that succeeded.
+  The rollback check looks for the previous server's own identity — the
+  `servedName` and `model.repo` in the `applied.json` that was on the host
+  when the apply started — not the one in the `serving.yaml` being applied.
+  A change that renames the served model or swaps the model repo would
+  otherwise fail the restored server's check even though it is healthy.
+  Only when there is no record does the rollback check use `serving.yaml`'s
+  identity.
 - **The first apply on a host** has no previous Quadlet unit to restore, so
   rollback instead restores `vllm.service` to the exact active/enabled state
   it had before the apply started — the vLLM `Activate` hook (`activate` in
   `internal/vllm/converge.go`) detects the Quadlet is now absent and calls
   `retireNewServer`, which stops the new server and puts `vllm.service` back
-  the way it found it. If nothing was serving before (no legacy unit, or one
+  the way it found it. No record exists on a first apply, so the restored
+  `vllm.service` is checked against `serving.yaml`'s `servedName` and
+  `model.repo`; a first apply that also changes either of them rolls back to
+  a server that fails that check and reports `serving: none` although the
+  legacy server is running. If nothing was serving before (no legacy unit, or one
   that was enabled but stopped), there is nothing to roll back to, and the
   report says so (`serving: none`) rather than waiting out a health-check
   timeout against nothing.
