@@ -118,22 +118,22 @@ type HAProxyVM struct {
 
 // ClusterState is your bootstrap-state.json as a typed struct
 type ClusterState struct {
-	Timestamp            time.Time   `json:"timestamp"`
-	TerraformHash        string      `json:"terraform_hash"`
-	ClusterName          string      `json:"cluster_name"`
-	BootstrapCompleted   bool        `json:"bootstrap_completed"`
-	FirstControlPlane    VMID        `json:"first_control_plane_vmid,omitempty"`
-	ControlPlanes        []NodeState `json:"control_planes"`
-	Workers              []NodeState `json:"workers"`
-	RemovedNodes         []NodeState `json:"removed_nodes,omitempty"` // Audit trail of previously removed nodes
-	HAProxyIP            net.IP      `json:"haproxy_ip"`
+	Timestamp          time.Time   `json:"timestamp"`
+	TerraformHash      string      `json:"terraform_hash"`
+	ClusterName        string      `json:"cluster_name"`
+	BootstrapCompleted bool        `json:"bootstrap_completed"`
+	FirstControlPlane  VMID        `json:"first_control_plane_vmid,omitempty"`
+	ControlPlanes      []NodeState `json:"control_planes"`
+	Workers            []NodeState `json:"workers"`
+	RemovedNodes       []NodeState `json:"removed_nodes,omitempty"` // Audit trail of previously removed nodes
+	HAProxyIP          net.IP      `json:"haproxy_ip"`
 	// Fingerprint of the config last pushed to HAProxy. A hint only — the
 	// authoritative answer is the file on the host, and this record cannot know
 	// about a change made outside talops.
 	HAProxyConfigHash    string `json:"haproxy_config_hash,omitempty"`
 	ControlPlaneEndpoint string `json:"control_plane_endpoint"`
-	KubernetesVersion    string      `json:"kubernetes_version"`
-	TalosVersion         string      `json:"talos_version"`
+	KubernetesVersion    string `json:"kubernetes_version"`
+	TalosVersion         string `json:"talos_version"`
 }
 
 // NodeTemplateHash returns the recorded template hash for a deployed node,
@@ -175,18 +175,26 @@ func (p *ReconcilePlan) IsEmpty() bool {
 
 // Config represents your terraform.tfvars + environment variables
 type Config struct {
-	ClusterName             string   `json:"cluster_name"`
-	TerraformTFVars         string   `json:"terraform_tfvars"`
-	ControlPlaneEndpoint    string   `json:"control_plane_endpoint"`
-	HAProxyIP               net.IP   `json:"haproxy_ip"`
-	HAProxyLoginUser        string   `json:"haproxy_login_username"`
-	HAProxySSHKeyPath       string   `json:"haproxy_ssh_key_path"`
-	HAProxyStatsUser        string   `json:"haproxy_stats_username"`
-	HAProxyStatsPassword    string   `json:"haproxy_stats_password"`
+	ClusterName          string `json:"cluster_name"`
+	TerraformTFVars      string `json:"terraform_tfvars"`
+	ControlPlaneEndpoint string `json:"control_plane_endpoint"`
+	HAProxyIP            net.IP `json:"haproxy_ip"`
+	HAProxyLoginUser     string `json:"haproxy_login_username"`
+	HAProxySSHKeyPath    string `json:"haproxy_ssh_key_path"`
+	HAProxyStatsUser     string `json:"haproxy_stats_username"`
+	HAProxyStatsPassword string `json:"haproxy_stats_password"`
 	// Load-balancer VMs declared in terraform.tfvars. Empty means no load
 	// balancer is under Terraform management, which is how the push target is
 	// told apart from a host built by hand outside this repo.
-	HAProxyVMs              []HAProxyVM `json:"haproxy_vms,omitempty"`
+	HAProxyVMs []HAProxyVM `json:"haproxy_vms,omitempty"`
+
+	// GPU VM (vLLM host). IP may be declared with a CIDR suffix in tfvars,
+	// like haproxy_vms' ip; the login user defaults to "vllm" when tfvars
+	// leaves it unset, and the key path falls back to ProxmoxSSHKeyPath.
+	GPUVMIP         net.IP `json:"gpu_vm_ip"`
+	GPUVMUser       string `json:"gpu_vm_user"`
+	GPUVMSSHKeyPath string `json:"gpu_vm_ssh_key_path"`
+
 	AdminAllowedCIDRs       []string `json:"admin_allowed_cidrs"`
 	KubernetesVersion       string   `json:"kubernetes_version"`
 	TalosVersion            string   `json:"talos_version"`

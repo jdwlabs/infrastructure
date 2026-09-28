@@ -792,6 +792,32 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 		}
 	}
 
+	// GPU VM (vLLM host). gpu_vm_ip may carry a CIDR suffix the same way
+	// haproxy_vms' ip does, so it is stripped before parsing.
+	if m.config.GPUVMIP == nil {
+		if v := extractSimpleStringField(content, "gpu_vm_ip"); v != "" {
+			bare := strings.SplitN(v, "/", 2)[0]
+			if ip := net.ParseIP(bare); ip != nil {
+				m.config.GPUVMIP = ip
+			}
+		}
+	}
+	if m.config.GPUVMSSHKeyPath == "" {
+		if v := extractSimpleStringField(content, "gpu_vm_ssh_key_path"); v != "" {
+			m.config.GPUVMSSHKeyPath = v
+		}
+	}
+	// gpu_vm_user defaults to "vllm" rather than staying empty: every caller
+	// of it (the SSH client) needs a login user, and every host this talks to
+	// is provisioned with that account.
+	if m.config.GPUVMUser == "" {
+		if v := extractSimpleStringField(content, "gpu_vm_user"); v != "" {
+			m.config.GPUVMUser = v
+		} else {
+			m.config.GPUVMUser = "vllm"
+		}
+	}
+
 	// Load-balancer VMs under Terraform management. Read even when empty:
 	// "no VM is declared" is what distinguishes the hand-built load balancer
 	// from a reproducible one, and that distinction is reported, not inferred.

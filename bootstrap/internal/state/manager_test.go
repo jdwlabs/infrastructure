@@ -838,6 +838,58 @@ func TestManager_LoadTerraformExtras(t *testing.T) {
 			},
 		},
 		{
+			name: "extracts gpu_vm_ip stripping the CIDR suffix",
+			initialConfig: func(c *types.Config) {
+				c.GPUVMIP = nil // Clear to allow extraction
+			},
+			tfvarsContent: `gpu_vm_ip = "192.168.1.50/24"`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				require.NotNil(t, c.GPUVMIP)
+				assert.True(t, c.GPUVMIP.Equal(net.ParseIP("192.168.1.50")))
+			},
+		},
+		{
+			name: "preserves gpu_vm_ip when set by flag",
+			initialConfig: func(c *types.Config) {
+				c.GPUVMIP = net.ParseIP("10.0.0.2")
+			},
+			tfvarsContent: `gpu_vm_ip = "192.168.1.50"`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.True(t, c.GPUVMIP.Equal(net.ParseIP("10.0.0.2")))
+			},
+		},
+		{
+			name:          "extracts gpu_vm_ssh_key_path",
+			tfvarsContent: `gpu_vm_ssh_key_path = "/home/ops/.ssh/gpu_vm_id_ed25519"`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, "/home/ops/.ssh/gpu_vm_id_ed25519", c.GPUVMSSHKeyPath)
+			},
+		},
+		{
+			name:          "extracts gpu_vm_user",
+			tfvarsContent: `gpu_vm_user = "ops"`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, "ops", c.GPUVMUser)
+			},
+		},
+		{
+			name:          "defaults gpu_vm_user to vllm when tfvars omits it",
+			tfvarsContent: `cluster_name = "test-cluster"`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, "vllm", c.GPUVMUser)
+			},
+		},
+		{
+			name: "preserves gpu_vm_user when set by flag",
+			initialConfig: func(c *types.Config) {
+				c.GPUVMUser = "from-flag"
+			},
+			tfvarsContent: `gpu_vm_user = "ops"`,
+			validateConfig: func(t *testing.T, c *types.Config) {
+				assert.Equal(t, "from-flag", c.GPUVMUser)
+			},
+		},
+		{
 			name:          "extracts kubernetes_version",
 			tfvarsContent: `kubernetes_version = "v1.35.1"`,
 			validateConfig: func(t *testing.T, c *types.Config) {
