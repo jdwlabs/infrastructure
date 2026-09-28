@@ -412,14 +412,19 @@ and runs them in a fixed order:
 4. **Activate** the change (a service reload or restart).
 5. **Verify** the activated change is actually working.
 
-A failure at `Activate` or `Verify` restores every file `Apply` touched —
-copying back its backup for a file that had one, and deleting a file that
-didn't exist before the attempt — then re-runs `Activate`/`Verify` against
-the restored configuration, so a host is never left on a change that didn't
-work. `Result.RolledBack` and `Result.RollbackErr` tell the caller whether
-recovery itself succeeded. `Unchanged` compares the files a `Change` would
-install against what's on disk (by content hash) without writing anything;
-vLLM's `plan` and `apply` are its only callers (`pendingReasons` in
+When the `Change` has a `Verify` hook, a failure at `Activate` or `Verify`
+restores every file `Apply` touched — copying back its backup for a file
+that had one, and deleting a file that didn't exist before the attempt —
+then re-runs `Activate`/`Verify` against the restored configuration.
+`Result.RolledBack` and `Result.RollbackErr` tell the caller whether
+recovery itself succeeded. A `Change` without `Verify` gets no rollback of
+an `Activate` failure: the error is returned as-is and the new files stay
+installed, so the guarantee that a failed change is undone holds only for a
+caller that sets `Verify` (vLLM does; HAProxy does not — see below).
+`Unchanged` compares the files a `Change` would install against what's on
+disk (by content hash) without writing anything, and treats a read that
+returns anything but a hash or "missing" as an error rather than as a
+change; vLLM's `plan` and `apply` are its only callers (`pendingReasons` in
 `internal/vllm/converge.go`), which is how they report installed-file drift
 without installing anything — HAProxy's `plan` compares configs with its own
 `Diff()` instead, and neither command group's `status` calls `Unchanged` at
@@ -438,10 +443,13 @@ haproxy.cfg but rules out shipping large files through this path.
 
 HAProxy's `Verify` is `nil`, so a failed `Activate` there is returned as-is
 rather than triggering a rollback — matching the config push's historical
-behavior before it moved onto `hostconverge`. vLLM always sets `Verify`
-(the health gate), so its `Activate` failures do roll back, and a rollback
-re-activates and re-verifies the previous Quadlet unit before reporting
-which server ended up serving.
+behavior before it moved onto `hostconverge`. A failed reload leaves the
+new, `haproxy -c`-validated `haproxy.cfg` on disk; nothing re-checks which
+configuration the running process holds, and the next reload or restart
+loads the new file. vLLM always sets `Verify` (the health gate), so its
+`Activate` failures do roll back, and a rollback re-activates and
+re-verifies the previous Quadlet unit before reporting which server ended
+up serving.
 
 ### 8. Configuration Management
 
