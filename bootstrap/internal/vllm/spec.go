@@ -79,8 +79,22 @@ func validate(s Spec) error {
 		return fmt.Errorf("model.revision must be a 40-character commit, got %q: a branch moves, so it cannot pin what serves", s.Model.Revision)
 	}
 
+	// Model.Repo, servedName and args all end up as literal words in the
+	// Quadlet's Exec=, a systemd command line that splits on whitespace and
+	// quotes and expands % and $ — and servedName also lands unescaped in a
+	// Prometheus label the drift check emits. Restricting to this charset
+	// keeps both safe without either side needing to quote or escape.
+	safeTokenRegex := regexp.MustCompile(`^[A-Za-z0-9._:/=,+@-]+$`)
+
+	if !safeTokenRegex.MatchString(s.Model.Repo) {
+		return fmt.Errorf("model.repo must match %s, got %q: Exec= is a systemd command line that splits on whitespace and quotes and expands %% and $", safeTokenRegex.String(), s.Model.Repo)
+	}
+
 	if s.ServedName == "" {
 		return fmt.Errorf("servedName must not be empty: it identifies the model in client requests")
+	}
+	if !safeTokenRegex.MatchString(s.ServedName) {
+		return fmt.Errorf("servedName must match %s, got %q: Exec= is a systemd command line that splits on whitespace and quotes and expands %% and $", safeTokenRegex.String(), s.ServedName)
 	}
 
 	if s.Port < 1 || s.Port > 65535 {
@@ -99,6 +113,10 @@ func validate(s Spec) error {
 	}
 
 	for _, arg := range s.Args {
+		if !safeTokenRegex.MatchString(arg) {
+			return fmt.Errorf("args must match %s, got %q: Exec= is a systemd command line that splits on whitespace and quotes and expands %% and $", safeTokenRegex.String(), arg)
+		}
+
 		var flagName string
 		if eqIdx := strings.Index(arg, "="); eqIdx >= 0 {
 			flagName = arg[:eqIdx]

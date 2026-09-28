@@ -1,0 +1,22 @@
+# Rendered by talops from inference/vllm/serving.yaml. Edit that file and run
+# `talops vllm apply`; changes made here are reported as drift.
+[Unit]
+Description=vLLM OpenAI-compatible server
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/vllm/vllm-openai:v0.24.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ContainerName=vllm
+AddDevice=nvidia.com/gpu=all
+Volume=/var/lib/vllm/hf:/root/.cache/huggingface
+PublishPort=8000:8000
+Environment=HF_HUB_OFFLINE=1
+Exec=QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ --revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --served-model-name qwen/qwen3-coder-30b-a3b --host 0.0.0.0 --port 8000 --quantization=awq_marlin --max-model-len=32768
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

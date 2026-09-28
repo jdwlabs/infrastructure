@@ -1,0 +1,6 @@
+[Unit]
+Description=vLLM serving drift check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vllm-drift-check

@@ -126,6 +126,67 @@ args: [--model-loader-extra-config=foo, --quantization=awq_marlin]
 	assert.Equal(t, 8000, s.Port)
 }
 
+// yamlSingleQuote wraps a value in YAML single-quoted scalar syntax, whose
+// only escape is a doubled quote for a literal one — so a space, ", \, %,
+// or $ inside it reaches the decoded Go string unmolested, and it's our own
+// validate() regex (not a YAML-parse failure) that has to reject it.
+func yamlSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func TestParseRejectsUnsafeCharacters(t *testing.T) {
+	type fields struct {
+		repo string
+		name string
+		arg  string
+	}
+	good := fields{
+		repo: "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ",
+		name: "qwen/qwen3-coder-30b-a3b",
+		arg:  "--quantization=awq_marlin",
+	}
+	render := func(f fields) []byte {
+		return []byte(fmt.Sprintf(
+			"image: docker.io/vllm/vllm-openai:v0.24.0@sha256:%s\nmodel: {repo: %s, revision: %s}\nservedName: %s\nargs: [%s]\n",
+			strings.Repeat("a", 64), yamlSingleQuote(f.repo), strings.Repeat("b", 40), yamlSingleQuote(f.name), yamlSingleQuote(f.arg),
+		))
+	}
+
+	t.Run("valid fields still parse", func(t *testing.T) {
+		_, err := Parse(render(good))
+		assert.NoError(t, err)
+	})
+
+	chars := map[string]string{
+		"space":        " ",
+		"double quote": `"`,
+		"single quote": "'",
+		"backslash":    `\`,
+		"percent":      "%",
+		"dollar":       "$",
+	}
+	for charName, ch := range chars {
+		t.Run("model.repo contains "+charName, func(t *testing.T) {
+			f := good
+			f.repo = "Org/M" + ch + "odel"
+			_, err := Parse(render(f))
+			assert.Error(t, err)
+		})
+		t.Run("servedName contains "+charName, func(t *testing.T) {
+			f := good
+			f.name = "qwen" + ch + "ai"
+			_, err := Parse(render(f))
+			assert.Error(t, err)
+		})
+		t.Run("args contains "+charName, func(t *testing.T) {
+			f := good
+			f.arg = "--foo=bar" + ch + "baz"
+			_, err := Parse(render(f))
+			assert.Error(t, err)
+		})
+	}
+}
+
 func TestParseAcceptsValidImages(t *testing.T) {
 	cases := map[string]string{
 		"docker.io with tag": `image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
