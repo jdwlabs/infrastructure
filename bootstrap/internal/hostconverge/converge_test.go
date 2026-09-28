@@ -383,6 +383,34 @@ func TestUnchangedComparesHashes(t *testing.T) {
 	assert.False(t, same)
 }
 
+func TestUnchangedReadsOnlySha256sumsStdout(t *testing.T) {
+	r := &fakeRunner{out: map[string]string{"sha256sum": "missing\n"}}
+	_, err := Unchanged(t.Context(), r, []File{{Path: "/etc/a", Content: []byte("x")}})
+	require.NoError(t, err)
+	require.Len(t, r.cmds, 1)
+	assert.Equal(t, "sudo sh -c 'if test -e /etc/a; then sha256sum /etc/a 2>/dev/null; else echo missing; fi'", r.cmds[0])
+}
+
+// The runner returns combined output, so anything but a hash is noise on
+// stderr or a failed read, and reading it as "changed" would hide that.
+func TestUnchangedRejectsOutputThatIsNotAHash(t *testing.T) {
+	for name, out := range map[string]string{
+		"empty":         "",
+		"error text":    "sha256sum: /etc/a: Permission denied\n",
+		"short hex":     "2d711642  /etc/a\n",
+		"noise first":   "sudo: unable to resolve host gpu\n2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881  /etc/a\n",
+		"uppercase hex": "2D711642B726B04401627CA9FBAC32F5C8530FB1903CC4DB02258717921A4881  /etc/a\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &fakeRunner{out: map[string]string{"sha256sum": out}}
+			same, err := Unchanged(t.Context(), r, []File{{Path: "/etc/a", Content: []byte("x")}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "/etc/a")
+			assert.False(t, same)
+		})
+	}
+}
+
 func TestUnchangedMissingFile(t *testing.T) {
 	r := &fakeRunner{out: map[string]string{"sudo sh -c 'if test -e": "missing"}}
 	same, err := Unchanged(t.Context(), r, []File{{Path: "/etc/a", Content: []byte("x")}})

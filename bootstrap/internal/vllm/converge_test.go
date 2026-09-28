@@ -186,7 +186,7 @@ var (
 	reMove    = regexp.MustCompile(`^sudo mv (\S+) (\S+)$`)
 	reRemove  = regexp.MustCompile(`^sudo rm -f (\S+)$`)
 	reChmod   = regexp.MustCompile(`^sudo chmod \S+ (\S+)$`)
-	reHash    = regexp.MustCompile(`^sudo sh -c 'if test -e (\S+); then sha256sum \S+; else echo missing; fi'$`)
+	reHash    = regexp.MustCompile(`^sudo sh -c 'if test -e (\S+); then sha256sum \S+ 2>/dev/null; else echo missing; fi'$`)
 	reCat     = regexp.MustCompile(`^sudo cat (\S+)( 2>/dev/null)?$`)
 	reTest    = regexp.MustCompile(`^sudo test -e (\S+)$`)
 	reTouch   = regexp.MustCompile(`^sudo touch (\S+)$`)
@@ -418,7 +418,7 @@ func newerSpec() Spec {
 // ---- exact command text, mirrored from hostconverge and converge.go ----
 
 func hashCmd(p string) string {
-	return "sudo sh -c 'if test -e " + p + "; then sha256sum " + p + "; else echo missing; fi'"
+	return "sudo sh -c 'if test -e " + p + "; then sha256sum " + p + " 2>/dev/null; else echo missing; fi'"
 }
 
 func installCmds(f hostconverge.File, existed bool) []string {
