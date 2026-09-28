@@ -16,6 +16,11 @@ import (
 // unbounded memory commitment to whatever that server sends back.
 const maxGateBodyBytes = 1 << 20 // 1 MiB
 
+// maxToolCallAttempts bounds how many times checkToolCall retries a prose
+// miss: enough to absorb sampling flake without letting a parser that is
+// truly broken take long to fail deterministically.
+const maxToolCallAttempts = 3
+
 // HealthGate decides whether a vLLM server is serving the model it was
 // asked to serve: present in /v1/models, able to complete, able to call a
 // tool. Zero value BaseURL is invalid; HTTP and Poll default on use.
@@ -191,8 +196,13 @@ func (g HealthGate) checkCompletion(ctx context.Context, s Spec) error {
 // hands the model's free-form reply to --tool-call-parser to extract the
 // calls; "required" makes vLLM constrain the output to the tool schema
 // itself, which passes even with a parser that can parse nothing. With auto
-// the model may answer in prose instead, so the prompt leaves it no other
-// answer to give, and Wait retries a miss.
+// the model may answer in prose instead of calling the tool even on a
+// healthy server, so a single miss here retries up to maxToolCallAttempts
+// times before failing — Check runs once on a no-op apply, so without its
+// own retry a prose reply there would report a healthy server as down. Only
+// a prose miss (HTTP 200, no tool_calls) is retried; a transport, non-200
+// or parse error returns immediately, since none of those are the flake
+// this guards against.
 func (g HealthGate) checkToolCall(ctx context.Context, s Spec) error {
 	reqBody := map[string]any{
 		"model":      s.ServedName,
@@ -217,14 +227,24 @@ func (g HealthGate) checkToolCall(ctx context.Context, s Spec) error {
 		"tool_choice": "auto",
 	}
 
-	_, toolCalls, err := g.chatCompletion(ctx, reqBody)
-	if err != nil {
-		return fmt.Errorf("tool call check: %w", err)
+	var lastMiss error
+	for attempt := 1; attempt <= maxToolCallAttempts; attempt++ {
+		if attempt > 1 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+
+		_, toolCalls, err := g.chatCompletion(ctx, reqBody)
+		if err != nil {
+			return fmt.Errorf("tool call check: %w", err)
+		}
+		if len(toolCalls) > 0 {
+			return nil
+		}
+		lastMiss = fmt.Errorf("tool call check: model answered in prose, no tool_calls in response (attempt %d/%d)", attempt, maxToolCallAttempts)
 	}
-	if len(toolCalls) == 0 {
-		return fmt.Errorf("tool call check: no tool_calls in response")
-	}
-	return nil
+	return lastMiss
 }
 
 // chatCompletion POSTs reqBody to /v1/chat/completions and returns
