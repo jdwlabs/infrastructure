@@ -7,6 +7,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/hostconverge"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/sshutil"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
@@ -160,7 +161,15 @@ func searchString(s, substr string) bool {
 	return false
 }
 
-func (c *Client) doUpdate(_ context.Context, config string) error {
+// convergeRunner adapts the client's injectable runner to hostconverge, so the
+// tests' mock server sees exactly the commands it always has.
+type convergeRunner struct{ r sshRunner }
+
+func (c convergeRunner) Run(_ context.Context, cmd string) (string, error) {
+	return c.r.runSSHOutput(cmd)
+}
+
+func (c *Client) doUpdate(ctx context.Context, config string) error {
 	timestamp := time.Now().Format("20060102-150405")
 
 	c.logger.Info("updating HAProxy configuration",
@@ -168,37 +177,22 @@ func (c *Client) doUpdate(_ context.Context, config string) error {
 		zap.String("user", c.sshUser),
 		zap.String("backup_suffix", timestamp))
 
-	// 1. Write new config to temp location using base64 to avoid heredoc injection
-	encoded := base64Encode(config)
-	writeCmd := fmt.Sprintf("echo '%s' | base64 -d > /tmp/haproxy.cfg.new", encoded)
-	if err := c.runner.runSSH(writeCmd); err != nil {
-		return fmt.Errorf("write temp config: %w", err)
-	}
-
-	// 2. Backup existing config
-	backupCmd := fmt.Sprintf("sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.backup.%s", timestamp)
-	if err := c.runner.runSSH(backupCmd); err != nil {
-		c.logger.Warn("failed to backup existing config (may not exist yet)", zap.Error(err))
-	}
-
-	// 3. Install new config
-	if err := c.runner.runSSH("sudo mv /tmp/haproxy.cfg.new /etc/haproxy/haproxy.cfg"); err != nil {
-		return fmt.Errorf("install config: %w", err)
-	}
-
-	// 4. Validate config
-	if err := c.runner.runSSH("sudo haproxy -c -f /etc/haproxy/haproxy.cfg"); err != nil {
-		c.logger.Error("HAProxy config validation failed, rolling back", zap.Error(err))
-		rollbackCmd := fmt.Sprintf("sudo cp /etc/haproxy/haproxy.cfg.backup.%s /etc/haproxy/haproxy.cfg", timestamp)
-		if rollbackErr := c.runner.runSSH(rollbackCmd); rollbackErr != nil {
-			return fmt.Errorf("config validation failed and rollback also failed: validation=%w, rollback=%v", err, rollbackErr)
-		}
-		return fmt.Errorf("config validation failed (rolled back): %w", err)
-	}
-
-	// 5. Reload HAProxy
-	if err := c.runner.runSSH("sudo systemctl reload haproxy"); err != nil {
-		return fmt.Errorf("reload HAProxy: %w", err)
+	_, err := hostconverge.Apply(ctx, convergeRunner{c.runner}, hostconverge.Change{
+		Files: []hostconverge.File{{Path: "/etc/haproxy/haproxy.cfg", Content: []byte(config)}},
+		Validate: func(ctx context.Context, r hostconverge.Runner) error {
+			_, err := r.Run(ctx, "sudo haproxy -c -f /etc/haproxy/haproxy.cfg")
+			return err
+		},
+		Activate: func(ctx context.Context, r hostconverge.Runner) error {
+			if _, err := r.Run(ctx, "sudo systemctl reload haproxy"); err != nil {
+				return fmt.Errorf("reload HAProxy: %w", err)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		c.logger.Error("HAProxy configuration update failed", zap.Error(err))
+		return err
 	}
 
 	c.logger.Info("HAProxy configuration updated and reloaded successfully")
