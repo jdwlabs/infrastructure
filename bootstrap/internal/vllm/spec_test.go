@@ -27,14 +27,15 @@ func TestParseRejects(t *testing.T) {
 	good := func() map[string]string {
 		return map[string]string{
 			"image": "docker.io/vllm/vllm-openai:v0.24.0@sha256:" + strings.Repeat("a", 64),
+			"repo":  "Org/M",
 			"rev":   strings.Repeat("b", 40),
 			"name":  "qwen/qwen3-coder-30b-a3b",
 			"args":  "[--quantization=awq_marlin]",
 		}
 	}
 	render := func(m map[string]string) []byte {
-		return []byte(fmt.Sprintf("image: %s\nmodel: {repo: Org/M, revision: %s}\nservedName: %s\nargs: %s\n",
-			m["image"], m["rev"], m["name"], m["args"]))
+		return []byte(fmt.Sprintf("image: %s\nmodel: {repo: %s, revision: %s}\nservedName: %s\nargs: %s\n",
+			m["image"], m["repo"], m["rev"], m["name"], m["args"]))
 	}
 	cases := map[string]func(map[string]string){
 		"tag without digest":          func(m map[string]string) { m["image"] = "docker.io/vllm/vllm-openai:v0.24.0" },
@@ -58,6 +59,11 @@ func TestParseRejects(t *testing.T) {
 		"--port in args":      func(m map[string]string) { m["args"] = "[--port, '9000']" },
 		"--served-model-name": func(m map[string]string) { m["args"] = "[--served-model-name=y]" },
 		"--host in args":      func(m map[string]string) { m["args"] = "[--host=0.0.0.0]" },
+		"--revision in args":  func(m map[string]string) { m["args"] = "[--revision=main]" },
+		"--revision as a separate word": func(m map[string]string) {
+			m["args"] = "[--revision, main]"
+		},
+		"model repo that is a flag": func(m map[string]string) { m["repo"] = "--trust-remote-code" },
 		"image contains semicolon": func(m map[string]string) {
 			m["image"] = "docker.io/vllm/vllm-openai:v0.24.0;id@sha256:" + strings.Repeat("a", 64)
 		},
@@ -68,6 +74,8 @@ func TestParseRejects(t *testing.T) {
 			m["image"] = "docker.io/vllm/vllm-openai:v0.24.0`id`@sha256:" + strings.Repeat("a", 64)
 		},
 	}
+	_, err := Parse(render(good()))
+	require.NoError(t, err, "the base every case mutates must itself be valid")
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			m := good()
