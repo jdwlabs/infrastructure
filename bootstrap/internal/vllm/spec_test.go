@@ -57,8 +57,11 @@ func TestParseRejects(t *testing.T) {
 		"--model in args":     func(m map[string]string) { m["args"] = "[--model=x]" },
 		"--port in args":      func(m map[string]string) { m["args"] = "[--port, '9000']" },
 		"--served-model-name": func(m map[string]string) { m["args"] = "[--served-model-name=y]" },
-		"--host in args":      func(m map[string]string) { m["args"] = "[--host=0.0.0.0]" },
-		"--revision in args":  func(m map[string]string) { m["args"] = "[--revision=main]" },
+		"--served_model_name, underscore spelling": func(m map[string]string) {
+			m["args"] = "[--served_model_name=y]"
+		},
+		"--host in args":     func(m map[string]string) { m["args"] = "[--host=0.0.0.0]" },
+		"--revision in args": func(m map[string]string) { m["args"] = "[--revision=main]" },
 		"--revision as a separate word": func(m map[string]string) {
 			m["args"] = "[--revision, main]"
 		},

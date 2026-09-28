@@ -132,7 +132,11 @@ func validate(s Spec) error {
 			flagName = arg
 		}
 
-		if forbiddenFlags[flagName] {
+		// vLLM's FlexibleArgumentParser normalises '_' to '-' in long-option
+		// names, so --served_model_name is the same flag to vLLM as
+		// --served-model-name; look it up the way vLLM would, not the way
+		// it was spelled here.
+		if forbiddenFlags[strings.ReplaceAll(flagName, "_", "-")] {
 			if flagName == "--model" {
 				return fmt.Errorf("args must not contain %s: model.repo is already passed positionally by talops's rendered Exec= line", flagName)
 			}
