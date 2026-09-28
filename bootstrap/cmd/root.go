@@ -99,6 +99,7 @@ func Execute() error {
 		resetCmd(a),
 		infraCmd(a),
 		haproxyCmd(a),
+		vllmCmd(a),
 		upCmd(a),
 		downCmd(a),
 		pruneNodesCmd(a),
