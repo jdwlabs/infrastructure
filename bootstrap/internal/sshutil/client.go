@@ -127,20 +127,51 @@ func AgentAuth() ssh.AuthMethod {
 // returned alongside the error when the command ran but exited non-zero, so a
 // caller that can interpret the output does not lose it.
 func Run(addr string, cfg *ssh.ClientConfig, cmd string) (string, error) {
-	conn, err := ssh.Dial("tcp", addr, cfg)
+	return RunContext(context.Background(), addr, cfg, cmd)
+}
+
+// RunContext is Run bounded by ctx. The SSH library takes no context, so a
+// cancelled ctx closes the connection underneath the handshake or the
+// running command, which is the only way to unblock either; the error then
+// wraps ctx.Err() so a caller can tell an interrupt from a failed command.
+func RunContext(ctx context.Context, addr string, cfg *ssh.ClientConfig, cmd string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("run SSH command: %w", err)
+	}
+
+	d := net.Dialer{Timeout: cfg.Timeout}
+	netConn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return "", fmt.Errorf("dial SSH: %w", err)
 	}
+	stop := context.AfterFunc(ctx, func() { _ = netConn.Close() })
+	defer stop()
+
+	c, chans, reqs, err := ssh.NewClientConn(netConn, addr, cfg)
+	if err != nil {
+		_ = netConn.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("dial SSH: %w", ctxErr)
+		}
+		return "", fmt.Errorf("dial SSH: %w", err)
+	}
+	conn := ssh.NewClient(c, chans, reqs)
 	defer func() { _ = conn.Close() }()
 
 	session, err := conn.NewSession()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("create SSH session: %w", ctxErr)
+		}
 		return "", fmt.Errorf("create SSH session: %w", err)
 	}
 	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(cmd)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return string(output), fmt.Errorf("run SSH command: %w, output: %s", ctxErr, string(output))
+		}
 		return string(output), fmt.Errorf("run SSH command: %w, output: %s", err, string(output))
 	}
 
@@ -180,9 +211,9 @@ func (c *Client) UseAgent() bool {
 	return true
 }
 
-func (c *Client) Run(_ context.Context, cmd string) (string, error) {
+func (c *Client) Run(ctx context.Context, cmd string) (string, error) {
 	addr := net.JoinHostPort(c.host, c.port)
 	cfg := c.cfg
 	cfg.HostKeyAlgorithms = HostKeyAlgorithms(addr)
-	return Run(addr, &cfg, cmd)
+	return RunContext(ctx, addr, &cfg, cmd)
 }
