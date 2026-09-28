@@ -101,6 +101,95 @@ func TestCheckFailsNamingToolCallWhenAbsent(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool call")
 }
 
+// toolCallOnlyHandler routes the plain-completion check (no "tools" key)
+// straight to a passing reply, and hands every request that does carry
+// "tools" to fn — isolating the tool-call probe's own retries from the
+// unrelated completion check that shares the same endpoint.
+func toolCallOnlyHandler(fn func(w http.ResponseWriter, body map[string]any)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, ok := body["tools"]; !ok {
+			_, _ = w.Write([]byte(chatResponse("stop", "")))
+			return
+		}
+		fn(w, body)
+	}
+}
+
+func modelsHandler(servedName, repo string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": servedName, "root": repo}},
+		})
+	}
+}
+
+// TestCheckToolCallRetriesAProseMissThenSucceeds pins the fix for review
+// finding D: a single prose reply used to fail the whole check, which made
+// Apply's no-change path (a single Check, no Wait) report a healthy server
+// as down whenever the tool call was missed once.
+func TestCheckToolCallRetriesAProseMissThenSucceeds(t *testing.T) {
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", modelsHandler("qwen/qwen3-coder-30b-a3b", "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"))
+	mux.HandleFunc("/v1/chat/completions", toolCallOnlyHandler(func(w http.ResponseWriter, body map[string]any) {
+		if attempts.Add(1) < 3 {
+			_, _ = w.Write([]byte(chatResponse("stop", "")))
+			return
+		}
+		_, _ = w.Write([]byte(chatResponse("stop", sampleToolCall)))
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(3), attempts.Load())
+}
+
+func TestCheckToolCallFailsAfterThreeProseAnswers(t *testing.T) {
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", modelsHandler("qwen/qwen3-coder-30b-a3b", "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"))
+	mux.HandleFunc("/v1/chat/completions", toolCallOnlyHandler(func(w http.ResponseWriter, body map[string]any) {
+		attempts.Add(1)
+		_, _ = w.Write([]byte(chatResponse("stop", "")))
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "prose")
+	assert.Equal(t, int32(3), attempts.Load())
+}
+
+// TestCheckToolCallDoesNotRetryAnHTTPError pins that only a prose miss (HTTP
+// 200, no tool_calls) is retried — a broken parser or a down server fails
+// on the first attempt, exactly like every other check here.
+func TestCheckToolCallDoesNotRetryAnHTTPError(t *testing.T) {
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", modelsHandler("qwen/qwen3-coder-30b-a3b", "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"))
+	mux.HandleFunc("/v1/chat/completions", toolCallOnlyHandler(func(w http.ResponseWriter, body map[string]any) {
+		attempts.Add(1)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	require.Error(t, err)
+	assert.Equal(t, int32(1), attempts.Load())
+}
+
 func TestToolCallCheckLeavesTheChoiceToTheParser(t *testing.T) {
 	var toolReq map[string]any
 	mux := http.NewServeMux()

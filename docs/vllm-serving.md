@@ -139,9 +139,10 @@ request sends `tool_choice: "auto"`, the way consumers do, because only
 and pass with a parser that parses nothing. With `auto` the model is free to
 answer in prose, so the request's system and user messages tell it to call
 `get_time`, and after a swap the check is retried until
-`healthGate.timeout`. The single check on an apply with nothing to change
-is not retried, so a model that answers in prose once reads as
-`gate_failed` there; re-running `apply` checks again.
+`healthGate.timeout`. The tool-call probe itself also retries a prose miss
+up to 3 times before failing (`checkToolCall`), so the single check on an
+apply with nothing to change does not report `gate_failed` for a server
+that would have passed on a second try.
 
 ### Apply outcomes: failure codes, `serving`, and exit codes
 
