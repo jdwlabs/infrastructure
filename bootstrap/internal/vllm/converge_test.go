@@ -536,6 +536,45 @@ func TestApplyUnchangedButUnhealthyReportsDown(t *testing.T) {
 	assert.Equal(t, []string{"host", "gate"}, phaseNames(res.Phases))
 }
 
+// cancelOnCheck cancels ctx once Check runs, the way an operator's Ctrl-C
+// lands while the no-change apply's single health check is in flight.
+type cancelOnCheck struct {
+	*fakeGate
+	cancel context.CancelFunc
+}
+
+func (g cancelOnCheck) Check(ctx context.Context, s Spec) error {
+	err := g.fakeGate.Check(ctx, s)
+	g.cancel()
+	return err
+}
+
+// An interrupt during the no-change apply's single Check is not proof the
+// server is down — unlike TestApplyUnchangedButUnhealthyReportsDown, apply
+// never got to find out, so it must not send the operator to the runbook
+// for a server it never actually examined.
+func TestApplyInterruptedDuringTheNoChangeCheckIsNotReportedAsDown(t *testing.T) {
+	s := sampleSpec()
+	h := install(newHost("inactive"), s)
+	fg := &fakeGate{h: h, checkErr: errors.New("models check: context canceled")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := cancelOnCheck{fakeGate: fg, cancel: cancel}
+
+	res := Apply(ctx, target(h, g), s)
+
+	require.NotNil(t, res.Failure)
+	assert.Equal(t, CodeStage, res.Failure.Code)
+	assert.Contains(t, res.Failure.Msg, "cancelled")
+	assert.Equal(t, ServingPrevious, res.Serving)
+	assert.False(t, res.Changed)
+	assert.False(t, res.RolledBack)
+	assert.Equal(t, 1, fg.checkCalls)
+	help := strings.Join(res.Help, "\n")
+	assert.NotContains(t, help, "endpoint is down", "nothing was found to be down; the check was interrupted")
+	assert.Contains(t, help, "vllm apply --confirm", "re-running apply checks again")
+}
+
 // Each thing apply compares is, on its own, enough to make it act: a
 // record that disagrees with a unit that matches is still a host whose
 // provenance is wrong, and a legacy unit still serving is not converged.
