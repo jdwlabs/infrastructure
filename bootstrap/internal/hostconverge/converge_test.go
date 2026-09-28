@@ -198,9 +198,8 @@ func TestApplyBackupFailureAbortsBeforeInstall(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "back up /etc/a")
 	assert.Contains(t, r.cmds, "sudo rm -f /etc/.a.new.20260928-010203")
-	// I1 regression guard: a backup failure must never remove or overwrite
-	// the live file, since the live file is all that's left of the previous
-	// working config.
+	// A backup failure must never remove or overwrite the live file, since
+	// the live file is all that's left of the previous working config.
 	assert.NotContains(t, r.cmds, "sudo rm -f /etc/a")
 	for _, c := range r.cmds {
 		assert.False(t, strings.HasPrefix(c, "sudo mv "), "should not have attempted mv")

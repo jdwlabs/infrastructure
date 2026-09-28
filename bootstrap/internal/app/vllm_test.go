@@ -167,7 +167,7 @@ func TestOperatorIdentityIsUserAtHost(t *testing.T) {
 	assert.True(t, strings.HasPrefix(id, "jake@"), "got %q", id)
 }
 
-// C3: status must fail the exit code on drift alone, with no Failure set —
+// Status must fail the exit code on drift alone, with no Failure set —
 // the report's drift field is the signal, and it must still print first.
 func TestEmitVLLMStatusFailsTheExitCodeOnDriftAlone(t *testing.T) {
 	a := &App{}
