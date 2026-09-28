@@ -28,6 +28,8 @@ var RollbackTimeout = 15 * time.Minute
 
 var pathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
 
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 // Runner executes a command on the remote host and returns its output or an error.
 type Runner interface {
 	Run(ctx context.Context, cmd string) (string, error)
@@ -222,13 +224,16 @@ func restore(ctx context.Context, r Runner, done []installed, suffix string) err
 
 // Unchanged checks whether all files have the same content as their on-disk versions.
 // Runner errors are returned; missing files are treated as changed (false, nil).
+// Output that is neither "missing" nor a hash is an error: a runner returns
+// combined output, so it is a failed read or stderr noise, and calling that
+// "changed" would restart a server over a read that never happened.
 func Unchanged(ctx context.Context, r Runner, files []File) (bool, error) {
 	for _, f := range files {
 		if !pathPattern.MatchString(f.Path) {
 			return false, fmt.Errorf("reject unsafe path: %s", f.Path)
 		}
 
-		out, err := r.Run(ctx, "sudo sh -c 'if test -e "+f.Path+"; then sha256sum "+f.Path+"; else echo missing; fi'")
+		out, err := r.Run(ctx, "sudo sh -c 'if test -e "+f.Path+"; then sha256sum "+f.Path+" 2>/dev/null; else echo missing; fi'")
 		if err != nil {
 			return false, err
 		}
@@ -238,8 +243,11 @@ func Unchanged(ctx context.Context, r Runner, files []File) (bool, error) {
 			return false, nil
 		}
 
-		want := sha256.Sum256(f.Content)
 		got, _, _ := strings.Cut(out, " ")
+		if !sha256Hex.MatchString(got) {
+			return false, fmt.Errorf("hash %s: unexpected output %q", f.Path, out)
+		}
+		want := sha256.Sum256(f.Content)
 		if got != hex.EncodeToString(want[:]) {
 			return false, nil
 		}
