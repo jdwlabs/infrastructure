@@ -1,0 +1,271 @@
+package vllm
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// testSpec builds the Spec Check/Wait compare against. The gate dials
+// g.BaseURL, not s.Port, so the port here is a placeholder.
+func testSpec(timeout time.Duration) Spec {
+	return Spec{
+		ServedName: "qwen/qwen3-coder-30b-a3b",
+		Model:      Model{Repo: "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"},
+		Port:       8000,
+		HealthGate: Gate{Timeout: timeout},
+	}
+}
+
+// chatResponse renders a minimal /v1/chat/completions body. toolCalls, when
+// non-empty, is embedded verbatim as the tool_calls JSON array.
+func chatResponse(finishReason, toolCalls string) string {
+	tc := toolCalls
+	if tc == "" {
+		tc = "null"
+	}
+	return `{"choices":[{"finish_reason":"` + finishReason + `","message":{"tool_calls":` + tc + `}}]}`
+}
+
+const sampleToolCall = `[{"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{}"}}]`
+
+// healthyHandler serves /v1/models with a matching entry, a 1-token
+// completion that stops, and a tool call on every chat request — the
+// handler doesn't distinguish the plain-completion and tool-call requests
+// bodies, so it always answers with a tool call, which the plain-completion
+// check ignores.
+func healthyHandler(servedName, repo string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": servedName, "root": repo}},
+			})
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(chatResponse("stop", sampleToolCall)))
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func TestCheckPassesOnHealthyServer(t *testing.T) {
+	srv := httptest.NewServer(healthyHandler("qwen/qwen3-coder-30b-a3b", "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"))
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	assert.NoError(t, err)
+}
+
+func TestCheckFailsNamingRootOnMismatch(t *testing.T) {
+	srv := httptest.NewServer(healthyHandler("qwen/qwen3-coder-30b-a3b", "wrong/repo"))
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "root")
+	assert.Contains(t, err.Error(), "wrong/repo")
+}
+
+func TestCheckFailsNamingToolCallWhenAbsent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "qwen/qwen3-coder-30b-a3b", "root": "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"}},
+		})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		// Every chat request, tool-call or plain, answers with no tool_calls —
+		// that's the one thing under test here.
+		_, _ = w.Write([]byte(chatResponse("stop", "")))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool call")
+}
+
+func TestWaitSucceedsAfterServerTurnsHealthy(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n < 3 {
+			http.Error(w, "loading", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "qwen/qwen3-coder-30b-a3b", "root": "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"}},
+		})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(chatResponse("stop", sampleToolCall)))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL, Poll: 10 * time.Millisecond}
+	s := testSpec(time.Second)
+	err := g.Wait(context.Background(), s)
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, int(calls.Load()), 3)
+}
+
+func TestWaitReturnsLastCheckErrorWhenTimeoutElapses(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "loading", http.StatusServiceUnavailable)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL, Poll: 10 * time.Millisecond}
+	s := testSpec(50 * time.Millisecond)
+	start := time.Now()
+	err := g.Wait(context.Background(), s)
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "models")
+	assert.Less(t, elapsed, time.Second, "Wait must not sleep past the deadline")
+}
+
+func TestWaitStopsPromptlyOnContextCancellation(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "loading", http.StatusServiceUnavailable)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL, Poll: 10 * time.Millisecond}
+	s := testSpec(time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(30*time.Millisecond, cancel)
+
+	start := time.Now()
+	err := g.Wait(ctx, s)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "models")
+	assert.Less(t, elapsed, 500*time.Millisecond, "Wait must stop promptly on cancellation, not run out the hour timeout")
+}
+
+func TestCheckFailsNamingModelsWhenServedNameAbsent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "some/other-model", "root": "Some/OtherRepo"}},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	s := testSpec(time.Minute)
+	err := g.Check(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "models")
+	assert.Contains(t, err.Error(), s.ServedName)
+}
+
+// TestWaitPreservesSubstantiveErrorAcrossATimedOutAttempt pins a second
+// review finding: once a per-attempt deadline bounds each Check, a later
+// attempt that only fails because that per-attempt context expired must
+// not paper over an earlier attempt's real diagnosis (wrong model) with a
+// bare "context deadline exceeded". The server answers the first request
+// with a wrong root, then hangs on every subsequent request until that
+// request's own context ends — so the final error must still carry both
+// the original model-mismatch detail and the fact that the gate timed out.
+func TestWaitPreservesSubstantiveErrorAcrossATimedOutAttempt(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "qwen/qwen3-coder-30b-a3b", "root": "wrong/repo"}},
+			})
+			return
+		}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL, Poll: 20 * time.Millisecond}
+	s := testSpec(300 * time.Millisecond)
+
+	err := g.Wait(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "root")
+	assert.Contains(t, err.Error(), "timed out")
+}
+
+// TestWaitBoundsAHangingRequestToTheOverallDeadline pins the fix for a gap
+// found in review: a request that never returns was bounded only by the
+// HTTP client's own timeout, which can far outlive s.HealthGate.Timeout.
+// The server here blocks on its own request context instead of ever
+// responding, so the only thing that can end the attempt is Wait attaching
+// a per-attempt deadline to the context it hands Check.
+func TestWaitBoundsAHangingRequestToTheOverallDeadline(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	g := HealthGate{
+		BaseURL: srv.URL,
+		HTTP:    &http.Client{Timeout: 30 * time.Second},
+		Poll:    10 * time.Millisecond,
+	}
+	s := testSpec(200 * time.Millisecond)
+
+	start := time.Now()
+	err := g.Wait(context.Background(), s)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, time.Second, "Wait must not wait out the HTTP client's 30s timeout")
+	assert.True(t,
+		strings.Contains(err.Error(), "deadline") || strings.Contains(err.Error(), "timeout"),
+		"error should name the timeout/deadline, got: %v", err)
+}
+
+func TestModelsParsesIDAndRoot(t *testing.T) {
+	srv := httptest.NewServer(healthyHandler("qwen/qwen3-coder-30b-a3b", "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"))
+	defer srv.Close()
+
+	g := HealthGate{BaseURL: srv.URL}
+	entries, err := g.Models(context.Background())
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "qwen/qwen3-coder-30b-a3b", entries[0].ID)
+	assert.Equal(t, "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ", entries[0].Root)
+}
+
+func TestModelsFailsOnUnreachableServer(t *testing.T) {
+	g := HealthGate{BaseURL: "http://127.0.0.1:1"}
+	_, err := g.Models(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "models")
+}
