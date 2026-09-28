@@ -39,7 +39,6 @@ func TestParseRejects(t *testing.T) {
 	}
 	cases := map[string]func(map[string]string){
 		"tag without digest":          func(m map[string]string) { m["image"] = "docker.io/vllm/vllm-openai:v0.24.0" },
-		"digest without tag":          func(m map[string]string) { m["image"] = "@sha256:" + strings.Repeat("a", 64) },
 		"digest without repo":         func(m map[string]string) { m["image"] = "@sha256:" + strings.Repeat("a", 64) },
 		"repo without tag":            func(m map[string]string) { m["image"] = "docker.io/vllm/vllm-openai@sha256:" + strings.Repeat("a", 64) },
 		"ported registry without tag": func(m map[string]string) { m["image"] = "registry:5000/x@sha256:" + strings.Repeat("a", 64) },
