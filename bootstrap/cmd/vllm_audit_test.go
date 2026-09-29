@@ -91,7 +91,8 @@ func TestVLLMAuditWithoutDryRunRefusesBeforeAnyRequest(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, 1, ExitCode(err))
-	assert.Contains(t, out, "jira_not_built")
+	assert.Contains(t, out, "jira_unconfigured")
+	assert.Contains(t, out, "JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN unset")
 	assert.Empty(t, h.Requests())
 }
 
