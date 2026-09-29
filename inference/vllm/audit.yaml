@@ -1,0 +1,29 @@
+# Weekly local-model audit (`talops vllm audit`). Reviewed like code: the org
+# list, licences and parser rules are claims a PR changes, and the values
+# below are a starting point for the owner to correct. contextTokens and
+# gpuMemoryUtilization are read from serving.yaml so the two files cannot
+# disagree.
+windowDays: 7
+trendingWindowDays: 30
+trendingN: 50
+maxCandidates: 10
+maxRequests: 400          # hard cap; Hub allows 500 per 5 min per IP (anonymous)
+discoveryRequests: 120    # part of maxRequests reserved for discovery
+gpuMemMiB: 32607          # nvidia-smi on vllm-inference
+overheadGiB: 3
+orgs: [Qwen, meta-llama, mistralai, google, deepseek-ai, zai-org, openai,
+       nvidia, microsoft, ibm-granite, QuantTrio, RedHatAI, cpatonn]
+licenses:
+  allow: [apache-2.0, mit, llama3.1, llama3.2, llama3.3, llama4, gemma, qwen]
+  allowNames: []          # license_name values accepted when license is `other`
+parsers:                  # ordered; first match wins
+  - {modelType: qwen3_moe, nameRegex: "(?i)coder", parser: qwen3_xml}
+  - {modelType: qwen3_moe, parser: hermes}
+  - {modelType: qwen3, parser: hermes}
+  - {modelType: llama, parser: llama3_json,
+     extraArgs: ["--chat-template=<model's tool chat template>"]}
+  - {modelType: llama4, parser: llama4_pythonic}
+  - {modelType: mistral3, parser: mistral, extraArgs: ["--tokenizer-mode=mistral"]}
+  - {modelType: mistral, parser: mistral, extraArgs: ["--tokenizer-mode=mistral"]}
+  - {modelType: glm4_moe, parser: glm45}
+  - {modelType: granite, parser: granite}
