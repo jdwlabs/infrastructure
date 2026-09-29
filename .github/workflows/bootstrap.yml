@@ -10,19 +10,28 @@ name: Bootstrap
 # above is: the checksum-pinned tool installs and cache logic below only get
 # exercised by editing this file, so an edit that doesn't also touch
 # bootstrap/ would otherwise merge with zero CI signal.
+#
+# inference/vllm/** is in scope because tests here load the committed
+# serving.yaml and audit.yaml: a PR editing only one of them would otherwise
+# merge without the test that proves it still loads. model-audit.yml builds
+# this module, so an edit to it runs the same gates.
 on:
   push:
     branches: [main]
     paths:
       - 'bootstrap/**'
+      - 'inference/vllm/**'
       - 'terraform/terraform.tfvars.example'
       - '.github/workflows/bootstrap.yml'
+      - '.github/workflows/model-audit.yml'
   pull_request:
     branches: [main]
     paths:
       - 'bootstrap/**'
+      - 'inference/vllm/**'
       - 'terraform/terraform.tfvars.example'
       - '.github/workflows/bootstrap.yml'
+      - '.github/workflows/model-audit.yml'
 
 permissions:
   contents: read
