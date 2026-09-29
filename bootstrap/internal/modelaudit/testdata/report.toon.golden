@@ -1,0 +1,29 @@
+summary:
+  week: 2026-W40
+  model: QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ@c58857a7f41c0920f73d1b56678640f9c02017d7
+  servedName: qwen/qwen3-coder-30b-a3b
+  vllm: v0.24.0
+  budgetGiB: 28.66
+  checked: 3
+  candidates: 1
+  rejected: 2
+  requests: 9
+  dryRun: true
+candidates[1]{repo,pool,createdAt,downloads,quant,weightsGiB,totalGiB,parser,license,gated,url}:
+  Qwen/Qwen3-Coder-Next-Instruct,allow-listed,2026-09-26T06:00:00Z,500,awq,15.66,21.66,qwen3_xml,apache-2.0,manual,https://huggingface.co/Qwen/Qwen3-Coder-Next-Instruct/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+note: trial steps are a starting point pending the model-trial procedure
+trialSteps[2]{repo,step}:
+  Qwen/Qwen3-Coder-Next-Instruct,set --tool-call-parser=qwen3_xml
+  Qwen/Qwen3-Coder-Next-Instruct,add --chat-template=<model's tool chat template>
+rejectionCounts[2]{reason,count}:
+  "license other (a, b) not allowed",1
+  pipeline_tag missing,1
+rejected[2]{repo,reason}:
+  Qwen/Image,pipeline_tag missing
+  Org/Odd,"license other (a, b) not allowed"
+skipped[1]{source,error}:
+  trending,not read: request budget spent
+jira:
+  action: not-filed
+  key: -
+error: {code: example, msg: "two\nlines"}
