@@ -88,7 +88,7 @@ func (app *App) autoSeal(runErr error) {
 
 // MarkReadOnly flags whether the invoked command mutates secrets, controlling
 // the post-run auto-seal. The `secrets` subcommands manage the vault explicitly,
-// and status/plan/version never change it.
+// and status/plan/version/audit never change it.
 func (app *App) MarkReadOnly(cmd *cobra.Command) {
 	name := cmd.Name()
 	parent := ""
@@ -96,7 +96,7 @@ func (app *App) MarkReadOnly(cmd *cobra.Command) {
 		parent = cmd.Parent().Name()
 	}
 	app.readOnlyCmd = parent == "secrets" ||
-		name == "status" || name == "plan" || name == "version"
+		name == "status" || name == "plan" || name == "version" || name == "audit"
 }
 
 // AnchorToRepoRoot changes the working directory to the repository root so that
@@ -234,7 +234,26 @@ func (app *App) CheckVaultGit(allowStale, fetch bool) error {
 	return nil
 }
 
-func (app *App) InitSession(cmd *cobra.Command) error {
+// SessionOption adjusts InitSession for a command that needs less than the
+// cluster tooling every other command assumes.
+type SessionOption func(*sessionSettings)
+
+type sessionSettings struct {
+	skipPrerequisites bool
+}
+
+// SkipPrerequisites leaves out CheckPrerequisites, which execs sops,
+// talosctl, kubectl and terraform to log their versions: a command that uses
+// none of them should not run them.
+func SkipPrerequisites() SessionOption {
+	return func(s *sessionSettings) { s.skipPrerequisites = true }
+}
+
+func (app *App) InitSession(cmd *cobra.Command, opts ...SessionOption) error {
+	var settings sessionSettings
+	for _, o := range opts {
+		o(&settings)
+	}
 	var err error
 	app.Session, err = logging.NewRunSession(app.Cfg)
 	if err != nil {
@@ -245,7 +264,9 @@ func (app *App) InitSession(cmd *cobra.Command) error {
 
 	logging.PrintBanner(app.Session.Console, app.Version, app.Cfg.NoColor)
 
-	app.CheckPrerequisites()
+	if !settings.skipPrerequisites {
+		app.CheckPrerequisites()
+	}
 
 	return nil
 }

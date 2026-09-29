@@ -25,6 +25,7 @@ func TestMarkReadOnly(t *testing.T) {
 		{"status", "", true},
 		{"plan", "infra", true},
 		{"version", "", true},
+		{"audit", "vllm", true},
 		{"hydrate", "secrets", true},
 		{"seal", "secrets", true},
 		{"reconcile", "", false},
