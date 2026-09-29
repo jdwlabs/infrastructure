@@ -9,7 +9,9 @@ Convergence"). The GPU host's bring-up — the network gotcha, GPU passthrough,
 and the NVIDIA driver install — lives in
 [scenarios/ai-sre-agent-runbook.md](../scenarios/ai-sre-agent-runbook.md)
 (§3 for the driver). This document covers operating what runs on the host
-day to day: what serves, how to change it, and how to read drift.
+day to day: what serves, how to change it, and how to read drift. The
+[weekly model audit](#weekly-model-audit), which suggests what to change it
+to, is at the end.
 
 ## What serves and who depends on it
 
@@ -536,3 +538,195 @@ used:
    generates the CDI spec, `Stage` re-pulls the image and re-downloads the
    model (a fresh disk has no staged marker), and the usual converge/health-check/
    record sequence brings the host to what `serving.yaml` defines.
+
+## Weekly model audit
+
+`talops vllm audit` lists newly released models that could replace the one
+`serving.yaml` serves, and files the list to Jira.
+`.github/workflows/model-audit.yml` runs it every Monday at 06:00 UTC.
+
+### What it does and does not do
+
+It does:
+
+- read `serving.yaml` for the incumbent repo, revision, vLLM tag,
+  `--tool-call-parser`, `--max-model-len` and `--gpu-memory-utilization`;
+- read vLLM's tool-parser registry (`vllm/tool_parsers/__init__.py` at
+  `serving.yaml`'s tag) from GitHub. The run fails if that file is
+  unreadable, has fewer than 10 parsers, or lacks the incumbent's parser;
+- list the models each allow-listed org created in the last `windowDays`,
+  plus the top `trendingN` trending `text-generation` repos created in the
+  last `trendingWindowDays`. Trending repos are flagged **unvetted** and rank
+  after allow-listed ones;
+- reject, with a named reason, anything that fails any of these checks:
+  - `pipeline_tag` must be `text-generation` or `image-text-to-text`;
+  - the licence must be allowed;
+  - a gated repo needs `HF_TOKEN`;
+  - the repo must not be the incumbent or already on a `model-audit`
+    ticket. The last 26 tickets are read, descriptions and comments both.
+    This check runs before enrichment, so it spends no requests;
+  - it must be instruction-tuned;
+  - a parser rule must match, and that parser must exist in the registry;
+  - it must fit the GPU;
+- file one Jira ticket per ISO week, labelled `model-audit` and
+  `model-audit-<YYYY-Www>`, under `jira.parent`:
+  - a same-week re-run comments only the candidates not already on that
+    ticket;
+  - a week with no candidates adds one no-change comment to the newest
+    `model-audit` ticket. It skips the comment when that ticket is this
+    week's own, or when the audit's account already commented this week.
+
+Each candidate carries trial steps: an args delta against `serving.yaml`,
+written as a starting point. `servedName` is never changed in them, because
+consumers request the model by that name.
+
+It does not:
+
+- contact the GPU host, decrypt the vault, or edit `serving.yaml`;
+- open a PR or trial a model. A human decides whether to trial one, then
+  follows [Changing the model or version](#changing-the-model-or-version);
+- judge model quality. A small model that fits and has a parser rule is
+  reported like any other;
+- report a new revision of a repo already reported.
+
+Every read failure either shows in the report or stops the run. A failed org
+or trending read, or an org cut short by the budget, is a `skipped` row; a
+candidate the budget left unread is rejected as `not enriched: request
+budget spent`. A run stops with exit 1 and files nothing when:
+
+- the registry, `serving.yaml` or `audit.yaml` cannot be used;
+- every allow-listed org query fails, or the discovery budget runs out
+  before any org is read;
+- the Jira history search fails, because filing without dedupe would repeat
+  candidates;
+- the run is interrupted (`SIGINT`/`SIGTERM`) during discovery or
+  enrichment, with code `cancelled`.
+
+A failed Jira create or comment also exits 1, as `jira_write_failed`.
+
+Run it locally with `talops vllm audit --dry-run`. A dry run performs every
+read and no write. When the `JIRA_*` variables are set, that includes Jira's
+reads, and the report's `jira.action` says what would happen (`would-create`,
+`would-comment` or `none`). Without them, dedupe is reported as skipped.
+Without `--dry-run`, a missing `JIRA_*` variable exits 1 before any request.
+`--json` prints the report as one JSON object.
+
+### `inference/vllm/audit.yaml`
+
+It is decoded strictly: an unknown key or an out-of-range value fails the run
+as `config_unreadable`. `contextTokens` and the GPU memory utilization are
+not here; they come from `serving.yaml`, so the two files cannot disagree.
+
+| Field | Meaning | Allowed |
+|---|---|---|
+| `windowDays` | how far back an allow-listed org's new repos are read, by creation date | 1–90 |
+| `trendingWindowDays` | how old a trending repo may be and still be reported | 1–365 |
+| `trendingN` | how many trending repos are read (one page) | 1–100 |
+| `maxCandidates` | candidates reported; the rest are rejected as `over maxCandidates (N)` | 1–50 |
+| `maxRequests` | hard cap on Hub and GitHub attempts, retries included; Jira is not counted | 1–500 (the Hub's anonymous limit is 500 per 5 minutes per IP) |
+| `discoveryRequests` | the share of `maxRequests` the registry read and the listings may spend; enrichment gets the rest | 1 to `maxRequests`−1 |
+| `gpuMemMiB` | the card's total memory. The budget is `gpuMemMiB / 1024 × --gpu-memory-utilization` | 1024–1048576 |
+| `overheadGiB` | constant added to weights and KV cache in the fit estimate | 0–64 |
+| `orgs` | the allow-listed Hub organisations | at least one, no duplicates |
+| `licenses.allow` | accepted licence ids (`cardData.license`, else a `license:` tag) | |
+| `licenses.allowNames` | accepted `license_name` values when the licence is `other` | |
+| `parsers` | ordered rules, first match wins: `modelType`, optional `nameRegex` on the repo id, `parser`, optional `extraArgs` | at least one rule; `nameRegex` must compile |
+| `jira.project`, `jira.parent`, `jira.issueType` | where the weekly ticket is created; `parent` must be an issue in `project` | |
+
+A parser rule matches `config.json`'s `model_type`, or `text_config.model_type`
+for multimodal wrappers. **A rule is a claim, not a verified fact.** It says
+the family's chat format matches that vLLM parser. The audit only checks that
+the parser exists in the registry. A live tool call during the model trial is
+what proves the claim. `extraArgs` go into the trial steps word for word, so
+the `llama` rule's `--chat-template=<model's tool chat template>` is a
+reminder for the person running the trial, not a real path.
+
+A family on the allow-list with no rule shows up every week as `no parser
+rule for <model_type>`. To add one, add a rule in a PR. A config test checks
+that the committed rules still resolve the incumbent to `serving.yaml`'s
+`--tool-call-parser`.
+
+### Secrets
+
+The workflow reads four repository secrets:
+
+- `HF_TOKEN`: optional. It is sent only to the Hub, never to GitHub. Without
+  it, gated repos are rejected as `gated (...): licence acceptance and
+  HF_TOKEN required`. A gated repo is only readable if the token's account
+  has accepted that repo's licence on the Hub.
+- `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`: required for a real run.
+  The account needs to be able to search, create and comment in
+  `jira.project`.
+
+The owner sets them in their own terminal, never through an agent session,
+so no token reaches a transcript. `gh secret set` prompts for the value, so
+nothing lands in shell history:
+
+```bash
+gh secret set HF_TOKEN
+gh secret set JIRA_BASE_URL
+gh secret set JIRA_EMAIL
+gh secret set JIRA_API_TOKEN
+```
+
+### Rollout
+
+A scheduled run is never a dry run, and it exits 1 if the `JIRA_*` secrets
+are missing. Do these steps in order:
+
+1. Merge the workflow.
+2. Set the four secrets.
+3. Run the workflow manually with `dry_run=true` (the dispatch default):
+   `gh workflow run model-audit.yml -f dry_run=true`. Download the artifact
+   and read it. `report.json` is the full report, and `rejected.tsv` has one
+   line per rejected repo with its reason.
+4. Run it once with `dry_run=false` to file the first report:
+   `gh workflow run model-audit.yml -f dry_run=false`.
+5. From then on the Monday cron runs unattended.
+
+To fetch an artifact:
+
+1. `gh run list --workflow model-audit.yml --json databaseId,status,conclusion`
+2. `gh run download <databaseId>`
+
+Artifacts are kept for 14 days.
+
+### Keeping it running
+
+**GitHub disables scheduled workflows after 60 days without repository
+activity.** When that happens, the weekly Jira ticket or comment simply stops
+arriving. Nothing fails. Re-enable the workflow from its page under the
+Actions tab, or with `gh workflow enable model-audit.yml`, then dispatch one
+run to confirm.
+
+**Artifacts in this public repository are public.** Anyone can download the
+report and rejection table while they are retained. They hold public Hub
+metadata. The exception is a failed run's `error.msg`: a Jira connection
+error that never reached an HTTP status carries the full request URL, and
+that URL includes the `JIRA_BASE_URL` host.
+
+### Known limits
+
+- **`fit unknown`**: this is a rejection, never an assumed fit. The estimate
+  is `weights + KV cache + overheadGiB`. It cannot price these, so it
+  rejects them as `fit unknown`:
+  - MLA (`kv_lora_rank` set, as in the DeepSeek families);
+  - sliding-window attention in use (`sliding_window` set and
+    `use_sliding_window` not `false`);
+  - any `layer_types` entry other than `full_attention`, such as gpt-oss or
+    Granite 4-H;
+  - a config missing a field the formula needs;
+  - weights that are not root-level `*.safetensors`.
+
+  Qwen3's `sliding_window: null` with `use_sliding_window: false` is
+  estimated normally.
+- **The estimate is approximate.**
+  - The KV cache is priced at 2 bytes per element for the full
+    `--max-model-len`, so an FP8 KV cache is over-counted.
+  - `overheadGiB` is one constant for every model.
+  - The incumbent calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
+    3 GiB overhead = 21.66 GiB, against a 28.66 GiB budget.
+  - Tune `overheadGiB` against observed usage.
+- **Repos without `config.json`**, such as GGUF-only and adapter repos, are
+  rejected as `enrich failed: 404 (no config.json)`. Each one still costs
+  enrichment requests.

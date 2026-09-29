@@ -11,14 +11,14 @@ import (
 
 // vllmDescription is the one-line identity the bare group prints, so a
 // caller that lands here without context knows what this operates on.
-const vllmDescription = "Compare and converge the GPU host's vLLM server to inference/vllm/serving.yaml"
+const vllmDescription = "Compare and converge the GPU host's vLLM server to inference/vllm/serving.yaml, and audit the Hub for models that could replace it"
 
 func vllmCmd(a *app.App) *cobra.Command {
 	opts := &app.VLLMOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "vllm",
-		Short: "Inspect and converge the vLLM model server on the GPU host",
+		Short: "Inspect and converge the vLLM model server on the GPU host, and audit for replacement models",
 		Long: `Read and converge the GPU host's vLLM Quadlet unit to inference/vllm/serving.yaml.
 
 ` + "`status`" + ` and ` + "`plan`" + ` read only. ` + "`apply`" + ` restarts the server through the
@@ -27,7 +27,11 @@ whatever is currently serving, starts the new server, and only then checks
 that it answers serving.yaml's model — a failed check rolls back
 automatically to whatever was serving before. It interrupts whatever
 currently calls the server — ` + "`talops vllm plan`" + ` names them — for the length
-of that restart and check.`,
+of that restart and check.
+
+` + "`audit`" + ` never contacts the GPU host: it reads the Hugging Face Hub for newly
+released models that could replace the one serving.yaml serves and files
+them to Jira (` + "`--dry-run`" + ` files nothing).`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
