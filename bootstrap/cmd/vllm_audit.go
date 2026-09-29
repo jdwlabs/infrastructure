@@ -20,10 +20,15 @@ organisations in inference/vllm/audit.yaml (plus trending repos, flagged
 unvetted), keep those vLLM can serve with a tool parser and that fit the GPU,
 and report them with a starting set of trial steps for each.
 
-Read-only: it never contacts the GPU host, never decrypts the vault, and
-never changes serving.yaml. --dry-run is required until Jira filing lands.`,
+Files the list as one Jira ticket per ISO week (JIRA_BASE_URL, JIRA_EMAIL,
+JIRA_API_TOKEN), or a comment when nothing is new. --dry-run performs every
+read, Jira's included when those are set, and writes nothing. HF_TOKEN, when
+set, lets gated repos be checked.
+
+It never contacts the GPU host, never decrypts the vault, and never changes
+serving.yaml.`,
 		Example: `  talops vllm audit --dry-run
-  talops vllm audit --dry-run --json`,
+  talops vllm audit --json`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

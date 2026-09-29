@@ -2,15 +2,18 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/modelaudit"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/modelaudit/hub"
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/modelaudit/jira"
 )
 
 // DefaultAuditConfigPath is audit.yaml relative to the repo root.
@@ -23,6 +26,8 @@ type AuditEndpoints struct {
 	RawBase string
 	HTTP    *http.Client
 	Sleep   func(context.Context, time.Duration) error
+	// JiraHTTP reaches JIRA_BASE_URL; nil is a default client.
+	JiraHTTP *http.Client
 }
 
 // AuditOptions carries what `talops vllm audit` accepts.
@@ -37,9 +42,13 @@ type AuditOptions struct {
 	Now       func() time.Time
 }
 
+// jiraEnv names the credentials in the order a missing one is reported.
+var jiraEnv = []string{"JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"}
+
 // RunVLLMAudit lists newly released models that could replace the one
-// serving.yaml serves. It reads the Hub and GitHub and never touches the GPU
-// host, the vault or git.
+// serving.yaml serves and files them to Jira. It reads the Hub and GitHub
+// and never touches the GPU host, the vault or git. A dry run performs every
+// read, Jira's included when credentials are present, and no write.
 func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 	if opts.Getenv == nil {
 		opts.Getenv = os.Getenv
@@ -49,8 +58,15 @@ func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 		now = opts.Now
 	}
 
-	if !opts.DryRun {
-		return app.emitAudit(opts, failedAudit("jira_not_built", "Jira filing not built yet: run talops vllm audit --dry-run"))
+	var missing []string
+	for _, k := range jiraEnv {
+		if opts.Getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	if !opts.DryRun && len(missing) > 0 {
+		return app.emitAudit(opts, failedAudit("jira_unconfigured",
+			fmt.Sprintf("%s unset: filing needs JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN (or pass --dry-run)", strings.Join(missing, ", "))))
 	}
 
 	specPath, cfgPath, failure := auditPaths(opts)
@@ -66,22 +82,52 @@ func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 		return app.emitAudit(opts, failedAudit("config_unreadable", fmt.Sprintf("read %s: %v", cfgPath, err)))
 	}
 
+	deps := modelaudit.Deps{Now: now(), DryRun: opts.DryRun}
+	var api *jira.Client
+	var history modelaudit.History
+	if len(missing) == 0 {
+		api = &jira.Client{
+			Base:     strings.TrimRight(opts.Getenv("JIRA_BASE_URL"), "/"),
+			Email:    opts.Getenv("JIRA_EMAIL"),
+			Token:    opts.Getenv("JIRA_API_TOKEN"),
+			HTTP:     opts.Endpoints.JiraHTTP,
+			ReadOnly: opts.DryRun,
+		}
+		// Read before any Hub request: filing without dedupe would repeat
+		// candidates, so a failed read must stop the run while it is cheap.
+		history, err = modelaudit.LoadHistory(ctx, api, cfg.Jira.Project)
+		if err != nil {
+			return app.emitAudit(opts, failedAudit("jira_read_failed", err.Error()))
+		}
+		deps.Reported = history.Reported
+	} else {
+		deps.DedupeSkipped = "no Jira credentials (" + strings.Join(missing, ", ") + " unset)"
+	}
+
 	token := opts.Getenv("HF_TOKEN")
 	ep := opts.Endpoints
-	report, _ := modelaudit.Run(ctx, cfg, cur, modelaudit.Deps{
-		Hub: &hub.Client{
-			HubBase: orDefault(ep.HubBase, hub.DefaultHubBase),
-			RawBase: orDefault(ep.RawBase, hub.DefaultRawBase),
-			Token:   token,
-			HTTP:    ep.HTTP,
-			Budget:  hub.NewBudget(cfg.MaxRequests, cfg.DiscoveryRequests),
-			Sleep:   ep.Sleep,
-		},
-		HasToken:      token != "",
-		Now:           now(),
-		DryRun:        opts.DryRun,
-		DedupeSkipped: "Jira reads are not built yet",
-	})
+	deps.HasToken = token != ""
+	deps.Hub = &hub.Client{
+		HubBase: orDefault(ep.HubBase, hub.DefaultHubBase),
+		RawBase: orDefault(ep.RawBase, hub.DefaultRawBase),
+		Token:   token,
+		HTTP:    ep.HTTP,
+		Budget:  hub.NewBudget(cfg.MaxRequests, cfg.DiscoveryRequests),
+		Sleep:   ep.Sleep,
+	}
+	report, err := modelaudit.Run(ctx, cfg, cur, deps)
+	if err != nil || api == nil {
+		return app.emitAudit(opts, report)
+	}
+
+	if err := modelaudit.File(ctx, api, cfg, &report, history, deps.Now, opts.DryRun); err != nil {
+		code := "jira_read_failed"
+		var fe *modelaudit.FileError
+		if errors.As(err, &fe) && fe.Write {
+			code = "jira_write_failed"
+		}
+		report.Failure = &modelaudit.Failure{Code: code, Msg: err.Error()}
+	}
 	return app.emitAudit(opts, report)
 }
 
