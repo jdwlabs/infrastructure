@@ -23,6 +23,7 @@ parsers:
   - {modelType: qwen3_moe, nameRegex: "(?i)coder", parser: qwen3_xml}
   - {modelType: qwen3_moe, parser: hermes}
   - {modelType: mistral, parser: mistral, extraArgs: ["--tokenizer-mode=mistral"]}
+jira: {project: AUDIT, parent: AUDIT-1, issueType: Task}
 `
 
 func TestParseConfigAcceptsAValidConfig(t *testing.T) {
@@ -45,6 +46,10 @@ func TestParseConfigRejects(t *testing.T) {
 		"duplicate org":                {"orgs: [Qwen, QuantTrio]", "orgs: [Qwen, Qwen]"},
 		"bad regex":                    {`nameRegex: "(?i)coder"`, `nameRegex: "(?i)coder("`},
 		"rule without parser":          {"{modelType: qwen3_moe, parser: hermes}", "{modelType: qwen3_moe}"},
+		"lowercase project":            {"project: AUDIT,", "project: audit,"},
+		"parent outside project":       {"parent: AUDIT-1", "parent: OTHER-1"},
+		"parent not an issue key":      {"parent: AUDIT-1", "parent: AUDIT"},
+		"no issue type":                {"issueType: Task", `issueType: ""`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -57,7 +62,7 @@ func TestParseConfigRejects(t *testing.T) {
 }
 
 func TestParseConfigRejectsNoRules(t *testing.T) {
-	cut := validConfig[:strings.Index(validConfig, "parsers:")] + "parsers: []\n"
+	cut := validConfig[:strings.Index(validConfig, "parsers:")] + "parsers: []\njira: {project: AUDIT, parent: AUDIT-1, issueType: Task}\n"
 	_, err := ParseConfig([]byte(cut))
 	assert.ErrorContains(t, err, "at least one rule")
 }

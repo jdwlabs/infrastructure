@@ -27,3 +27,7 @@ parsers:                  # ordered; first match wins
   - {modelType: mistral, parser: mistral, extraArgs: ["--tokenizer-mode=mistral"]}
   - {modelType: glm4_moe, parser: glm45}
   - {modelType: granite, parser: granite}
+jira:                     # where reports are filed, under the audit's epic
+  project: JDWLABS
+  parent: JDWLABS-644
+  issueType: Task
