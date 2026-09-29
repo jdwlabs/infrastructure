@@ -21,12 +21,26 @@ var version = "dev"
 func Execute() error {
 	a := app.New(version)
 
-	var allowStaleVault bool
-	var fetchVault bool
 	var runErr error
 	defer func() {
 		a.Close(runErr)
 	}()
+
+	rootCmd := newRootCmd(a)
+	runErr = rootCmd.Execute()
+	a.Close(runErr)
+	a.Session = nil // prevent double-close in defer
+	if runErr != nil {
+		return runErr
+	}
+	return nil
+}
+
+// newRootCmd builds the full command tree around a, so a test can run a
+// subcommand through the same persistent hooks the binary does.
+func newRootCmd(a *app.App) *cobra.Command {
+	var allowStaleVault bool
+	var fetchVault bool
 
 	rootCmd := &cobra.Command{
 		Use:   "talops",
@@ -112,13 +126,7 @@ balancer (` + "`haproxy`" + `) and the vLLM GPU host (` + "`vllm`" + `).`,
 		versionCmd(version),
 	)
 
-	runErr = rootCmd.Execute()
-	a.Close(runErr)
-	a.Session = nil // prevent double-close in defer
-	if runErr != nil {
-		return runErr
-	}
-	return nil
+	return rootCmd
 }
 
 func bootstrapCmd(a *app.App) *cobra.Command {

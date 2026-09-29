@@ -95,6 +95,7 @@ func TestVLLMHelpNamesEveryCommand(t *testing.T) {
 	assert.Contains(t, out, "status")
 	assert.Contains(t, out, "plan")
 	assert.Contains(t, out, "apply")
+	assert.Contains(t, out, "audit")
 }
 
 func TestVLLMSubcommandHelpCarriesExamples(t *testing.T) {

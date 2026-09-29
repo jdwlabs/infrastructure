@@ -58,6 +58,7 @@ of that restart and check.`,
 		vllmStatusCmd(a, opts),
 		vllmPlanCmd(a, opts),
 		vllmApplyCmd(a, opts),
+		vllmAuditCmd(a, opts),
 	)
 
 	// Cobra reports an unrecognised flag on stderr, which a caller reading
