@@ -1,0 +1,7 @@
+{"type":"doc","version":1,"content":[
+{"type":"paragraph","content":[{"type":"text","text":"No new candidates in 2026-W40 (model-audit-2026-W40); 3 repos checked, 2 rejected."}]},
+{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Rejections"}]},
+{"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"license other (a, b) not allowed: 1"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"pipeline_tag missing: 1"}]}]}]},
+{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Sources skipped"}]},
+{"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"trending: not read: request budget spent"}]}]}]}
+]}
