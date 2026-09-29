@@ -55,6 +55,12 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 		r.Failure = &Failure{Code: code, Msg: msg}
 		return r, r.Failure
 	}
+	// A signal turns every remaining read into an error that would otherwise
+	// be recorded as a skipped org or a rejected candidate, so a cancelled run
+	// must fail rather than produce a report that looks complete.
+	cancelled := func() (Report, error) {
+		return fail("cancelled", "run cancelled: "+context.Cause(ctx).Error())
+	}
 
 	src, err := d.Hub.ToolParserRegistry(ctx, cur.VLLMTag)
 	if err != nil {
@@ -66,6 +72,9 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 	}
 
 	items, orgsRead, budgetStopped := discoverOrgs(ctx, cfg, d, &r)
+	if ctx.Err() != nil {
+		return cancelled()
+	}
 	if orgsRead == 0 {
 		if budgetStopped {
 			return fail("discovery_budget_spent", fmt.Sprintf("discovery budget (discoveryRequests=%d) spent before any allow-listed org was read", cfg.DiscoveryRequests))
@@ -73,6 +82,9 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 		return fail("discovery_failed", "every allow-listed org query failed")
 	}
 	items = append(items, discoverTrending(ctx, cfg, d, &r, items)...)
+	if ctx.Err() != nil {
+		return cancelled()
+	}
 	r.Summary.Checked = len(items)
 
 	var survivors []candidate
@@ -108,6 +120,9 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 			continue
 		}
 		row, reason, err := enrich(ctx, cfg, cur, d, reg, c, budget)
+		if ctx.Err() != nil {
+			return cancelled()
+		}
 		if errors.Is(err, hub.ErrBudget) {
 			r.reject(c.item.ID, "not enriched: request budget spent")
 			notEnriched++

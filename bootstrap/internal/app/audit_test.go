@@ -30,6 +30,10 @@ type auditEnv struct {
 	cfg  string
 	env  map[string]string
 	now  time.Time
+	// ctx and hubTransport, when set, replace a background context and the
+	// fake Hub's own transport.
+	ctx          context.Context
+	hubTransport http.RoundTripper
 }
 
 // newAuditEnv runs against the committed audit.yaml narrowed to two orgs, so
@@ -59,10 +63,18 @@ func set(old, new string) func(string) string {
 func (e *auditEnv) run(t *testing.T, dryRun bool) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	err := New("test").RunVLLMAudit(context.Background(), AuditOptions{
+	ctx := e.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	hubHTTP := e.hub.Server.Client()
+	if e.hubTransport != nil {
+		hubHTTP = &http.Client{Transport: e.hubTransport}
+	}
+	err := New("test").RunVLLMAudit(ctx, AuditOptions{
 		Spec: committedSpec, Config: e.cfg, DryRun: dryRun, Out: &out,
 		Endpoints: AuditEndpoints{
-			HubBase: e.hub.Server.URL, RawBase: e.hub.Server.URL, HTTP: e.hub.Server.Client(),
+			HubBase: e.hub.Server.URL, RawBase: e.hub.Server.URL, HTTP: hubHTTP,
 			Sleep:    func(context.Context, time.Duration) error { return nil },
 			JiraHTTP: e.jira.Server.Client(),
 		},
@@ -159,6 +171,56 @@ func TestAuditDiscoveryBudgetSpentBeforeAnyOrgFilesNothing(t *testing.T) {
 
 	assert.Equal(t, "discovery_budget_spent", failureCode(t, err))
 	assert.Zero(t, e.jira.Posts())
+}
+
+// cancelBefore cancels the run's context just before the first Hub request
+// that matches, the way a SIGTERM lands mid-run.
+type cancelBefore struct {
+	next   http.RoundTripper
+	match  func(*http.Request) bool
+	cancel context.CancelFunc
+}
+
+func (c cancelBefore) RoundTrip(req *http.Request) (*http.Response, error) {
+	if c.match(req) {
+		c.cancel()
+	}
+	return c.next.RoundTrip(req)
+}
+
+func cancelOn(e *auditEnv, match func(*http.Request) bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	e.ctx = ctx
+	e.hubTransport = cancelBefore{next: e.hub.Server.Client().Transport, match: match, cancel: cancel}
+}
+
+func TestAuditCancelledDuringDiscoveryFailsAndFilesNothing(t *testing.T) {
+	e := newAuditEnv(t)
+	e.hub.Orgs["Qwen"] = [][]audittest.Model{{newModel("Qwen/A-Instruct", shaA, 10)}}
+	e.hub.Orgs["QuantTrio"] = [][]audittest.Model{{newModel("QuantTrio/B-Instruct", shaB, 10)}}
+	cancelOn(e, func(r *http.Request) bool { return r.URL.Query().Get("author") == "QuantTrio" })
+
+	out, err := e.run(t, false)
+
+	assert.Equal(t, "cancelled", failureCode(t, err), out)
+	assert.Contains(t, out, "error: {code: cancelled")
+	assert.Zero(t, e.jira.Posts())
+	for _, r := range e.hub.Requests() {
+		assert.NotContains(t, r, "/revision/", "nothing is enriched once the run is cancelled")
+	}
+}
+
+func TestAuditCancelledDuringEnrichmentFailsAndFilesNothing(t *testing.T) {
+	e := newAuditEnv(t)
+	e.hub.Orgs["Qwen"] = [][]audittest.Model{{newModel("Qwen/A-Instruct", shaA, 20), newModel("Qwen/B-Instruct", shaB, 10)}}
+	cancelOn(e, func(r *http.Request) bool { return strings.HasPrefix(r.URL.Path, "/api/models/Qwen/A-Instruct/") })
+
+	out, err := e.run(t, false)
+
+	assert.Equal(t, "cancelled", failureCode(t, err), out)
+	assert.Contains(t, out, "error: {code: cancelled")
+	assert.Zero(t, e.jira.Posts())
+	assert.NotContains(t, out, "enrich failed: ", "a signal is not a per-candidate rejection")
 }
 
 func TestAuditEnrichmentBudgetSpentStillFilesAndNamesTheRest(t *testing.T) {
