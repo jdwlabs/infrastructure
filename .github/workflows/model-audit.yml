@@ -1,0 +1,73 @@
+name: Model audit
+
+# Weekly, read-only search for local models that could replace the one
+# inference/vllm/serving.yaml serves. It files or comments on one Jira ticket
+# and changes nothing else: no PR, no serving.yaml edit, no GPU host access.
+#
+# Hard caps: one scheduled run a week, one run at a time, a ten-minute job,
+# and maxRequests/maxCandidates in audit.yaml. The run stops when the report
+# is filed or the request budget is spent.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Read everything, file nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: bootstrap/go.mod
+
+      - name: Build talops
+        working-directory: bootstrap
+        run: go build -o "$RUNNER_TEMP/talops" .
+
+      # A scheduled run has no inputs, so it files for real; only a manual
+      # dispatch can ask for a dry run, and it defaults to one.
+      - name: Run the audit
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          set -o pipefail
+          mkdir -p audit-out
+          args=(vllm audit --json)
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          "$RUNNER_TEMP/talops" "${args[@]}" | tee audit-out/report.json
+
+      # Runs on failure too: a report that refused to file still says why.
+      - name: Extract the rejection table
+        if: always()
+        run: |
+          if [ -s audit-out/report.json ]; then
+            jq -r '.rejected[] | [.repo, .reason] | @tsv' audit-out/report.json > audit-out/rejected.tsv
+          fi
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: model-audit-${{ github.run_id }}
+          path: audit-out/
+          retention-days: 14
+          if-no-files-found: warn
