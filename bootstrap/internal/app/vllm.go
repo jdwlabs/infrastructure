@@ -202,7 +202,7 @@ func (app *App) vllmClient(cfg *types.Config, host string) (*sshutil.Client, *vl
 func sshAuthUnconfigured() *vllm.Failure {
 	return &vllm.Failure{
 		Code: "ssh_auth_unconfigured",
-		Msg:  "no SSH auth available: set gpu_vm_ssh_key_path in the vaulted tfvars, pass --ssh-key, or run an SSH agent",
+		Msg:  "no SSH auth available: set gpu_vm_ssh_key_path in the vaulted tfvars (it takes precedence over --ssh-key), pass --ssh-key when it is unset, or run an SSH agent",
 	}
 }
 
@@ -557,7 +557,7 @@ func helpForVLLMFailure(f *vllm.Failure) []string {
 		return []string{"talops vllm apply --confirm"}
 	case "ssh_auth_unconfigured":
 		return []string{
-			"set gpu_vm_ssh_key_path in the vaulted tfvars, or pass --ssh-key",
+			"set gpu_vm_ssh_key_path in the vaulted tfvars; --ssh-key is used only when it is unset",
 			"or run an SSH agent with the GPU host's key loaded",
 		}
 	}

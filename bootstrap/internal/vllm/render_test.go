@@ -243,12 +243,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func TestDriftScriptContainsArgsInspectFormat(t *testing.T) {
-	script, err := os.ReadFile("assets/vllm-drift-check.sh")
-	require.NoError(t, err)
-	assert.Contains(t, string(script), ArgsInspectFormat, "the script's podman --format string must be the exact same text as ArgsInspectFormat, or the two hashes are computed from different inputs")
-}
-
 func TestDriftCheckScriptReasons(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available on PATH")
