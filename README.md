@@ -13,7 +13,8 @@ terraform/    Proxmox VM definitions (providers, variables, control/worker nodes
 bootstrap/    Go CLI tool (talops) - cluster bootstrap, reconciliation, infrastructure management
 clusters/     Per-cluster runtime state created by talops (plaintext working files are
               gitignored; the SOPS+age encrypted vault is the shared source of truth)
-inference/    Serving definitions for hosts outside the cluster (vllm/serving.yaml)
+inference/    Serving definitions for hosts outside the cluster (vllm/serving.yaml) and
+              the weekly model audit's configuration (vllm/audit.yaml)
 scenarios/    Step-by-step operational runbooks and scaling-test fixtures
 docs/         Architecture and operations documentation
 ```
@@ -68,6 +69,7 @@ talops haproxy apply         Push the rendered config (validated, rolled back on
 talops vllm status           Compare serving.yaml, the applied record and the running container
 talops vllm plan             Diff the rendered Quadlet unit against the one installed, without touching it
 talops vllm apply --confirm  Restart the server to match serving.yaml (health-gated, rolled back on failure)
+talops vllm audit            List new Hub models that could replace the served one and file them to Jira (--dry-run files nothing)
 talops secrets status        Show vault recipients and artifact state
 talops secrets hydrate/seal  Decrypt vault to working files / encrypt back
 talops secrets lock          Seal the vault and remove plaintext working copies

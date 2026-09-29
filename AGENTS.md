@@ -21,6 +21,9 @@ lifecycle (`bootstrap`, `reconcile`, `status`, `upgrade-k8s`, ...) and
 converges two hosts that sit outside that cluster through
 `internal/hostconverge`: the HAProxy load balancer (`talops haproxy
 status/plan/apply`) and the vLLM GPU host (`talops vllm status/plan/apply`).
+`talops vllm audit` is the one vLLM command that touches neither the host
+nor the vault: a weekly workflow runs it to file newly released replacement
+models to Jira (`docs/vllm-serving.md`, "Weekly model audit").
 devbox2 and the dev VMs are neither Talos nodes nor converged by talops —
 they are cloud-init plus a runbook (`docs/devbox2-provisioning.md`,
 `docs/dev-vm-provisioning.md`).
@@ -28,9 +31,9 @@ they are cloud-init plus a runbook (`docs/devbox2-provisioning.md`,
 ## Repository Structure
 
 - `terraform/` — flat Terraform config (providers, variables, control/worker node definitions)
-- `bootstrap/` — `talops` CLI: full cluster lifecycle (bootstrap, reconcile, status, reset, infra deploy/destroy, haproxy status/plan/apply, vllm status/plan/apply, up/down, upgrade-k8s, secrets)
+- `bootstrap/` — `talops` CLI: full cluster lifecycle (bootstrap, reconcile, status, reset, infra deploy/destroy, haproxy status/plan/apply, vllm status/plan/apply/audit, up/down, upgrade-k8s, secrets)
 - `clusters/<name>/` — per-cluster runtime state created by `talops`. Plaintext working files (`secrets/`, `nodes/`, `state/`) are gitignored; the SOPS+age encrypted vault is the shared source of truth (see `docs/secrets.md`)
-- `inference/` — serving definitions for hosts outside the cluster (`vllm/serving.yaml`; see `docs/vllm-serving.md`)
+- `inference/` — serving definitions for hosts outside the cluster (`vllm/serving.yaml`), and the weekly model audit's configuration (`vllm/audit.yaml`); see `docs/vllm-serving.md`
 - `scenarios/` — step-by-step runbooks for operational tasks, plus scaling-test fixtures
 - `docs/` — architecture and operations documentation
 
