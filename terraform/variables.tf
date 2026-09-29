@@ -197,6 +197,12 @@ variable "gpu_vm_ssh_public_key" {
   type        = string
 }
 
+variable "gpu_vm_ssh_key_path" {
+  description = "Path to the SSH private key talops uses to reach the GPU VM; takes precedence over talops --ssh-key. talops reads it from tfvars; Terraform does not use it."
+  type        = string
+  default     = ""
+}
+
 variable "gpu_vm_snippet_datastore" {
   description = "Datastore holding the cloud-init user-data snippet. Needs the 'snippets' content type, which an LVM-thin pool cannot provide."
   type        = string

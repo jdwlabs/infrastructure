@@ -54,7 +54,7 @@ healthGate:
 | `servedName` | yes | non-empty, same charset as `model.repo` | Identifies the model in client requests, and lands unescaped in a Prometheus label the drift check emits. |
 | `port` | no (default `8000`) | 1–65535 | |
 | `args` | no | each element matches the same charset; JSON-valued vLLM args (anything needing a literal `{`/`}`/space) are unsupported for this reason | Every element is a literal `Exec=` word. |
-| `healthGate.timeout` | no (default `10m`) | duration, must be `> 0` | Model load on this card is minutes, not seconds — the AWQ 30B-A3B MoE weights alone take a while to page onto the GPU. |
+| `healthGate.timeout` | no (default `10m`) | duration, must be `> 0` and `<= 10m` (the 15m rollback bound minus 5m for restore and restart, since a rollback re-runs this gate against the restored server) | Model load on this card is minutes, not seconds — the AWQ 30B-A3B MoE weights alone take a while to page onto the GPU. |
 
 Unknown keys are rejected outright (`KnownFields(true)`), and `args` may not
 set `--model`, `--revision`, `--port`, `--served-model-name`, or `--host` —
@@ -163,7 +163,7 @@ every one of them. The first five apply to `status`/`plan` too; the rest are
 | `tfvars_unreadable` | `terraform.tfvars` was found but couldn't be parsed | Check the file; hydrate the vault if it looks stale. |
 | `vllm_host_unset` | No `--host`, and `gpu_vm_ip` is absent from tfvars | Pass `--host`, or add `gpu_vm_ip` to the vaulted tfvars (`talops secrets edit`). |
 | `spec_unreadable` | `serving.yaml` couldn't be found (no `--spec`, repo root unresolvable) or couldn't be parsed/validated | Fix the path, or fix the validation error `spec.go` reports. |
-| `ssh_auth_unconfigured` | No usable SSH key or agent for the GPU host | Set `gpu_vm_ssh_key_path` in the vaulted tfvars, pass `--ssh-key`, or run an SSH agent. |
+| `ssh_auth_unconfigured` | No usable SSH key or agent for the GPU host | Set `gpu_vm_ssh_key_path` in the vaulted tfvars, pass `--ssh-key`, or run an SSH agent. `gpu_vm_ssh_key_path` takes precedence: when it is set, `--ssh-key` is ignored for this host. |
 | `repo_root_unresolved` | *(apply only)* Couldn't find the repo's `terraform/` directory to check the spec against git | Run from inside the checkout, or pass `--spec` under it. |
 | `spec_outside_repo` | *(apply only)* `--spec` resolves to a path outside the repo | Point `--spec` at a file under the repo root. |
 | `spec_untracked` | *(apply only)* The spec isn't tracked by git | `git add` and commit it first. |
@@ -450,7 +450,8 @@ against it.
      apply reached the running VM's config after all.
 2. **Prerequisite: the GPU host must already be reachable by address.**
    `gpu_vm_ip` (and `gpu_vm_ssh_key_path`, if the default `--ssh-key`/an SSH
-   agent doesn't reach this host) has to already be in the vaulted tfvars —
+   agent doesn't reach this host; once set it takes precedence over
+   `--ssh-key`) has to already be in the vaulted tfvars —
    add it with `talops secrets edit` if it isn't. `vllm_host_unset` only
    fires when **neither** `--host` **nor** `gpu_vm_ip` resolves a host
    (`app/vllm.go:74-83`), so passing `--host` on every invocation is a

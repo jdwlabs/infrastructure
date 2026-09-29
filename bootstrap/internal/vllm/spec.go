@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/hostconverge"
 )
 
 type Spec struct {
@@ -28,6 +30,17 @@ type Model struct {
 
 type Gate struct {
 	Timeout time.Duration `yaml:"timeout"`
+}
+
+// rollbackSlack is the part of hostconverge.RollbackTimeout reserved for
+// restoring the previous unit and restarting it before the gate re-runs.
+const rollbackSlack = 5 * time.Minute
+
+// MaxGateTimeout is the longest healthGate.timeout a spec may set: a longer
+// gate would be cut short on rollback, reporting a restored server that is
+// still loading as not serving.
+func MaxGateTimeout() time.Duration {
+	return hostconverge.RollbackTimeout - rollbackSlack
 }
 
 func Load(path string) (Spec, error) {
@@ -110,6 +123,9 @@ func validate(s Spec) error {
 
 	if s.HealthGate.Timeout <= 0 {
 		return fmt.Errorf("healthGate.timeout must be > 0, got %v: the spec defines what runs on the host", s.HealthGate.Timeout)
+	}
+	if limit := MaxGateTimeout(); s.HealthGate.Timeout > limit {
+		return fmt.Errorf("healthGate.timeout must be <= %v, got %v: a rollback re-runs the gate against the restored server inside the %v rollback bound, after restore and restart", limit, s.HealthGate.Timeout, hostconverge.RollbackTimeout)
 	}
 
 	forbiddenFlags := map[string]bool{

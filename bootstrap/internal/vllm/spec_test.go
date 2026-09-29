@@ -154,6 +154,25 @@ healthGate: {timeout: -5m}
 	}
 }
 
+func TestParseBoundsGateTimeoutByRollback(t *testing.T) {
+	require.Equal(t, 10*time.Minute, MaxGateTimeout())
+	parse := func(timeout string) error {
+		_, err := Parse([]byte(`image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: qwen/qwen3-coder-30b-a3b
+healthGate: {timeout: ` + timeout + `}
+`))
+		return err
+	}
+
+	assert.NoError(t, parse("10m"))
+
+	err := parse("10m1s")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "healthGate.timeout")
+	assert.Contains(t, err.Error(), "10m0s")
+}
+
 func TestParseAcceptsNonForbiddenFlags(t *testing.T) {
 	s, err := Parse([]byte(`
 image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
