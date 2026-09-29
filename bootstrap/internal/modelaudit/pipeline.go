@@ -91,6 +91,17 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 	var rows []CandidateRow
 	notEnriched := 0
 	for _, c := range survivors {
+		// Dedupe needs nothing from the Hub, so it runs before enrichment: a
+		// reported repo stays in the trending window for weeks, and spending
+		// the budget on it would push a genuinely new repo out of the report.
+		switch {
+		case c.item.ID == cur.Repo:
+			r.reject(c.item.ID, "incumbent")
+			continue
+		case d.Reported[c.item.ID]:
+			r.reject(c.item.ID, "already reported")
+			continue
+		}
 		if notEnriched > 0 {
 			r.reject(c.item.ID, "not enriched: request budget spent")
 			notEnriched++
@@ -115,18 +126,7 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 	if d.Reported == nil {
 		r.skip("jira", "dedupe skipped: "+d.DedupeSkipped)
 	}
-	kept := rows[:0]
-	for _, row := range rows {
-		switch {
-		case row.Repo == cur.Repo:
-			r.reject(row.Repo, "incumbent")
-		case d.Reported[row.Repo]:
-			r.reject(row.Repo, "already reported")
-		default:
-			kept = append(kept, row)
-		}
-	}
-	for i, row := range kept {
+	for i, row := range rows {
 		if i >= cfg.MaxCandidates {
 			r.reject(row.Repo, fmt.Sprintf("over maxCandidates (%d)", cfg.MaxCandidates))
 			continue

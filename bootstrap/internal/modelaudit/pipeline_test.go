@@ -203,6 +203,39 @@ func TestRunDropsAlreadyReportedRepos(t *testing.T) {
 	for _, s := range r.Skipped {
 		assert.NotEqual(t, "jira", s.Source, "dedupe ran")
 	}
+	for _, req := range h.Requests() {
+		assert.NotContains(t, req, "Old-News-Instruct", "a reported repo is never enriched")
+	}
+}
+
+func TestRunNeverEnrichesTheIncumbent(t *testing.T) {
+	h := audittest.NewHub(t)
+	h.Orgs["QuantTrio"] = [][]audittest.Model{{fits("QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ", shaA, 1)}}
+	cfg := runConfig(t, "QuantTrio")
+
+	r, err := Run(context.Background(), cfg, testCurrent(t), deps(h, cfg))
+
+	require.NoError(t, err)
+	assert.Equal(t, "incumbent", rejected(r)["QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"])
+	assert.Equal(t, 3, r.Summary.Requests, "registry, one org page, trending; no enrich request")
+}
+
+func TestRunSpendsATightEnrichmentBudgetOnlyOnUnreportedRepos(t *testing.T) {
+	h := audittest.NewHub(t)
+	h.Orgs["Qwen"] = [][]audittest.Model{{fits("Qwen/Old-News-Instruct", shaA, 9), fits("Qwen/New-Instruct", shaB, 1)}}
+	cfg := runConfig(t, "Qwen")
+	cfg.MaxRequests = 6 // registry, org page, trending, three enrich requests for one repo
+	d := deps(h, cfg)
+	d.Reported = map[string]bool{"Qwen/Old-News-Instruct": true}
+
+	r, err := Run(context.Background(), cfg, testCurrent(t), d)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Qwen/New-Instruct"}, repos(r.Candidates))
+	assert.Equal(t, map[string]string{"Qwen/Old-News-Instruct": "already reported"}, rejected(r))
+	for _, s := range r.Skipped {
+		assert.NotEqual(t, "enrichment", s.Source, "the budget covered every repo that needed it")
+	}
 }
 
 func TestRunNamesEveryOrgTheDiscoveryBudgetStopped(t *testing.T) {
