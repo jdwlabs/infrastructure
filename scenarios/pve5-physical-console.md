@@ -17,7 +17,7 @@ those for the procedure; use this page for what you see on the screen.
 
 2026-09-23: a planned power-off of pve5 to cold-reset its GPU turned into an
 extra unplanned hour, entirely through console actions on a node that was
-fine. From the pve5 journal:
+fine. From the pve1/pve5 journals:
 
 ```
 Sep 23 00:39:53 pve1 corosync: [QUORUM] Members[5]: 1 2 3 4 5
@@ -53,9 +53,9 @@ Two properties of this box make that easy to repeat:
 | --- | --- | --- |
 | A few boot lines, then the screen stops changing | Normal boot with `quiet` | Nothing at the console. Check from another machine (below) after 90 s |
 | Screen idle, pve5 in `pvecm status` with 5 members | Healthy, rejoined node | Walk away. **Do not press the power key** |
-| Pings, but SSH (22) and the web UI (8006) refuse, and `pvecm status` shows 4 members, 90 s+ after power-on | Booted into rescue mode, or a real boot failure | Press Enter at the console and read the prompt, then [Leaving rescue mode](#leaving-rescue-mode) |
+| Pings, but SSH (22) and the web UI (8006) refuse, and `pvecm status` shows 4 members, 90 s+ after power-on | Booted into rescue mode, or a real boot failure | Press Enter at the console and read the prompt, then [Leaving rescue mode](#leaving-rescue-mode). If the root password is not to hand, a power cycle is the acceptable fallback there |
 | GRUB menu on screen | Boot menu before the kernel loads | Touch nothing. It times out to the default (top) entry |
-| No ping at all 3 min+ after power-on, and no disk or fan activity change | Did not POST or did not reach the kernel | This is the one case where another power cycle is reasonable |
+| No ping at all 3 min+ after power-on, and no disk or fan activity change | Did not POST or did not reach the kernel | Power cycle. This and the rescue-mode fallback above are the only two cases for a power action |
 | Healthy node, VM 111 (devbox) not running | Known autostart fault while its cloud-init drive sits on the NFS pool (the start collides with a half-mounted share), not a boot failure | `ssh root@pve5 'qm start 111'` |
 
 ## What a normal boot looks like
@@ -95,9 +95,10 @@ shutdowns — on 2026-09-23 `stopall` reported "unexpected status" for exactly
 this reason — and the Talos worker, the GPU VM and devbox all go down again.
 
 If you think the node is hung, prove it from another machine first
-(`pvecm status` from pve1, `nc -zv 192.168.1.204 22`). Only a node that
-fails those checks after 90 s is a candidate for any power action, and even
-then the first step is reading the console prompt, not pressing a button.
+(`pvecm status` from pve1, `nc -zv 192.168.1.204 22`). A node that fails
+those checks after 90 s is not yet a power-cycle candidate: read the console
+prompt first (it is most likely rescue mode), and power-cycle only in the two
+cases the [symptom table](#symptom-to-fix) names.
 
 ## Never pick the GRUB "recovery mode" entry
 
@@ -151,10 +152,11 @@ normal target from rescue mode: the boot skipped the microcode update
    [What a normal boot looks like](#what-a-normal-boot-looks-like).
 
 If the root password is not to hand (Vault runs in the cluster, and may be
-degraded while pve5's worker is down), a power cycle is acceptable **here
-only**, because a rescue-mode host runs no guests and no corosync, so there is
-nothing to race. Hold power until off, wait a few seconds, power on, and leave
-the GRUB menu alone.
+degraded while pve5's worker is down), a power cycle is acceptable as a
+fallback (one of the two power-cycle cases in the
+[symptom table](#symptom-to-fix)), because a rescue-mode host runs no guests
+and no corosync, so there is nothing to race. Hold power until off, wait a
+few seconds, power on, and leave the GRUB menu alone.
 
 ## Options to remove the trap (not adopted, pending decision)
 
