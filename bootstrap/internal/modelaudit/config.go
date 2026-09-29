@@ -9,23 +9,33 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Config is inference/vllm/audit.yaml.
 type Config struct {
-	WindowDays         int      `yaml:"windowDays"`
-	TrendingWindowDays int      `yaml:"trendingWindowDays"`
-	TrendingN          int      `yaml:"trendingN"`
-	MaxCandidates      int      `yaml:"maxCandidates"`
-	MaxRequests        int      `yaml:"maxRequests"`
-	DiscoveryRequests  int      `yaml:"discoveryRequests"`
-	GPUMemMiB          int      `yaml:"gpuMemMiB"`
-	OverheadGiB        float64  `yaml:"overheadGiB"`
-	Orgs               []string `yaml:"orgs"`
-	Licenses           Licenses `yaml:"licenses"`
-	Parsers            []Rule   `yaml:"parsers"`
+	WindowDays         int        `yaml:"windowDays"`
+	TrendingWindowDays int        `yaml:"trendingWindowDays"`
+	TrendingN          int        `yaml:"trendingN"`
+	MaxCandidates      int        `yaml:"maxCandidates"`
+	MaxRequests        int        `yaml:"maxRequests"`
+	DiscoveryRequests  int        `yaml:"discoveryRequests"`
+	GPUMemMiB          int        `yaml:"gpuMemMiB"`
+	OverheadGiB        float64    `yaml:"overheadGiB"`
+	Orgs               []string   `yaml:"orgs"`
+	Licenses           Licenses   `yaml:"licenses"`
+	Parsers            []Rule     `yaml:"parsers"`
+	Jira               JiraConfig `yaml:"jira"`
+}
+
+// JiraConfig is where reports are filed. It lives here rather than in code
+// so the project and parent are reviewed data, not constants.
+type JiraConfig struct {
+	Project   string `yaml:"project"`
+	Parent    string `yaml:"parent"`
+	IssueType string `yaml:"issueType"`
 }
 
 type Licenses struct {
@@ -110,8 +120,22 @@ func (c *Config) validate() error {
 			r.nameRe = re
 		}
 	}
+	if !jiraProjectRe.MatchString(c.Jira.Project) {
+		errs = append(errs, fmt.Errorf("jira.project must be a project key, got %q", c.Jira.Project))
+	}
+	if !jiraIssueRe.MatchString(c.Jira.Parent) || !strings.HasPrefix(c.Jira.Parent, c.Jira.Project+"-") {
+		errs = append(errs, fmt.Errorf("jira.parent must be an issue key in jira.project, got %q", c.Jira.Parent))
+	}
+	if c.Jira.IssueType == "" {
+		errs = append(errs, errors.New("jira.issueType must be set"))
+	}
 	return errors.Join(errs...)
 }
+
+var (
+	jiraProjectRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
+	jiraIssueRe   = regexp.MustCompile(`^[A-Z][A-Z0-9_]+-[1-9][0-9]*$`)
+)
 
 // ResolveParser returns the first rule matching the repo. The top-level
 // model_type is tried first; multimodal wrappers such as Mistral3 name their
