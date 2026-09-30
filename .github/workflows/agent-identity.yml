@@ -9,8 +9,10 @@ permissions:
 jobs:
   # Catches agent work that reaches a pull request with its attribution
   # missing: the registered agent App identity appearing on a commit, or as
-  # the PR author, while nothing on the branch records which agent produced
-  # the change. An agent co-author trailer on a human-opened PR is the
+  # the PR author, while nothing on the branch records which agent and which
+  # model produced the change. Attribution is two trailers: Co-Authored-By
+  # names the agent, Assisted-by: <agent>:<model-id> names the model, and
+  # neither alone answers both. Agent trailers on a human-opened PR are the
   # sanctioned attribution path, not the violation — the earlier reading,
   # which failed exactly that shape, left an agent no way to go green except
   # by deleting its own attribution. See jdwlabs/platform
@@ -94,6 +96,7 @@ jobs:
           total=0
           attributed=0
           unattributed_sha=""
+          unattributed_missing=""
 
           while IFS=':' read -r sha verified b64msg b64committer_login \
                                  b64author_login b64author_name b64author_email \
@@ -109,23 +112,45 @@ jobs:
             # domain to put there, and since the trailer is self-asserted the
             # domain never proved which agent wrote the commit anyway. Kept
             # identical to AGENT_TRAILER in tools/audit-admin-bypass.py.
-            if printf '%s' "${b64msg}" | base64 -d | grep -iqP '^Co-Authored-By:[ \t]*\S.*<[^<>@\s]+@[^<>@\s]+>\s*$'; then
+            missing=""
+            if ! printf '%s' "${b64msg}" | base64 -d | grep -iqP '^Co-Authored-By:[ \t]*\S.*<[^<>@\s]+@[^<>@\s]+>\s*$'; then
+              missing="Co-Authored-By"
+            fi
+            # Tool names may follow the model id, whitespace-separated, as the
+            # kernel's Assisted-by convention allows; the model id itself is
+            # one token, so an empty agent or model still fails.
+            if ! printf '%s' "${b64msg}" | base64 -d | grep -iqP '^Assisted-by:[ \t]*[^:\s][^:]*:\S+([ \t]+\S+)*\s*$'; then
+              missing="${missing:+${missing} or }Assisted-by"
+            fi
+            if [ -z "${missing}" ]; then
               attributed=$((attributed + 1))
               continue
             fi
 
-            # A commit GitHub itself created — a merge from the update-branch
-            # button, a web-UI revert or edit — is committed as web-flow and
-            # gives nobody an opportunity to write a trailer, so flagging one
-            # would rebuild the unsatisfiable red this check exists to remove.
-            # The exemption rests on GitHub's signature over that commit, not
-            # on the committer login by itself: that login is resolved from
-            # the committer email, which any local commit can set to
-            # noreply@github.com. GitHub signs what it creates, so a forged
-            # one arrives unsigned and stays in scope.
+            # A commit a human made through GitHub itself — a merge from the
+            # update-branch button, a web-UI revert or edit — is committed as
+            # web-flow and gives nobody an opportunity to write a trailer, so
+            # flagging one would rebuild the unsatisfiable red this check
+            # exists to remove. The exemption rests on GitHub's signature over
+            # that commit, not on the committer login by itself: that login is
+            # resolved from the committer email, which any local commit can
+            # set to noreply@github.com. GitHub signs what it creates, so a
+            # forged one arrives unsigned and stays in scope.
+            #
+            # The App's own API commits (contents API, createCommitOnBranch)
+            # are also signed and committed as web-flow, but the agent wrote
+            # their message and could have written the trailers, so a web-flow
+            # commit authored by the agent identity is not exempt.
             committer_login=$(printf '%s' "${b64committer_login}" | base64 -d)
             if [ "${verified}" = "true" ] && [ "${committer_login}" = "web-flow" ]; then
-              continue
+              author_is_agent=false
+              for b64field in "${b64author_login}" "${b64author_name}" "${b64author_email}"; do
+                if printf '%s' "${b64field}" | base64 -d | grep -qiE "${agent_pattern}"; then
+                  author_is_agent=true
+                  break
+                fi
+              done
+              [ "${author_is_agent}" = "true" ] || continue
             fi
 
             [ -z "${unattributed_sha}" ] || continue
@@ -142,6 +167,7 @@ jobs:
               field=$(printf '%s' "${b64field}" | base64 -d)
               if printf '%s' "${field}" | grep -qiE "${agent_pattern}"; then
                 unattributed_sha="${sha}"
+                unattributed_missing="${missing}"
                 break
               fi
             done
@@ -161,15 +187,15 @@ jobs:
           fi
 
           if [ -n "${unattributed_sha}" ]; then
-            echo "::error::Commit ${unattributed_sha:0:9} carries the registered agent identity (${AGENT_IDENTITY}) but no agent co-author trailer — the attribution that identity is meant to prove is missing."
-            echo "Restore the 'Co-Authored-By: <agent name> <email>' trailer on that commit — see jdwlabs/platform docs/adr/0027-agent-identity-tripwire-catches-missing-attribution.md."
+            echo "::error::Commit ${unattributed_sha:0:9} carries the registered agent identity (${AGENT_IDENTITY}) but no ${unattributed_missing} trailer — the attribution that identity is meant to prove is missing."
+            echo "Every agent commit needs both 'Co-Authored-By: <agent name> <email>' and 'Assisted-by: <agent>:<model-id>' — see jdwlabs/platform docs/adr/0027-agent-identity-tripwire-catches-missing-attribution.md."
             exit 1
           fi
 
           if [ "${PR_AUTHOR}" = "${AGENT_IDENTITY}" ] || [ "${PR_AUTHOR}" = "${AGENT_IDENTITY}[bot]" ]; then
             if [ "${attributed}" -eq 0 ]; then
-              echo "::error::This pull request was opened as the registered agent identity (${PR_AUTHOR}) but not one of its ${total} commit(s) names the agent that produced them."
-              echo "The App identity says a change is agent-authored; only the commit trailer says which agent — see jdwlabs/platform docs/adr/0023-phase4-concurrency-cap-and-agent-attribution.md §4."
+              echo "::error::This pull request was opened as the registered agent identity (${PR_AUTHOR}) but not one of its ${total} commit(s) names both the agent and the model that produced them (Co-Authored-By plus Assisted-by: <agent>:<model-id>)."
+              echo "The App identity says a change is agent-authored; only the commit trailers say which agent and model — see jdwlabs/platform docs/adr/0023-phase4-concurrency-cap-and-agent-attribution.md §4."
               exit 1
             fi
           fi
