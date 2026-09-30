@@ -15,7 +15,7 @@
       "Bash(git add *)",
       "Bash(git commit*)"
     ],
-    "deny": [
+    "ask": [
       "Bash(terraform apply*)",
       "Bash(terraform destroy*)",
       "Bash(kubectl apply*)",
