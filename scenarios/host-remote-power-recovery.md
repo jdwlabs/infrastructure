@@ -317,6 +317,13 @@ purchase for smart-plug/PDU hardware. WoL-only coverage (soft-off/crash) is
 accepted as the durable state; AC-loss recovery stays physical-access-only.
 Re-raise as a new ticket if that trade-off changes.
 
+One case has since landed on the wrong side of that trade-off: recovering a
+wedged GPU passthrough on pve5 requires removing rail power, so it cannot be
+done remotely at all (`gpu-passthrough-wedge-recovery.md`). It happened once,
+on 2026-09-22, and whether it recurs on every `vllm-inference` restart is not
+yet established. Noted as input if the smart-plug decision is ever revisited,
+not as a challenge to it.
+
 ## TrueNAS access
 
 **Resolved 2026-08-21** — this was the last open item blocking the
