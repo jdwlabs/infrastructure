@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Advisory second reviewer: it comments, never approves or blocks. Merge
+# gating stays with CODEOWNERS and the rulesets.
+language: en-US
+reviews:
+  request_changes_workflow: false
+  fail_commit_status: false
+  poem: false
+  in_progress_fortune: false
+  auto_review:
+    enabled: true
+    drafts: true
+  # Lockfiles and vendored output are regenerated, never hand-edited, so
+  # reviewing them spends the review budget on noise.
+  path_filters:
+    - "!**/pnpm-lock.yaml"
+    - "!**/package-lock.json"
+    - "!**/go.sum"
+    - "!**/Chart.lock"
+    - "!**/.terraform.lock.hcl"
+    - "!**/*.snap"
+chat:
+  auto_reply: true
