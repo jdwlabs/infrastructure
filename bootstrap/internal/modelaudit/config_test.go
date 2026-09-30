@@ -111,3 +111,57 @@ func TestCommittedRulesResolveTheIncumbentToItsServingParser(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, cur.ToolCallParser, r.Parser)
 }
+
+// Each case is shaped like the repo's real config.json: model_type, and
+// text_config.model_type where the repo is a multimodal wrapper. Resolving
+// through ResolveCandidateParser against the recorded v0.24.0 registry also
+// proves every rule names a parser that release actually has.
+func TestCommittedRulesResolveEachFamilyToItsV0240Parser(t *testing.T) {
+	c, err := LoadConfig("../../../inference/vllm/audit.yaml")
+	require.NoError(t, err)
+	reg, err := ParseRegistry(recordedRegistry(t), "qwen3_xml")
+	require.NoError(t, err)
+
+	cases := []struct {
+		repo, modelType, textModelType, parser string
+	}{
+		// MiniCPM5 reuses model_type llama, so it must win on name before
+		// the Llama 3 rule claims it with the wrong chat format.
+		{"openbmb/MiniCPM5-2B", "llama", "", "minicpm5"},
+		{"Qwen/Qwen3-Coder-30B-A3B-Instruct", "qwen3_moe", "", "qwen3_xml"},
+		{"RedHatAI/Qwen3.8-27B-NVFP4", "qwen3_5", "qwen3_5_text", "qwen3_xml"},
+		{"juspay/xor", "qwen3_5_moe", "qwen3_5_moe_text", "qwen3_xml"},
+		{"XiaomiMiMo/MiMo-V2.6-Flash-RL", "mimo_v2", "", "mimo"},
+		{"meta-llama/Llama-3.1-8B-Instruct", "llama", "", "llama3_json"},
+		{"RedHatAI/Llama-3.2-3B-Instruct-FP8", "llama", "", "llama3_json"},
+		{"meta-llama/Meta-Llama-3.1-8B-Instruct", "llama", "", "llama3_json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.repo, func(t *testing.T) {
+			conf := map[string]any{"model_type": tc.modelType}
+			if tc.textModelType != "" {
+				conf["text_config"] = map[string]any{"model_type": tc.textModelType}
+			}
+			r, reason := ResolveCandidateParser(c, reg, "v0.24.0", tc.repo, conf)
+			require.Empty(t, reason)
+			assert.Equal(t, tc.parser, r.Parser)
+		})
+	}
+}
+
+// model_type llama is shared by fine-tunes vLLM documents under other
+// parsers, so only Llama 3.1 and 3.2 names may reach llama3_json; anything
+// else is better reported unmapped than trialled with the wrong parser.
+func TestCommittedLlamaRuleDoesNotClaimOtherLlamaArchitectureModels(t *testing.T) {
+	c, err := LoadConfig("../../../inference/vllm/audit.yaml")
+	require.NoError(t, err)
+
+	for _, repo := range []string{
+		"NousResearch/Hermes-3-Llama-3.1-8B",
+		"nvidia/Llama-3.1-Nemotron-Nano-8B-v1",
+		"someone/tinyllama-chat",
+	} {
+		r, ok := c.ResolveParser(repo, "llama", "")
+		assert.False(t, ok, "%s resolved to %s", repo, r.Parser)
+	}
+}
