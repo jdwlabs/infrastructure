@@ -392,7 +392,7 @@ itself is going down as part of this procedure.
    instead. See `gpu-passthrough-wedge-recovery.md`.
 7. Post-flight, from devbox2 until devbox answers again:
    ```
-   ssh root@pve5 'qm list'                 # 111, 304, 500 running again
+   ssh root@pve5 'qm list'                 # 304 and 500 running; 111 will NOT be
    kubectl uncordon talos-lx0-6a4
    kubectl get nodes                       # 8 Ready
    kubectl -n longhorn-system get volumes.longhorn.io   # healthy
@@ -401,6 +401,20 @@ itself is going down as part of this procedure.
    kubectl get applications.argoproj.io -A --no-headers | awk '$3!="Synced" || $4!="Healthy"'
    ssh dev-admin@192.168.1.56 'uptime'     # devbox reachable again
    ```
+   **devbox (111) does not autostart, on any pve5 boot.** `pve-guests` fails it
+   with `disk image '/mnt/pve/truenas-vmdisks/images/111/vm-111-cloudinit.qcow2'
+   already exists` — its cloud-init drive lives on the NFS datastore, and that
+   drive is deleted and recreated on every start, so the recreate collides with
+   the mount arriving mid-operation. Observed on both boots that reached
+   `pve-guests` (2026-09-23, 00:39:56 and 01:05:35). Start it by hand once the
+   host is up, which succeeds because the mount has settled by then:
+   ```
+   ssh root@pve5 'qm start 111'
+   ```
+   This stops being necessary once that cloud-init drive moves off the NFS
+   datastore. Until then, expect it every time and do not read it as a failed
+   power cycle.
+
    Uncordon re-enables scheduling on `talos-lx0-6a4`; it does not move the
    pods the drain relocated to `talos-4h8-zy6` back. That worker stays more
    loaded than before until something else redistributes it — which makes a
