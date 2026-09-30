@@ -599,8 +599,10 @@ budget spent`. A run stops with exit 1 and files nothing when:
   before any org is read;
 - the Jira history search fails, because filing without dedupe would repeat
   candidates;
-- the run is interrupted (`SIGINT`/`SIGTERM`) during discovery or
-  enrichment, with code `cancelled`.
+- the run is interrupted (`SIGINT`/`SIGTERM`) during discovery,
+  enrichment or filing's Jira reads, with code `cancelled`. An interrupt
+  during the registry read or the Jira history search is reported as
+  `registry_unreadable` or `jira_read_failed` instead.
 
 A failed Jira create or comment also exits 1, as `jira_write_failed`.
 
@@ -619,7 +621,7 @@ not here; they come from `serving.yaml`, so the two files cannot disagree.
 
 | Field | Meaning | Allowed |
 |---|---|---|
-| `windowDays` | how far back an allow-listed org's new repos are read, by creation date | 1–90 |
+| `windowDays` | how far back an allow-listed org's new repos are read, by creation date. Set to 14, deliberately twice the weekly cadence, so a late cron start or one failed week loses nothing; repos already reported are dropped by dedupe before enrichment, so the cost is roughly double the enrichment requests | 1–90 |
 | `trendingWindowDays` | how old a trending repo may be and still be reported | 1–365 |
 | `trendingN` | how many trending repos are read (one page) | 1–100 |
 | `maxCandidates` | candidates reported; the rest are rejected as `over maxCandidates (N)` | 1–50 |
