@@ -640,7 +640,7 @@ for multimodal wrappers. **A rule is a claim, not a verified fact.** It says
 the family's chat format matches that vLLM parser. The audit only checks that
 the parser exists in the registry. A live tool call during the model trial is
 what proves the claim. `extraArgs` go into the trial steps word for word, so
-the `llama` rule's `--chat-template=<model's tool chat template>` is a
+the Llama 3 rule's `--chat-template=<model's tool chat template>` is a
 reminder for the person running the trial, not a real path.
 
 `model_type` alone does not identify a chat format. MiniCPM5, for example,
