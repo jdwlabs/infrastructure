@@ -15,8 +15,8 @@ func vllmAuditCmd(a *app.App, opts *app.VLLMOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "audit",
 		Short: "List newly released models that could replace the one serving.yaml serves",
-		Long: `Read the Hugging Face Hub for models created in the last week by the
-organisations in inference/vllm/audit.yaml (plus trending repos, flagged
+		Long: `Read the Hugging Face Hub for models created in the last windowDays by
+the organisations in inference/vllm/audit.yaml (plus trending repos, flagged
 unvetted), keep those vLLM can serve with a tool parser and that fit the GPU,
 and report them with a starting set of trial steps for each.
 
