@@ -607,10 +607,10 @@ budget spent`. A run stops with exit 1 and files nothing when:
 A failed Jira create or comment also exits 1, as `jira_write_failed`.
 
 Run it locally with `talops vllm audit --dry-run`. A dry run performs every
-read and no write. When the `JIRA_*` variables are set, that includes Jira's
-reads, and the report's `jira.action` says what would happen (`would-create`,
-`would-comment` or `none`). Without them, dedupe is reported as skipped.
-Without `--dry-run`, a missing `JIRA_*` variable exits 1 before any request.
+read and no write. When `JIRA_API_TOKEN` is set, that includes Jira's reads,
+and the report's `jira.action` says what would happen (`would-create`,
+`would-comment` or `none`). Without it, dedupe is reported as skipped.
+Without `--dry-run`, a missing `JIRA_API_TOKEN` exits 1 before any request.
 `--json` prints the report as one JSON object.
 
 ### `inference/vllm/audit.yaml`
@@ -634,6 +634,8 @@ not here; they come from `serving.yaml`, so the two files cannot disagree.
 | `licenses.allowNames` | accepted `license_name` values when the licence is `other` | |
 | `parsers` | ordered rules, first match wins: `modelType`, optional `nameRegex` on the repo id, `parser`, optional `extraArgs` | at least one rule; `nameRegex` must compile |
 | `jira.project`, `jira.parent`, `jira.issueType` | where the weekly ticket is created; `parent` must be an issue in `project` | |
+| `jira.baseURL` | the Jira site. Not secret, so it is committed and reviewed like the rest of this file; only the API token is a credential | absolute `https://` URL, no trailing slash (stripped if present) |
+| `jira.email` | the Jira account the audit files as. Not secret either, for the same reason | non-empty, contains `@` |
 
 A parser rule matches `config.json`'s `model_type`, or `text_config.model_type`
 for multimodal wrappers. **A rule is a claim, not a verified fact.** It says
@@ -650,34 +652,37 @@ that the committed rules still resolve the incumbent to `serving.yaml`'s
 
 ### Secrets
 
-The workflow reads four repository secrets:
+The workflow reads two repository secrets. `jira.baseURL` and `jira.email`
+are not among them: they are not secret, so they live in `audit.yaml` and
+are reviewed like the rest of that file.
 
+- `JIRA_API_TOKEN`: required for a real run. The account named by
+  `jira.email` needs to be able to search, create and comment in
+  `jira.project`. Create it from the Atlassian account's API token settings
+  (id.atlassian.com → Security → API tokens), then set it with
+  `gh secret set JIRA_API_TOKEN -R jdwlabs/infrastructure` in the owner's own
+  terminal, never through an agent session, so the token reaches no
+  transcript. `gh secret set` prompts for the value, so nothing lands in
+  shell history either.
 - `HF_TOKEN`: optional. It is sent only to the Hub, never to GitHub. Without
   it, gated repos are rejected as `gated (...): licence acceptance and
-  HF_TOKEN required`. A gated repo is only readable if the token's account
-  has accepted that repo's licence on the Hub.
-- `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`: required for a real run.
-  The account needs to be able to search, create and comment in
-  `jira.project`.
+  HF_TOKEN required`, and every request shares the runner's IP against the
+  Hub's anonymous rate limit; with it, requests count against the token's
+  account instead.
 
-The owner sets them in their own terminal, never through an agent session,
-so no token reaches a transcript. `gh secret set` prompts for the value, so
-nothing lands in shell history:
-
-```bash
-gh secret set HF_TOKEN
-gh secret set JIRA_BASE_URL
-gh secret set JIRA_EMAIL
-gh secret set JIRA_API_TOKEN
-```
+Atlassian API tokens expire. When one does, the weekly run fails red with
+`jira_read_failed` — the search that dedupe depends on can no longer
+authenticate. To rotate: create a new token in the same Atlassian settings
+page and `gh secret set JIRA_API_TOKEN -R jdwlabs/infrastructure` again;
+nothing else changes.
 
 ### Rollout
 
-A scheduled run is never a dry run, and it exits 1 if the `JIRA_*` secrets
-are missing. Do these steps in order:
+A scheduled run is never a dry run, and it exits 1 if `JIRA_API_TOKEN` is
+missing. Do these steps in order:
 
 1. Merge the workflow.
-2. Set the four secrets.
+2. Set the secrets above.
 3. Run the workflow manually with `dry_run=true` (the dispatch default):
    `gh workflow run model-audit.yml -f dry_run=true`. Download the artifact
    and read it. `report.json` is the full report, and `rejected.tsv` has one
@@ -703,9 +708,9 @@ run to confirm.
 
 **Artifacts in this public repository are public.** Anyone can download the
 report and rejection table while they are retained. They hold public Hub
-metadata. The exception is a failed run's `error.msg`: a Jira connection
-error that never reached an HTTP status carries the full request URL, and
-that URL includes the `JIRA_BASE_URL` host.
+metadata and, on a failed run, `error.msg` may carry a Jira request URL —
+but that host is `jira.baseURL` from the committed config, not a secret, so
+this is expected rather than a leak.
 
 ### Known limits
 
