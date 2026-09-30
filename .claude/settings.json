@@ -17,19 +17,28 @@
     ],
     "ask": [
       "Bash(terraform apply*)",
+      "Bash(terraform * apply)",
+      "Bash(terraform * apply *)",
       "Bash(terraform destroy*)",
+      "Bash(terraform * destroy)",
+      "Bash(terraform * destroy *)",
       "Bash(kubectl apply*)",
+      "Bash(kubectl * apply)",
+      "Bash(kubectl * apply *)",
       "Bash(kubectl delete*)",
-      "Bash(git push*--force)",
-      "Bash(git push*--force *)",
-      "Bash(git push* -f)",
-      "Bash(git push* -f *)",
-      "Bash(git push* +*)",
-      "Bash(git push* main)",
-      "Bash(git push* main *)",
-      "Bash(git push*:main)",
-      "Bash(git push*:main *)",
-      "Bash(git push*refs/heads/main*)"
+      "Bash(kubectl * delete)",
+      "Bash(kubectl * delete *)",
+      "Bash(git *push*--force)",
+      "Bash(git *push*--force *)",
+      "Bash(git *push* -f)",
+      "Bash(git *push* -f *)",
+      "Bash(git *push* +*)",
+      "Bash(git *push* main)",
+      "Bash(git *push* main *)",
+      "Bash(git *push*:main)",
+      "Bash(git *push*:main *)",
+      "Bash(git *push*refs/heads/main*)",
+      "Bash(talops *vllm audit*)"
     ]
   }
 }
