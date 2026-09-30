@@ -33,7 +33,7 @@ Branch rulesets live in `.github/rulesets/` and are applied by hand with `apply.
 
 ## Building talops from a worktree
 
-`go build` in `bootstrap/` can fail inside a worktree with `error obtaining VCS status`; add `-buildvcs=false`. Under RTK the failure is hidden behind a success line — see `docs/agent-tooling-traps.md` for this and other misleading tool output (`rtk`, `gh`, `kubectl`, `curl` on Windows).
+`go build` in `bootstrap/` can fail inside a worktree with `error obtaining VCS status`; add `-buildvcs=false`. Under RTK the failure can hide behind a success line; trust the exit code. Other misleading tool output (`rtk`, `gh`, `kubectl`, `curl` on Windows): `~/.local/share/chezmoi/docs/agent-tooling-traps.md` (dotfiles).
 
 ## Evidence
 
