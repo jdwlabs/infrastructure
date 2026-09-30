@@ -30,10 +30,11 @@ type auditEnv struct {
 	cfg  string
 	env  map[string]string
 	now  time.Time
-	// ctx and hubTransport, when set, replace a background context and the
-	// fake Hub's own transport.
-	ctx          context.Context
-	hubTransport http.RoundTripper
+	// ctx, hubTransport and jiraTransport, when set, replace a background
+	// context and the fakes' own transports.
+	ctx           context.Context
+	hubTransport  http.RoundTripper
+	jiraTransport http.RoundTripper
 }
 
 // newAuditEnv runs against the committed audit.yaml narrowed to two orgs, so
@@ -71,12 +72,16 @@ func (e *auditEnv) run(t *testing.T, dryRun bool) (string, error) {
 	if e.hubTransport != nil {
 		hubHTTP = &http.Client{Transport: e.hubTransport}
 	}
+	jiraHTTP := e.jira.Server.Client()
+	if e.jiraTransport != nil {
+		jiraHTTP = &http.Client{Transport: e.jiraTransport}
+	}
 	err := New("test").RunVLLMAudit(ctx, AuditOptions{
 		Spec: committedSpec, Config: e.cfg, DryRun: dryRun, Out: &out,
 		Endpoints: AuditEndpoints{
 			HubBase: e.hub.Server.URL, RawBase: e.hub.Server.URL, HTTP: hubHTTP,
 			Sleep:    func(context.Context, time.Duration) error { return nil },
-			JiraHTTP: e.jira.Server.Client(),
+			JiraHTTP: jiraHTTP,
 		},
 		Getenv: func(k string) string { return e.env[k] },
 		Now:    func() time.Time { return e.now },
@@ -128,7 +133,7 @@ func TestAuditNothingNewCommentsOnceEvenWhenRunTwice(t *testing.T) {
 }
 
 func TestAuditSameWeekRerunCommentsThenNextWeekDedupes(t *testing.T) {
-	e := newAuditEnv(t, set("windowDays: 7", "windowDays: 14"))
+	e := newAuditEnv(t)
 	e.hub.Orgs["Qwen"] = [][]audittest.Model{{newModel("Qwen/A-Instruct", shaA, 10)}}
 	_, err := e.run(t, false)
 	require.NoError(t, err)
@@ -173,8 +178,8 @@ func TestAuditDiscoveryBudgetSpentBeforeAnyOrgFilesNothing(t *testing.T) {
 	assert.Zero(t, e.jira.Posts())
 }
 
-// cancelBefore cancels the run's context just before the first Hub request
-// that matches, the way a SIGTERM lands mid-run.
+// cancelBefore cancels the run's context just before the first request that
+// matches, the way a SIGTERM lands mid-run.
 type cancelBefore struct {
 	next   http.RoundTripper
 	match  func(*http.Request) bool
@@ -221,6 +226,24 @@ func TestAuditCancelledDuringEnrichmentFailsAndFilesNothing(t *testing.T) {
 	assert.Contains(t, out, "error: {code: cancelled")
 	assert.Zero(t, e.jira.Posts())
 	assert.NotContains(t, out, "enrich failed: ", "a signal is not a per-candidate rejection")
+}
+
+func TestAuditCancelledWhileFilingReadsJiraFailsAsCancelled(t *testing.T) {
+	e := newAuditEnv(t)
+	e.hub.Orgs["Qwen"] = [][]audittest.Model{{newModel("Qwen/A-Instruct", shaA, 10)}}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.ctx = ctx
+	e.jiraTransport = cancelBefore{
+		next:   e.jira.Server.Client().Transport,
+		match:  func(*http.Request) bool { return len(e.hub.Requests()) > 0 },
+		cancel: cancel,
+	}
+
+	out, err := e.run(t, false)
+
+	assert.Equal(t, "cancelled", failureCode(t, err), out)
+	assert.Contains(t, out, "error: {code: cancelled")
+	assert.Zero(t, e.jira.Posts())
 }
 
 func TestAuditEnrichmentBudgetSpentStillFilesAndNamesTheRest(t *testing.T) {

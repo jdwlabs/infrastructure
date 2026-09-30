@@ -3,7 +3,7 @@
 # below are a starting point for the owner to correct. contextTokens and
 # gpuMemoryUtilization are read from serving.yaml so the two files cannot
 # disagree.
-windowDays: 7
+windowDays: 14            # twice the weekly cron, so a late start or failed week loses nothing
 trendingWindowDays: 30
 trendingN: 50
 maxCandidates: 10

@@ -123,8 +123,11 @@ func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 	if err := modelaudit.File(ctx, api, cfg, &report, history, deps.Now, opts.DryRun); err != nil {
 		code := "jira_read_failed"
 		var fe *modelaudit.FileError
-		if errors.As(err, &fe) && fe.Write {
+		switch {
+		case errors.As(err, &fe) && fe.Write:
 			code = "jira_write_failed"
+		case ctx.Err() != nil:
+			code = "cancelled"
 		}
 		report.Failure = &modelaudit.Failure{Code: code, Msg: err.Error()}
 	}
