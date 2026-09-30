@@ -46,29 +46,22 @@ Footers appear after an optional body, separated by a blank line. Common footers
 
 | Footer | When to use |
 |--------|-------------|
-| `Refs: JDWLABS-XX` | Links commit to a Jira issue |
+| `Refs: KEY-123` | Links commit to a Jira issue |
 | `Refs: #N` | Links commit to a GitHub issue by number |
 | `Closes: #N` | Auto-closes a GitHub issue on merge |
 | `BREAKING CHANGE: <desc>` | Required when a commit changes cluster topology or removes a module interface |
 | `Co-Authored-By: Name <email>` | Credit a co-author (human or AI) |
 
-**AI contributor footer** — include when commits were written with AI assistance:
+**AI attribution** — every AI-assisted commit names the agent and the model that actually ran, in two trailers:
 
 ```
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Assisted-by: Claude Code:claude-opus-5-5
 ```
 
-**Full examples with footers:**
+Codex: `Co-Authored-By: Codex <codex@openai.com>` and `Assisted-by: Codex:<model-id>`. Attribution belongs in commits only, never in PR titles, bodies or comments.
 
-```
-feat(clusters): add talos-prod-2 worker node pool
-
-Adds 3 additional worker nodes to the production cluster.
-Terraform plan output reviewed and approved before apply.
-
-Refs: JDWLABS-71
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
-```
+**Full example with footers:**
 
 ```
 feat(terraform)!: remove proxmox-v2 module
@@ -76,7 +69,7 @@ feat(terraform)!: remove proxmox-v2 module
 BREAKING CHANGE: proxmox-v2 module removed; all clusters must
 migrate to proxmox-v3 before applying this change.
 
-Refs: JDWLABS-68
+Refs: #68
 ```
 
 ### Rules
@@ -87,11 +80,11 @@ Refs: JDWLABS-68
 
 ## Pull Requests
 
-1. Create a worktree: `gwta feat/short-description` (or `git worktree add ~/worktrees/infrastructure/feat/short-description -b feat/short-description`)
-2. Run `terraform validate` before opening PR
-3. PR title must follow conventional commit format
-4. Include `terraform plan` output in PR description for any infra changes
-5. Squash-merge to main
+1. Work in a worktree on a feature branch: `gwta feat/short-description` (or `git worktree add ~/worktrees/infrastructure/feat/short-description -b feat/short-description`)
+2. Run `terraform validate` before opening the PR
+3. PR title follows conventional commit format, under 70 characters
+4. Description follows the template: keep only sections with content, ~150 words. For infra changes put the one-line `terraform plan` summary (N to add / change / destroy) under **Verified** — not the full plan
+5. Rebase-merge to main (squash and merge commits are disabled), so every commit must stand alone
 
 ## Development Setup
 

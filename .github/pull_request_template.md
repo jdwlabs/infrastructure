@@ -1,35 +1,21 @@
-## What
+<!-- Keep only sections with content; aim for ~150 words. No file-by-file lists, restated diff, logs or pasted plans. -->
 
-<!-- One sentence: what changed and why -->
+## Why
 
-## Type of change
+<!-- 1-3 sentences: the problem, and why this approach. -->
 
-- [ ] `feat` — new infrastructure capability
-- [ ] `fix` — bug fix
-- [ ] `build` — build system or provider/module dependency change
-- [ ] `chore` — maintenance / config / tooling
-- [ ] `ci` — CI/CD pipeline change
-- [ ] `docs` — documentation only
-- [ ] `perf` — performance improvement
-- [ ] `refactor` — restructure, no functional change
-- [ ] `revert` — revert a previous commit
-- [ ] `style` — formatting / whitespace (no logic change)
-- [ ] `test` — test additions or updates
+## Needs attention
 
-## Checklist
+<!-- - `path:line` — risky or non-obvious spot, and the feedback you want on it -->
 
-- [ ] PR title follows conventional commit format: `type(scope): description`
-- [ ] `terraform validate` passes
-- [ ] `terraform plan` output attached below (for infrastructure changes)
-- [ ] No secrets, credentials, or state files in diff
+## Risk / rollout
 
-## Terraform Plan Output (if applicable)
+<!-- Only if any: state migrations, breaking changes, manual steps (who runs `terraform apply` / `talosctl apply-config`, and when). -->
 
-<details>
-<summary>terraform plan</summary>
+## Verified
 
-```
-paste output here
-```
+<!-- - `command actually run` — result -->
+<!-- - `terraform plan` — plan summary: N to add, N to change, N to destroy (one line, not the full plan) -->
+<!-- - `terraform validate` / `make test` — pass -->
 
-</details>
+<!-- Closes #N / KEY-123 -->
