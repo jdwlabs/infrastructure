@@ -44,13 +44,10 @@ type Jira struct {
 	nextKey      int
 }
 
-// NewJira serves over TLS, not plain HTTP: jira.baseURL now comes from
-// config and config validation requires an https URL, so the fake must be
-// one to stand in for it. Server.Client() already trusts its test cert.
 func NewJira(t *testing.T) *Jira {
 	t.Helper()
 	j := &Jira{nextKey: 100}
-	j.Server = httptest.NewTLSServer(http.HandlerFunc(j.serve))
+	j.Server = httptest.NewServer(http.HandlerFunc(j.serve))
 	t.Cleanup(j.Server.Close)
 	return j
 }

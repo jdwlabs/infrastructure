@@ -20,10 +20,10 @@ the organisations in inference/vllm/audit.yaml (plus trending repos, flagged
 unvetted), keep those vLLM can serve with a tool parser and that fit the GPU,
 and report them with a starting set of trial steps for each.
 
-Files the list as one Jira ticket per ISO week (JIRA_API_TOKEN; the site and
-account come from inference/vllm/audit.yaml), or a comment when nothing is
-new. --dry-run performs every read, Jira's included when the token is set,
-and writes nothing. HF_TOKEN, when set, lets gated repos be checked.
+Files the list as one Jira ticket per ISO week (JIRA_BASE_URL, JIRA_EMAIL,
+JIRA_API_TOKEN), or a comment when nothing is new. --dry-run performs every
+read, Jira's included when those are set, and writes nothing. HF_TOKEN, when
+set, lets gated repos be checked.
 
 It never contacts the GPU host, never decrypts the vault, and never changes
 serving.yaml.`,

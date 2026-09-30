@@ -23,7 +23,7 @@ parsers:
   - {modelType: qwen3_moe, nameRegex: "(?i)coder", parser: qwen3_xml}
   - {modelType: qwen3_moe, parser: hermes}
   - {modelType: mistral, parser: mistral, extraArgs: ["--tokenizer-mode=mistral"]}
-jira: {project: AUDIT, parent: AUDIT-1, issueType: Task, baseURL: "https://example.atlassian.net", email: "bot@example.com"}
+jira: {project: AUDIT, parent: AUDIT-1, issueType: Task}
 `
 
 func TestParseConfigAcceptsAValidConfig(t *testing.T) {
@@ -50,11 +50,6 @@ func TestParseConfigRejects(t *testing.T) {
 		"parent outside project":       {"parent: AUDIT-1", "parent: OTHER-1"},
 		"parent not an issue key":      {"parent: AUDIT-1", "parent: AUDIT"},
 		"no issue type":                {"issueType: Task", `issueType: ""`},
-		"baseURL not https":            {`baseURL: "https://example.atlassian.net"`, `baseURL: "http://example.atlassian.net"`},
-		"baseURL not absolute":         {`baseURL: "https://example.atlassian.net"`, `baseURL: "example.atlassian.net"`},
-		"baseURL empty":                {`baseURL: "https://example.atlassian.net"`, `baseURL: ""`},
-		"email empty":                  {`email: "bot@example.com"`, `email: ""`},
-		"email without @":              {`email: "bot@example.com"`, `email: "bot-example.com"`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -67,21 +62,9 @@ func TestParseConfigRejects(t *testing.T) {
 }
 
 func TestParseConfigRejectsNoRules(t *testing.T) {
-	cut := validConfig[:strings.Index(validConfig, "parsers:")] + `parsers: []
-jira: {project: AUDIT, parent: AUDIT-1, issueType: Task, baseURL: "https://example.atlassian.net", email: "bot@example.com"}
-`
+	cut := validConfig[:strings.Index(validConfig, "parsers:")] + "parsers: []\njira: {project: AUDIT, parent: AUDIT-1, issueType: Task}\n"
 	_, err := ParseConfig([]byte(cut))
 	assert.ErrorContains(t, err, "at least one rule")
-}
-
-func TestParseConfigNormalizesJiraBaseURLTrailingSlash(t *testing.T) {
-	mutated := strings.Replace(validConfig, `baseURL: "https://example.atlassian.net"`, `baseURL: "https://example.atlassian.net/"`, 1)
-	require.NotEqual(t, validConfig, mutated)
-
-	c, err := ParseConfig([]byte(mutated))
-
-	require.NoError(t, err)
-	assert.Equal(t, "https://example.atlassian.net", c.Jira.BaseURL)
 }
 
 func TestResolveParserFirstMatchWinsAndNameRegexGates(t *testing.T) {

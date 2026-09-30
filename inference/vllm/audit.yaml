@@ -31,8 +31,3 @@ jira:                     # where reports are filed, under the audit's epic
   project: JDWLABS
   parent: JDWLABS-644
   issueType: Task
-  # Not secret: the site and account are reviewed like the rest of this
-  # file. Only the API token is a credential, so it alone stays in
-  # JIRA_API_TOKEN.
-  baseURL: https://jdwillmsen.atlassian.net
-  email: jdwillmsen@gmail.com
