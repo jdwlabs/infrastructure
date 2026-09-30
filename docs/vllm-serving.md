@@ -643,6 +643,17 @@ what proves the claim. `extraArgs` go into the trial steps word for word, so
 the `llama` rule's `--chat-template=<model's tool chat template>` is a
 reminder for the person running the trial, not a real path.
 
+`model_type` alone does not identify a chat format. MiniCPM5, for example,
+ships as `llama` but needs the `minicpm5` parser, and Hermes 3 is `llama` but
+needs `hermes`. So the `llama` rule only claims Llama 3.1 and 3.2 repo names,
+and any rule gated by `nameRegex` must come before a broader rule for the same
+`model_type`. A repo that no rule claims is reported as `no parser rule`,
+which is safer than trialling it with the wrong parser.
+
+A mapped family can still be rejected as `fit unknown`. For example, Qwen3.5
+uses linear-attention layers and MiMo-V2 uses sliding-window attention, and
+the fit estimate does not model either.
+
 A family on the allow-list with no rule shows up every week as `no parser
 rule for <model_type>`. To add one, add a rule in a PR. A config test checks
 that the committed rules still resolve the incumbent to `serving.yaml`'s

@@ -20,7 +20,22 @@ parsers:                  # ordered; first match wins
   - {modelType: qwen3_moe, nameRegex: "(?i)coder", parser: qwen3_xml}
   - {modelType: qwen3_moe, parser: hermes}
   - {modelType: qwen3, parser: hermes}
-  - {modelType: llama, parser: llama3_json,
+  # Qwen3.5 chat templates emit the same <tool_call><function=…><parameter=…>
+  # format as Qwen3-Coder, which qwen3_xml parses. Dense and MoE alike.
+  - {modelType: qwen3_5, parser: qwen3_xml}
+  - {modelType: qwen3_5_moe, parser: qwen3_xml}
+  # vLLM registers a parser named for MiMo; MiMo-V2 templates emit the same
+  # Qwen3-Coder XML format that parser class reads.
+  - {modelType: mimo_v2, parser: mimo}
+  # MiniCPM5 ships as model_type llama but speaks its own
+  # <function name=…><param name=…> format, so it must be claimed by name
+  # before the Llama 3 rule below.
+  - {modelType: llama, nameRegex: "(?i)minicpm-?5", parser: minicpm5}
+  # model_type llama is shared by many fine-tunes with other tool formats
+  # (Hermes 3 needs hermes, MiniCPM5 needs minicpm5); llama3_json is only
+  # documented for Llama 3.1 and 3.2, so anything else stays unmapped.
+  - {modelType: llama, nameRegex: "(?i)/(meta-)?llama-3\\.[12]-\\d+b",
+     parser: llama3_json,
      extraArgs: ["--chat-template=<model's tool chat template>"]}
   - {modelType: llama4, parser: llama4_pythonic}
   - {modelType: mistral3, parser: mistral, extraArgs: ["--tokenizer-mode=mistral"]}
