@@ -38,7 +38,7 @@ func auditRepo(t *testing.T) (repo, sopsLog string) {
 
 	t.Setenv("PATH", filepath.Join(repo, "bin"))
 	t.Setenv("HOME", t.TempDir())
-	for _, k := range []string{"HF_TOKEN", "SOPS_AGE_KEY", "SOPS_AGE_KEY_FILE", "JIRA_API_TOKEN", "CLUSTER_NAME", "SECRETS_DIR"} {
+	for _, k := range []string{"HF_TOKEN", "SOPS_AGE_KEY", "SOPS_AGE_KEY_FILE", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "CLUSTER_NAME", "SECRETS_DIR"} {
 		t.Setenv(k, "")
 	}
 	t.Chdir(repo)
@@ -92,7 +92,7 @@ func TestVLLMAuditWithoutDryRunRefusesBeforeAnyRequest(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, 1, ExitCode(err))
 	assert.Contains(t, out, "jira_unconfigured")
-	assert.Contains(t, out, "JIRA_API_TOKEN unset")
+	assert.Contains(t, out, "JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN unset")
 	assert.Empty(t, h.Requests())
 }
 

@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -32,14 +31,11 @@ type Config struct {
 }
 
 // JiraConfig is where reports are filed. It lives here rather than in code
-// so the project, parent, site and account are reviewed data, not constants;
-// only the API token is a credential, so it alone stays in the environment.
+// so the project and parent are reviewed data, not constants.
 type JiraConfig struct {
 	Project   string `yaml:"project"`
 	Parent    string `yaml:"parent"`
 	IssueType string `yaml:"issueType"`
-	BaseURL   string `yaml:"baseURL"`
-	Email     string `yaml:"email"`
 }
 
 type Licenses struct {
@@ -133,27 +129,7 @@ func (c *Config) validate() error {
 	if c.Jira.IssueType == "" {
 		errs = append(errs, errors.New("jira.issueType must be set"))
 	}
-	if base, err := normalizeJiraBaseURL(c.Jira.BaseURL); err != nil {
-		errs = append(errs, err)
-	} else {
-		c.Jira.BaseURL = base
-	}
-	if c.Jira.Email == "" || !strings.Contains(c.Jira.Email, "@") {
-		errs = append(errs, fmt.Errorf("jira.email must be non-empty and contain @, got %q", c.Jira.Email))
-	}
 	return errors.Join(errs...)
-}
-
-// normalizeJiraBaseURL drops one trailing slash, the shape every browser
-// address bar and editor autocomplete adds, and rejects anything that is not
-// an absolute https URL.
-func normalizeJiraBaseURL(raw string) (string, error) {
-	trimmed := strings.TrimRight(raw, "/")
-	u, err := url.Parse(trimmed)
-	if trimmed == "" || err != nil || u.Scheme != "https" || u.Host == "" {
-		return "", fmt.Errorf("jira.baseURL must be an absolute https URL, got %q", raw)
-	}
-	return trimmed, nil
 }
 
 var (

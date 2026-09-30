@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/modelaudit"
@@ -25,7 +26,7 @@ type AuditEndpoints struct {
 	RawBase string
 	HTTP    *http.Client
 	Sleep   func(context.Context, time.Duration) error
-	// JiraHTTP reaches cfg.Jira.BaseURL; nil is a default client.
+	// JiraHTTP reaches JIRA_BASE_URL; nil is a default client.
 	JiraHTTP *http.Client
 }
 
@@ -41,9 +42,8 @@ type AuditOptions struct {
 	Now       func() time.Time
 }
 
-// jiraTokenEnv is the one Jira credential: the site and account are
-// committed config, reviewed like the rest of it.
-const jiraTokenEnv = "JIRA_API_TOKEN"
+// jiraEnv names the credentials in the order a missing one is reported.
+var jiraEnv = []string{"JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"}
 
 // RunVLLMAudit lists newly released models that could replace the one
 // serving.yaml serves and files them to Jira. It reads the Hub and GitHub
@@ -58,10 +58,15 @@ func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 		now = opts.Now
 	}
 
-	token := opts.Getenv(jiraTokenEnv)
-	if !opts.DryRun && token == "" {
+	var missing []string
+	for _, k := range jiraEnv {
+		if opts.Getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	if !opts.DryRun && len(missing) > 0 {
 		return app.emitAudit(opts, failedAudit("jira_unconfigured",
-			fmt.Sprintf("%s unset: filing needs it (or pass --dry-run)", jiraTokenEnv)))
+			fmt.Sprintf("%s unset: filing needs JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN (or pass --dry-run)", strings.Join(missing, ", "))))
 	}
 
 	specPath, cfgPath, failure := auditPaths(opts)
@@ -80,11 +85,11 @@ func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 	deps := modelaudit.Deps{Now: now(), DryRun: opts.DryRun}
 	var api *jira.Client
 	var history modelaudit.History
-	if token != "" {
+	if len(missing) == 0 {
 		api = &jira.Client{
-			Base:     cfg.Jira.BaseURL,
-			Email:    cfg.Jira.Email,
-			Token:    token,
+			Base:     strings.TrimRight(opts.Getenv("JIRA_BASE_URL"), "/"),
+			Email:    opts.Getenv("JIRA_EMAIL"),
+			Token:    opts.Getenv("JIRA_API_TOKEN"),
 			HTTP:     opts.Endpoints.JiraHTTP,
 			ReadOnly: opts.DryRun,
 		}
@@ -96,16 +101,16 @@ func (app *App) RunVLLMAudit(ctx context.Context, opts AuditOptions) error {
 		}
 		deps.Reported = history.Reported
 	} else {
-		deps.DedupeSkipped = "no Jira credentials (" + jiraTokenEnv + " unset)"
+		deps.DedupeSkipped = "no Jira credentials (" + strings.Join(missing, ", ") + " unset)"
 	}
 
-	hfToken := opts.Getenv("HF_TOKEN")
+	token := opts.Getenv("HF_TOKEN")
 	ep := opts.Endpoints
-	deps.HasToken = hfToken != ""
+	deps.HasToken = token != ""
 	deps.Hub = &hub.Client{
 		HubBase: orDefault(ep.HubBase, hub.DefaultHubBase),
 		RawBase: orDefault(ep.RawBase, hub.DefaultRawBase),
-		Token:   hfToken,
+		Token:   token,
 		HTTP:    ep.HTTP,
 		Budget:  hub.NewBudget(cfg.MaxRequests, cfg.DiscoveryRequests),
 		Sleep:   ep.Sleep,

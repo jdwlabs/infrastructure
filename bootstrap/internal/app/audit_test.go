@@ -38,24 +38,22 @@ type auditEnv struct {
 }
 
 // newAuditEnv runs against the committed audit.yaml narrowed to two orgs, so
-// each case lists only the models it sets up. jira.baseURL is repointed at
-// the fake's own TLS test server, trailing slash included, to exercise the
-// same normalisation the real host's config value goes through.
+// each case lists only the models it sets up.
 func newAuditEnv(t *testing.T, edits ...func(string) string) *auditEnv {
 	t.Helper()
-	fakeJira := audittest.NewJira(t)
 	raw, err := os.ReadFile(committedAudit)
 	require.NoError(t, err)
 	text := regexp.MustCompile(`(?s)orgs: \[.*?\]`).ReplaceAllString(string(raw), "orgs: [Qwen, QuantTrio]")
-	text = regexp.MustCompile(`baseURL: \S+`).ReplaceAllString(text, "baseURL: "+fakeJira.Server.URL+"/")
 	for _, e := range edits {
 		text = e(text)
 	}
 	cfg := filepath.Join(t.TempDir(), "audit.yaml")
 	require.NoError(t, os.WriteFile(cfg, []byte(text), 0o644))
 
-	e := &auditEnv{hub: audittest.NewHub(t), jira: fakeJira, cfg: cfg, now: audittest.Now}
-	e.env = map[string]string{"JIRA_API_TOKEN": "t"}
+	e := &auditEnv{hub: audittest.NewHub(t), jira: audittest.NewJira(t), cfg: cfg, now: audittest.Now}
+	e.env = map[string]string{
+		"JIRA_BASE_URL": e.jira.Server.URL + "/", "JIRA_EMAIL": "bot@example.com", "JIRA_API_TOKEN": "t",
+	}
 	return e
 }
 
@@ -293,19 +291,19 @@ func TestAuditDryRunWithCredentialsReadsJiraButNeverWrites(t *testing.T) {
 
 func TestAuditDryRunWithoutCredentialsMakesNoJiraRequest(t *testing.T) {
 	e := newAuditEnv(t)
-	e.env = map[string]string{}
+	e.env = map[string]string{"JIRA_EMAIL": "bot@example.com"}
 
 	out, err := e.run(t, true)
 
 	require.NoError(t, err, out)
 	assert.Empty(t, e.jira.Calls())
-	assert.Contains(t, out, "jira,dedupe skipped: no Jira credentials (JIRA_API_TOKEN unset)")
+	assert.Contains(t, out, "jira,\"dedupe skipped: no Jira credentials (JIRA_BASE_URL, JIRA_API_TOKEN unset)\"")
 	assert.Contains(t, out, "  action: not-filed\n")
 }
 
 func TestAuditWithoutCredentialsOrDryRunRefusesBeforeAnyRequest(t *testing.T) {
 	e := newAuditEnv(t)
-	e.env = map[string]string{}
+	e.env = map[string]string{"JIRA_BASE_URL": e.jira.Server.URL, "JIRA_EMAIL": "bot@example.com"}
 
 	out, err := e.run(t, false)
 
