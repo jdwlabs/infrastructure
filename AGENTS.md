@@ -11,15 +11,15 @@ This repo provisions Proxmox VMs (Terraform) and runs the Talos cluster's lifecy
 - Talos nodes have no SSH; manage them through the Talos API (`talosctl`).
 - `talops vllm audit` touches neither host nor vault but files Jira tickets for replacement models (a weekly workflow runs it); locally use `--dry-run`, which files nothing. Details: `docs/vllm-serving.md`, "Weekly model audit".
 
-## Hard limits
+## Limits
 
-Nothing here takes effect until a human runs the apply the merged change describes. Agents produce the plan and stop.
+Nothing here takes effect until a human runs the apply the merged change describes. Agents produce the plan and ask the user before anything that changes live state.
 
-- NEVER run `terraform apply` or `terraform destroy`, or the `talops` commands that wrap them or change live hosts (`up`, `down`, `bootstrap`, `reset`, `prune-nodes`, `infra deploy|destroy`, `reconcile` without `--plan`, `upgrade-k8s --apply`, `haproxy apply`, `vllm apply`), or `talosctl apply-config`. Use the read-only forms: `terraform plan`, `talops infra plan`, `talops reconcile --plan`, `talops upgrade-k8s` (previews by default), `talops {haproxy,vllm} plan|status`.
-- `kubectl apply`/`delete` are out of scope — workloads belong to ArgoCD via `deployments`. `kubectl get|describe|logs` are fine for investigation. (`.claude/settings.json` denies the mutating forms for Claude Code.)
+- Ask the user before `terraform apply` or `terraform destroy` (humans own the apply and its state), or the `talops` commands that wrap them or change live hosts (`up`, `down`, `bootstrap`, `reset`, `prune-nodes`, `infra deploy|destroy`, `reconcile` without `--plan`, `upgrade-k8s --apply`, `haproxy apply`, `vllm apply`), or `talosctl apply-config`. Prefer the read-only forms: `terraform plan`, `talops infra plan`, `talops reconcile --plan`, `talops upgrade-k8s` (previews by default), `talops {haproxy,vllm} plan|status`.
+- Ask the user before `kubectl apply`/`delete`; workloads belong to ArgoCD via `deployments`, so prefer a PR there. `kubectl get|describe|logs` are fine for investigation. (`.claude/settings.json` makes the mutating forms prompt in Claude Code.)
 - Never edit `.tfstate`; state lives in the remote MinIO backend.
 - Never commit decrypted secrets — only the SOPS+age `*.enc.yaml` vault is tracked.
-- Never `git push --force`. Pushing a feature branch for a PR is fine.
+- Ask the user before `git push --force`. Pushing a feature branch for a PR is fine.
 
 ## Secrets and state
 
