@@ -109,7 +109,11 @@ its reboot step:
 
 1. `ssh root@pve5 'poweroff'` and wait for it to stop answering.
 2. Cut power for ~30 seconds — PSU switch, wall plug, or a switched outlet.
-3. Power on. All three guests carry `onboot: 1` and return by themselves.
+3. Power on. All three guests carry `onboot: 1`, but only 304 and 500 actually
+   come back: devbox (111) fails its autostart on every boot because its
+   cloud-init drive is on the NFS datastore. Start it by hand —
+   `ssh root@pve5 'qm start 111'` — see the pve5 section of
+   `host-restart-coordination.md` for why.
 
 Then verify, from devbox2 until devbox answers again:
 
