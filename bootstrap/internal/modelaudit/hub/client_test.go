@@ -127,11 +127,14 @@ func TestTokenGoesToTheHubAndNeverToGitHub(t *testing.T) {
 
 	_, err := c.ToolParserRegistry(context.Background(), "v0.24.0")
 	require.NoError(t, err)
+	_, err = c.ModelRegistry(context.Background(), "v0.24.0")
+	require.NoError(t, err)
 	_, err = c.ConfigJSON(context.Background(), "Org/M", "abc")
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{
 		"/vllm-project/vllm/v0.24.0/vllm/tool_parsers/__init__.py|",
+		"/vllm-project/vllm/v0.24.0/vllm/model_executor/models/registry.py|",
 		"/Org/M/resolve/abc/config.json|Bearer hf_test",
 	}, auth)
 }
@@ -227,4 +230,18 @@ func TestListPageDecodesARecordedPage(t *testing.T) {
 	assert.Equal(t, FlexString("qwen-research"), first.CardData.LicenseName)
 	assert.Equal(t, "text-to-image", items[1].PipelineTag)
 	assert.Contains(t, items[2].Tags, "license:other")
+}
+
+func TestModelRegistryDrawsOnTheDiscoveryBudget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	b := NewBudget(10, 1)
+	c := newClient(srv, b, nil)
+
+	_, err := c.ModelRegistry(context.Background(), "v0.24.0")
+	require.NoError(t, err)
+	_, err = c.ModelRegistry(context.Background(), "v0.24.0")
+	assert.ErrorIs(t, err, ErrBudget, "discovery's share is spent although the total is not")
 }

@@ -99,3 +99,22 @@ func ResolveCandidateParser(cfg Config, reg Registry, tag, id string, conf map[s
 	}
 	return rule, ""
 }
+
+// CheckArchitecture passes a config when any of its architectures is
+// registered, because vLLM tries each in turn and loads the first it knows
+// (vllm/model_executor/models/registry.py:1207-1211, 1261-1265). The
+// Transformers-backend fallback for an unregistered architecture is not
+// counted: whether it can serve a model is not knowable from the config, and
+// a rejection only asks a human to look.
+func CheckArchitecture(archs Architectures, tag string, conf map[string]any) string {
+	listed := architectures(conf)
+	if len(listed) == 0 {
+		return "architecture missing"
+	}
+	for _, a := range listed {
+		if archs[a] {
+			return ""
+		}
+	}
+	return fmt.Sprintf("architecture %s not in vLLM %s", listed[0], tag)
+}

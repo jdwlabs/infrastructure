@@ -107,3 +107,28 @@ func TestResolveCandidateParser(t *testing.T) {
 		map[string]any{"model_type": "mistral3", "text_config": map[string]any{"model_type": "mistral"}})
 	assert.Equal(t, "parser mistral not in vLLM v0.24.0", reason)
 }
+
+func TestCheckArchitecture(t *testing.T) {
+	archs := Architectures{"Qwen3_5ForConditionalGeneration": true, "LlamaForCausalLM": true}
+	cases := map[string]struct {
+		conf   map[string]any
+		reason string
+	}{
+		"registered":   {map[string]any{"architectures": []any{"Qwen3_5ForConditionalGeneration"}}, ""},
+		"unregistered": {map[string]any{"architectures": []any{"Qwen3_5ForCausalLM"}}, "architecture Qwen3_5ForCausalLM not in vLLM v0.24.0"},
+		"a later entry is registered": {
+			map[string]any{"architectures": []any{"CustomForCausalLM", "LlamaForCausalLM"}}, "",
+		},
+		"none registered names the first": {
+			map[string]any{"architectures": []any{"AForCausalLM", "BForCausalLM"}}, "architecture AForCausalLM not in vLLM v0.24.0",
+		},
+		"missing":     {map[string]any{"model_type": "llama"}, "architecture missing"},
+		"empty list":  {map[string]any{"architectures": []any{}}, "architecture missing"},
+		"not strings": {map[string]any{"architectures": "LlamaForCausalLM"}, "architecture missing"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, c.reason, CheckArchitecture(archs, "v0.24.0", c.conf))
+		})
+	}
+}
