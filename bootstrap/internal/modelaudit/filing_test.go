@@ -47,7 +47,7 @@ func TestFileCreatesTheWeeksTicket(t *testing.T) {
 		IssueType map[string]string `json:"issuetype"`
 	}
 	require.NoError(t, json.Unmarshal(j.Created()[0], &fields))
-	assert.Equal(t, "Review 1 local model candidates for 2026-W40", fields.Summary)
+	assert.Equal(t, "Review 1 local model candidate for 2026-W40", fields.Summary)
 	assert.Equal(t, []string{"model-audit", "model-audit-2026-W40", "upgrade", "monitoring"}, fields.Labels)
 	assert.Equal(t, "AUDIT-1", fields.Parent["key"])
 	assert.Equal(t, "AUDIT", fields.Project["key"])
