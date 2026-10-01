@@ -650,9 +650,8 @@ and any rule gated by `nameRegex` must come before a broader rule for the same
 `model_type`. A repo that no rule claims is reported as `no parser rule`,
 which is safer than trialling it with the wrong parser.
 
-A mapped family can still be rejected as `fit unknown`. For example, Qwen3.5
-uses linear-attention layers and MiMo-V2 uses sliding-window attention, and
-the fit estimate does not model either.
+A mapped family can still be rejected as `fit unknown` when the fit
+estimate cannot price its layers. See [Known limits](#known-limits).
 
 A family on the allow-list with no rule shows up every week as `no parser
 rule for <model_type>`. To add one, add a rule in a PR. A config test checks
@@ -721,24 +720,46 @@ that URL includes the `JIRA_BASE_URL` host.
 ### Known limits
 
 - **`fit unknown`**: this is a rejection, never an assumed fit. The estimate
-  is `weights + KV cache + overheadGiB`. It cannot price these, so it
-  rejects them as `fit unknown`:
+  is `weights + KV cache and state + overheadGiB`, for one sequence of
+  `--max-model-len` tokens, priced per layer the way vLLM sizes it at
+  `serving.yaml`'s tag:
+  - a `full_attention` layer holds K and V for every token;
+  - a Qwen3.5 or Qwen3-Next `linear_attention` (Gated DeltaNet) layer holds
+    one fixed-size state, whatever the context: a conv state and a recurrent
+    state. The recurrent state is float32 when a Qwen3.5 multimodal wrapper's
+    `mamba_ssm_dtype` says so;
+  - a MiMo-V2 sliding layer (`hybrid_layer_pattern` entry `1`) holds
+    `sliding_window_size − 1 + max_num_batched_tokens` tokens, not just the
+    window, because a chunked-prefill step keeps the previous window beside
+    the new chunk. `max_num_batched_tokens` is `serving.yaml`'s
+    `--max-num-batched-tokens`, else vLLM's default for the card: 2048 below
+    70 GiB, 8192 at or above it.
+
+  It cannot price these, so it rejects them as `fit unknown`:
   - MLA (`kv_lora_rank` set, as in the DeepSeek families);
-  - sliding-window attention in use (`sliding_window` set and
-    `use_sliding_window` not `false`);
-  - any `layer_types` entry other than `full_attention`, such as gpt-oss or
-    Granite 4-H;
-  - a config missing a field the formula needs;
+  - any other sliding-window attention in use (`sliding_window` set and
+    `use_sliding_window` not `false`), such as gpt-oss or Gemma 3;
+  - any other `layer_types` entry, such as Granite 4-H's `mamba`, or
+    `linear_attention` outside Qwen3.5 and Qwen3-Next;
+  - a `layer_types` or `hybrid_layer_pattern` whose length is not
+    `num_hidden_layers`, or a pattern entry other than `0` or `1`;
+  - a config missing a field the formula needs. A Qwen3.5 config without
+    `layer_types` counts as missing, although vLLM would fill in a default;
   - weights that are not root-level `*.safetensors`.
 
   Qwen3's `sliding_window: null` with `use_sliding_window: false` is
   estimated normally.
 - **The estimate is approximate.**
-  - The KV cache is priced at 2 bytes per element for the full
-    `--max-model-len`, so an FP8 KV cache is over-counted.
+  - The KV cache and conv state are priced at 2 bytes per element, so an
+    FP8 KV cache is over-counted.
+  - Rounding up to whole cache blocks is left out; it is under one block per
+    layer.
   - `overheadGiB` is one constant for every model.
   - The incumbent calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
     3 GiB overhead = 21.66 GiB, against a 28.66 GiB budget.
+    `RedHatAI/Qwen3.8-27B-NVFP4` calibrates at 22.20 GiB weights + 2.14 GiB
+    (2.00 GiB for its 16 full-attention layers, 0.14 GiB of state for its 48
+    linear-attention layers) + 3 GiB = 27.35 GiB.
   - Tune `overheadGiB` against observed usage.
 - **Repos without `config.json`**, such as GGUF-only and adapter repos, are
   rejected as `enrich failed: 404 (no config.json)`. Each one still costs

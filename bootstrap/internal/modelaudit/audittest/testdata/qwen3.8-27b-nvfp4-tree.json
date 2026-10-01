@@ -1,0 +1,15 @@
+[
+{"type":"file","path":".gitattributes","size":1570},
+{"type":"file","path":"README.md","size":10163},
+{"type":"file","path":"chat_template.jinja","size":8952},
+{"type":"file","path":"config.json","size":17263},
+{"type":"file","path":"generation_config.json","size":214},
+{"type":"file","path":"model-00001-of-00002.safetensors","size":19977728084},
+{"type":"file","path":"model-00002-of-00002.safetensors","size":3861367388},
+{"type":"file","path":"model.safetensors.index.json","size":193602},
+{"type":"file","path":"model_mtp.safetensors","size":849400392},
+{"type":"file","path":"processor_config.json","size":1220},
+{"type":"file","path":"recipe.yaml","size":3804},
+{"type":"file","path":"tokenizer.json","size":19989325},
+{"type":"file","path":"tokenizer_config.json","size":1166}
+]
