@@ -68,3 +68,33 @@ func TestCurrentReadsMaxNumBatchedTokens(t *testing.T) {
 		"--max-model-len=32768", "--tool-call-parser=hermes", "--max-num-batched-tokens=0"))
 	assert.ErrorContains(t, err, "--max-num-batched-tokens")
 }
+
+func TestCurrentRecordsServingFlagsTheHybridEstimateDoesNotModel(t *testing.T) {
+	base := []string{"--max-model-len=32768", "--tool-call-parser=hermes"}
+	cases := map[string]struct {
+		args []string
+		want []string
+	}{
+		"none":                           {nil, nil},
+		"prefix caching on":              {[]string{"--enable-prefix-caching"}, []string{"--enable-prefix-caching"}},
+		"prefix caching off is default":  {[]string{"--no-enable-prefix-caching"}, nil},
+		"chunked prefill off":            {[]string{"--no-enable-chunked-prefill"}, []string{"--no-enable-chunked-prefill"}},
+		"ssm dtype, two elements":        {[]string{"--mamba-ssm-cache-dtype", "float32"}, []string{"--mamba-ssm-cache-dtype"}},
+		"ssm dtype, underscores":         {[]string{"--mamba_ssm_cache_dtype=float16"}, []string{"--mamba-ssm-cache-dtype"}},
+		"ssm dtype auto is default":      {[]string{"--mamba-ssm-cache-dtype=auto"}, nil},
+		"conv dtype":                     {[]string{"--mamba-cache-dtype=float32"}, []string{"--mamba-cache-dtype"}},
+		"speculative config, = form":     {[]string{`--speculative-config={"method":"mtp","num_speculative_tokens":1}`}, []string{"--speculative-config"}},
+		"speculative config, short form": {[]string{"-sc", `{"method":"mtp"}`}, []string{"--speculative-config"}},
+		"several, in a fixed order": {
+			[]string{"--speculative-config", "{}", "--enable-prefix-caching"},
+			[]string{"--enable-prefix-caching", "--speculative-config"},
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			cur, err := CurrentFromSpec(spec(pinnedImage, append(append([]string{}, base...), c.args...)...))
+			require.NoError(t, err)
+			assert.Equal(t, c.want, cur.UnmodelledFlags)
+		})
+	}
+}
