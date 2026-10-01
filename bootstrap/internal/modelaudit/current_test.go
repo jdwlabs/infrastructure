@@ -57,3 +57,14 @@ func TestCurrentRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentReadsMaxNumBatchedTokens(t *testing.T) {
+	c, err := CurrentFromSpec(spec(pinnedImage,
+		"--max-model-len=32768", "--tool-call-parser=hermes", "--max_num_batched_tokens", "8192"))
+	require.NoError(t, err)
+	assert.Equal(t, 8192, c.MaxNumBatchedTokens)
+
+	_, err = CurrentFromSpec(spec(pinnedImage,
+		"--max-model-len=32768", "--tool-call-parser=hermes", "--max-num-batched-tokens=0"))
+	assert.ErrorContains(t, err, "--max-num-batched-tokens")
+}

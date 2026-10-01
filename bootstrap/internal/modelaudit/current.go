@@ -20,6 +20,7 @@ type Current struct {
 	GPUMemoryUtilization float64
 	ToolCallParser       string
 	Quantization         string
+	MaxNumBatchedTokens  int
 }
 
 var vllmTagRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
@@ -67,6 +68,16 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 			return Current{}, fmt.Errorf("--gpu-memory-utilization must be in (0, 1], got %q", v)
 		}
 		c.GPUMemoryUtilization = f
+	}
+
+	// Sliding-window layers hold a window plus one batch of tokens, so the
+	// memory estimate needs the batch size vLLM will actually use.
+	if v, ok := argValue(s.Args, "--max-num-batched-tokens"); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return Current{}, fmt.Errorf("--max-num-batched-tokens must be a positive integer, got %q", v)
+		}
+		c.MaxNumBatchedTokens = n
 	}
 
 	p, ok := argValue(s.Args, "--tool-call-parser")
