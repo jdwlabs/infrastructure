@@ -351,9 +351,6 @@ func enrichFailure(err error, c candidate) (CandidateRow, string, error) {
 	return CandidateRow{}, "enrich failed: " + err.Error(), nil
 }
 
-// TrialSteps is the args delta against serving.yaml. servedName stays fixed:
-// consumers request the model by it, and the health gate checks the new name,
-// so renaming would pass the gate while every consumer broke.
 // languageModelOnlyStep keeps a multimodal wrapper's startup inside the
 // estimate. --language-model-only sets every modality limit to 0
 // (vllm/config/multimodal.py:77-79, 315-316); the vision tower is then never
@@ -363,6 +360,9 @@ func enrichFailure(err error, c candidate) (CandidateRow, string, error) {
 // and a coding deployment sends only text.
 const languageModelOnlyStep = "add --language-model-only: skips the vision tower and its startup profiling, which the memory estimate does not price"
 
+// TrialSteps is the args delta against serving.yaml. servedName stays fixed:
+// consumers request the model by it, and the health gate checks the new name,
+// so renaming would pass the gate while every consumer broke.
 func TrialSteps(cur Current, repo, sha, quant string, rule Rule, conf map[string]any) []string {
 	steps := []string{
 		fmt.Sprintf("set model.repo=%s and model.revision=%s", repo, sha),
