@@ -305,7 +305,7 @@ func enrich(ctx context.Context, cfg Config, cur Current, d Deps, reg Registry, 
 	if reason := CheckArchitecture(archs, cur.VLLMTag, conf); reason != "" {
 		return CandidateRow{}, reason, nil
 	}
-	fit := Estimate(conf, tree, cur.ContextTokens, BatchedTokens(cur, cfg.GPUMemMiB), cfg.OverheadGiB, budget)
+	fit := Estimate(conf, tree, cur.ContextTokens, ServingFor(cur, cfg.GPUMemMiB), cfg.OverheadGiB, budget)
 	if !fit.Fits {
 		return CandidateRow{}, fit.Reason, nil
 	}

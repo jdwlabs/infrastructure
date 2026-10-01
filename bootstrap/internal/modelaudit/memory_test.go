@@ -29,9 +29,10 @@ func incumbent(t *testing.T) (map[string]any, []hub.TreeEntry) {
 // budget is serving.yaml's today: 32607 MiB at vLLM's default 0.90.
 var budget = BudgetGiB(32607, 0.90)
 
-// batched is vLLM's default max_num_batched_tokens for an OpenAI API server
-// on a card under 70 GiB, which this one is.
-var batched = BatchedTokens(Current{}, 32607)
+// serving is serving.yaml's today on this card: vLLM's default
+// max_num_batched_tokens for an OpenAI API server under 70 GiB, and no flag
+// that changes the hybrid formulas.
+var serving = ServingFor(Current{}, 32607)
 
 func TestBudgetMatchesTheCard(t *testing.T) {
 	assert.InDelta(t, 28.66, budget, 0.005)
@@ -47,7 +48,7 @@ func TestBatchedTokensFollowsVLLMsDefaultForTheCard(t *testing.T) {
 func TestIncumbentFitsWithTheCalibrationNumbers(t *testing.T) {
 	cfg, tree := incumbent(t)
 
-	fit := Estimate(cfg, tree, 32768, batched, 3, budget)
+	fit := Estimate(cfg, tree, 32768, serving, 3, budget)
 
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 15.66, fit.WeightsGiB)
@@ -64,7 +65,7 @@ func TestMistralDualFormatCountsTheShardsOnce(t *testing.T) {
 	loadJSON(t, "mistral-small-3.2-config.json", &cfg)
 	loadJSON(t, "mistral-small-3.2-tree.json", &tree)
 
-	fit := Estimate(cfg, tree, 32768, batched, 3, budget)
+	fit := Estimate(cfg, tree, 32768, serving, 3, budget)
 
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 44.72, fit.WeightsGiB, "not 89.45: consolidated.safetensors duplicates the shards")
@@ -98,11 +99,11 @@ func TestConsolidatedIsExcludedOnlyWhenAnotherRootFileExists(t *testing.T) {
 
 func TestWeightsOnlyInSubfoldersAreFitUnknown(t *testing.T) {
 	cfg, _ := incumbent(t)
-	fit := Estimate(cfg, []hub.TreeEntry{{Type: "file", Path: "awq/model.safetensors", Size: gib}}, 32768, batched, 3, budget)
+	fit := Estimate(cfg, []hub.TreeEntry{{Type: "file", Path: "awq/model.safetensors", Size: gib}}, 32768, serving, 3, budget)
 	assert.False(t, fit.Known)
 	assert.Equal(t, "fit unknown: no root safetensors weights", fit.Reason)
 
-	fit = Estimate(cfg, []hub.TreeEntry{{Type: "file", Path: "model.gguf", Size: gib}}, 32768, batched, 3, budget)
+	fit = Estimate(cfg, []hub.TreeEntry{{Type: "file", Path: "model.gguf", Size: gib}}, 32768, serving, 3, budget)
 	assert.Equal(t, "fit unknown: no safetensors weights", fit.Reason)
 }
 
@@ -115,7 +116,7 @@ func TestDense70BFP16DoesNotFit(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		tree = append(tree, hub.TreeEntry{Type: "file", Path: fmt.Sprintf("model-%05d-of-00030.safetensors", i), Size: 4_700_000_000})
 	}
-	fit := Estimate(cfg, tree, 32768, batched, 3, budget)
+	fit := Estimate(cfg, tree, 32768, serving, 3, budget)
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 10.00, fit.KVGiB, "head_dim falls back to hidden_size / num_attention_heads = 128")
 	assert.False(t, fit.Fits)
@@ -126,7 +127,7 @@ func TestQwen3NullSlidingWindowIsEstimated(t *testing.T) {
 		"model_type": "qwen3", "num_hidden_layers": 36.0, "num_attention_heads": 32.0,
 		"num_key_value_heads": 8.0, "head_dim": 128.0, "sliding_window": nil, "use_sliding_window": false,
 	}
-	fit := Estimate(cfg, []hub.TreeEntry{{Type: "file", Path: "model.safetensors", Size: 8 * gib}}, 32768, batched, 3, budget)
+	fit := Estimate(cfg, []hub.TreeEntry{{Type: "file", Path: "model.safetensors", Size: 8 * gib}}, 32768, serving, 3, budget)
 	assert.True(t, fit.Known, fit.Reason)
 	assert.True(t, fit.Fits)
 }
@@ -170,7 +171,7 @@ func TestFitUnknownLayouts(t *testing.T) {
 	tree := []hub.TreeEntry{{Type: "file", Path: "model.safetensors", Size: gib}}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			fit := Estimate(c.cfg, tree, 32768, batched, 3, budget)
+			fit := Estimate(c.cfg, tree, 32768, serving, 3, budget)
 			assert.False(t, fit.Known)
 			assert.False(t, fit.Fits)
 			assert.Equal(t, c.reason, fit.Reason)
@@ -207,7 +208,7 @@ func fixture(t *testing.T, config, tree string) (map[string]any, []hub.TreeEntry
 func TestQwen35HybridIsPricedPerLayerType(t *testing.T) {
 	cfg, tree := fixture(t, "qwen3.8-27b-nvfp4-config.json", "qwen3.8-27b-nvfp4-tree.json")
 
-	fit := Estimate(cfg, tree, 32768, batched, 3, budget)
+	fit := Estimate(cfg, tree, 32768, serving, 3, budget)
 
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 22.20, fit.WeightsGiB)
@@ -233,7 +234,7 @@ func TestQwen35HybridIsPricedPerLayerType(t *testing.T) {
 func TestMiMoV2SlidingLayersArePricedAtTheirWindow(t *testing.T) {
 	cfg, tree := fixture(t, "mimo-v2.6-flash-rl-config.json", "mimo-v2.6-flash-rl-tree.json")
 
-	fit := Estimate(cfg, tree, 32768, batched, 3, budget)
+	fit := Estimate(cfg, tree, 32768, serving, 3, budget)
 
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 161.06, fit.WeightsGiB)
@@ -260,7 +261,7 @@ func gdnConfig(modelType, arch string) map[string]any {
 func TestGatedDeltaNetRecurrentStateDtype(t *testing.T) {
 	const mib = 1 << 20
 	kv := func(cfg map[string]any) float64 {
-		b, reason := CacheBytes(cfg, 1024, batched)
+		b, reason := CacheBytes(cfg, 1024, serving)
 		require.Empty(t, reason)
 		return b
 	}
@@ -336,10 +337,29 @@ func TestHybridLayoutsThatCannotBePricedAreFitUnknown(t *testing.T) {
 	tree := []hub.TreeEntry{{Type: "file", Path: "model.safetensors", Size: gib}}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			fit := Estimate(c.cfg, tree, 32768, batched, 3, budget)
+			fit := Estimate(c.cfg, tree, 32768, serving, 3, budget)
 			assert.False(t, fit.Known)
 			assert.False(t, fit.Fits)
 			assert.Equal(t, c.reason, fit.Reason)
 		})
 	}
+}
+
+func TestServingFlagsThatChangeHybridFormulasAreFitUnknown(t *testing.T) {
+	qwen, qwenTree := fixture(t, "qwen3.8-27b-nvfp4-config.json", "qwen3.8-27b-nvfp4-tree.json")
+	mimo, mimoTree := fixture(t, "mimo-v2.6-flash-rl-config.json", "mimo-v2.6-flash-rl-tree.json")
+	flagged := ServingFor(Current{UnmodelledFlags: []string{"--enable-prefix-caching"}}, 32607)
+
+	fit := Estimate(qwen, qwenTree, 32768, flagged, 3, budget)
+	assert.False(t, fit.Known)
+	assert.Equal(t, "fit unknown: serving flag --enable-prefix-caching not modelled", fit.Reason)
+
+	fit = Estimate(mimo, mimoTree, 32768, flagged, 3, budget)
+	assert.False(t, fit.Known)
+	assert.Equal(t, "fit unknown: serving flag --enable-prefix-caching not modelled", fit.Reason)
+
+	cfg, tree := incumbent(t)
+	fit = Estimate(cfg, tree, 32768, flagged, 3, budget)
+	require.True(t, fit.Known, "a full-attention model is priced the same whatever these flags say")
+	assert.Equal(t, 21.66, fit.TotalGiB)
 }

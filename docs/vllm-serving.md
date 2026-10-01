@@ -755,6 +755,12 @@ that URL includes the `JIRA_BASE_URL` host.
     `linear_attention` outside Qwen3.5 and Qwen3-Next;
   - a `layer_types` or `hybrid_layer_pattern` whose length is not
     `num_hidden_layers`, or a pattern entry other than `0` or `1`;
+  - a model with linear-attention or sliding layers when `serving.yaml` sets
+    a flag those formulas assume is at its default: `--enable-prefix-caching`,
+    `--no-enable-chunked-prefill`, `--mamba-cache-dtype` or
+    `--mamba-ssm-cache-dtype` other than `auto`, or `--speculative-config`.
+    The reason names the flag. Full-attention models are priced the same
+    either way;
   - a config missing a field the formula needs. A Qwen3.5 config without
     `layer_types` counts as missing, although vLLM would fill in a default;
   - weights that are not root-level `*.safetensors`.

@@ -21,6 +21,7 @@ type Current struct {
 	ToolCallParser       string
 	Quantization         string
 	MaxNumBatchedTokens  int
+	UnmodelledFlags      []string
 }
 
 var vllmTagRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
@@ -80,6 +81,8 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 		c.MaxNumBatchedTokens = n
 	}
 
+	c.UnmodelledFlags = unmodelledFlags(s.Args)
+
 	p, ok := argValue(s.Args, "--tool-call-parser")
 	if !ok || p == "" {
 		return Current{}, fmt.Errorf("serving.yaml args carry no --tool-call-parser: the registry sanity check needs the incumbent's parser")
@@ -87,6 +90,38 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 	c.ToolCallParser = p
 	c.Quantization, _ = argValue(s.Args, "--quantization")
 	return c, nil
+}
+
+// unmodelledFlags names the serving flags, set away from vLLM's default, that
+// change what a linear-attention or sliding layer holds: prefix caching keeps
+// one Gated DeltaNet state per block instead of one per sequence, the two
+// mamba dtypes resize that state, speculative decoding adds conv rows and
+// state blocks, and disabling chunked prefill makes a sliding layer hold the
+// whole context. The order is fixed so the reason a model is rejected with is
+// stable.
+func unmodelledFlags(args []string) []string {
+	var out []string
+	if hasFlag(args, "--enable-prefix-caching") {
+		out = append(out, "--enable-prefix-caching")
+	}
+	if hasFlag(args, "--no-enable-chunked-prefill") {
+		out = append(out, "--no-enable-chunked-prefill")
+	}
+	for _, f := range []string{"--mamba-cache-dtype", "--mamba-ssm-cache-dtype"} {
+		if v, ok := argValue(args, f); ok && v != "auto" {
+			out = append(out, f)
+		}
+	}
+	if hasFlag(args, "--speculative-config") || hasFlag(args, "-sc") {
+		out = append(out, "--speculative-config")
+	}
+	return out
+}
+
+// hasFlag reports a flag in any spelling argValue accepts, value or not.
+func hasFlag(args []string, flag string) bool {
+	_, ok := argValue(args, flag)
+	return ok
 }
 
 // argValue reads a flag in either spelling vLLM accepts: --flag=value, or

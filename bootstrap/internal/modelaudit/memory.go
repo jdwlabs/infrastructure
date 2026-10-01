@@ -113,6 +113,28 @@ func BatchedTokens(cur Current, gpuMemMiB int) int {
 	return 2048
 }
 
+// Serving is what serving.yaml decides about the cache besides the context
+// length.
+type Serving struct {
+	BatchedTokens int
+	// UnmodelledFlags are flags set away from the defaults the linear and
+	// sliding formulas assume; see unmodelledFlags.
+	UnmodelledFlags []string
+}
+
+func ServingFor(cur Current, gpuMemMiB int) Serving {
+	return Serving{BatchedTokens: BatchedTokens(cur, gpuMemMiB), UnmodelledFlags: cur.UnmodelledFlags}
+}
+
+// flagReason rejects a linear or sliding layout priced under a serving flag
+// it assumes is at its default. Full attention is unaffected by these flags.
+func (sv Serving) flagReason() string {
+	if len(sv.UnmodelledFlags) == 0 {
+		return ""
+	}
+	return "fit unknown: serving flag " + sv.UnmodelledFlags[0] + " not modelled"
+}
+
 func missing(name string) string { return "fit unknown: config missing " + name }
 
 // requireNumbers reads positive numeric fields, naming the first one absent.
@@ -150,13 +172,13 @@ var gatedDeltaNetTypes = map[string]bool{"qwen3_5": true, "qwen3_5_moe": true, "
 // is what its own startup check sums. Block rounding is left out; it is
 // under one block per layer. A layout it cannot price is a reason, never a
 // guess.
-func CacheBytes(cfg map[string]any, contextTokens, batchedTokens int) (float64, string) {
+func CacheBytes(cfg map[string]any, contextTokens int, sv Serving) (float64, string) {
 	if field(cfg, "kv_lora_rank") != nil {
 		return 0, "fit unknown: MLA (kv_lora_rank) not modelled"
 	}
 	top, _ := ModelTypes(cfg)
 	if top == "mimo_v2" {
-		return mimoV2Bytes(cfg, contextTokens, batchedTokens)
+		return mimoV2Bytes(cfg, contextTokens, sv)
 	}
 	// Sliding attention counts only when it actually runs: Qwen3 configs
 	// carry sliding_window: null beside use_sliding_window: false, and
@@ -190,6 +212,11 @@ func CacheBytes(cfg map[string]any, contextTokens, batchedTokens int) (float64, 
 	layers := int(layersF)
 	if hasTypes && len(types) != layers {
 		return 0, fmt.Sprintf("fit unknown: layer_types has %d entries for %d layers", len(types), layers)
+	}
+	if nLinear > 0 {
+		if r := sv.flagReason(); r != "" {
+			return 0, r
+		}
 	}
 	perToken, reason := fullAttentionBytesPerToken(cfg)
 	if reason != "" {
@@ -230,12 +257,12 @@ func fullAttentionBytesPerToken(cfg map[string]any) (float64, string) {
 // gatedDeltaNetStateBytes is one linear_attention layer's state, fixed in
 // size whatever the context: a conv state of conv_dim x (kernel - 1) and a
 // recurrent state of value_heads x value_dim x key_dim
-// (vllm/model_executor/layers/mamba/mamba_utils.py:213-234; speculative
-// decoding would add rows, and serving.yaml runs none). One state per
+// (vllm/model_executor/layers/mamba/mamba_utils.py:213-234). One state per
 // layer is reserved because hybrid models default to prefix caching off
 // (vllm/config/model.py:1832-1837, engine/arg_utils.py:2492-2493), which
-// leaves mamba_cache_mode "none" (model_executor/models/config.py:452-462,
-// v1/kv_cache_interface.py:657).
+// leaves mamba_cache_mode "none" (model_executor/models/config.py:454-460,
+// v1/kv_cache_interface.py:657). The serving flags that would change either
+// assumption are rejected before this runs (Serving.flagReason).
 func gatedDeltaNetStateBytes(cfg map[string]any) (float64, string) {
 	v, reason := requireNumbers(cfg, "linear_num_key_heads", "linear_num_value_heads",
 		"linear_key_head_dim", "linear_value_head_dim", "linear_conv_kernel_dim")
@@ -287,7 +314,7 @@ func recurrentStateBytes(cfg map[string]any) (float64, string) {
 // holds window - 1 + max_num_batched_tokens tokens, not the window, because
 // a chunked-prefill step keeps the previous window beside the new chunk
 // (kv_cache_interface.py:506-526).
-func mimoV2Bytes(cfg map[string]any, contextTokens, batchedTokens int) (float64, string) {
+func mimoV2Bytes(cfg map[string]any, contextTokens int, sv Serving) (float64, string) {
 	pattern, ok := field(cfg, "hybrid_layer_pattern").([]any)
 	if !ok {
 		return 0, missing("hybrid_layer_pattern")
@@ -310,6 +337,11 @@ func mimoV2Bytes(cfg map[string]any, contextTokens, batchedTokens int) (float64,
 			return 0, fmt.Sprintf("fit unknown: hybrid_layer_pattern entry %v not modelled", p)
 		}
 	}
+	if nSliding > 0 {
+		if r := sv.flagReason(); r != "" {
+			return 0, r
+		}
+	}
 	var total float64
 	if nFull > 0 {
 		perToken, reason := mimoBytesPerToken(cfg, "num_key_value_heads", "head_dim", "v_head_dim")
@@ -327,7 +359,7 @@ func mimoV2Bytes(cfg map[string]any, contextTokens, batchedTokens int) (float64,
 		if !ok {
 			return 0, missing("sliding_window_size")
 		}
-		held := min(window-1+float64(batchedTokens), float64(contextTokens))
+		held := min(window-1+float64(sv.BatchedTokens), float64(contextTokens))
 		total += nSliding * perToken * held
 	}
 	return total, ""
@@ -348,9 +380,9 @@ func mimoBytesPerToken(cfg map[string]any, kvHeadsKey, kDimKey, vDimKey string) 
 }
 
 // Estimate is weights + CacheBytes + overhead against the budget.
-func Estimate(cfg map[string]any, tree []hub.TreeEntry, contextTokens, batchedTokens int, overheadGiB, budgetGiB float64) Fit {
+func Estimate(cfg map[string]any, tree []hub.TreeEntry, contextTokens int, sv Serving, overheadGiB, budgetGiB float64) Fit {
 	fit := Fit{OverheadGiB: overheadGiB, BudgetGiB: round2(budgetGiB)}
-	kvBytes, reason := CacheBytes(cfg, contextTokens, batchedTokens)
+	kvBytes, reason := CacheBytes(cfg, contextTokens, sv)
 	if reason != "" {
 		fit.Reason = reason
 		return fit
