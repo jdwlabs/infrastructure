@@ -298,3 +298,10 @@ func (c *Client) ToolParserRegistry(ctx context.Context, tag string) ([]byte, er
 	body, _, err := c.get(ctx, Discovery, u, false)
 	return body, err
 }
+
+// ModelRegistry fetches vllm/model_executor/models/registry.py at a vLLM tag.
+func (c *Client) ModelRegistry(ctx context.Context, tag string) ([]byte, error) {
+	u := fmt.Sprintf("%s/vllm-project/vllm/%s/vllm/model_executor/models/registry.py", c.RawBase, url.PathEscape(tag))
+	body, _, err := c.get(ctx, Discovery, u, false)
+	return body, err
+}

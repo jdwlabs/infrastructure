@@ -71,6 +71,15 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 		return fail("registry_unusable", fmt.Sprintf("vLLM %s: %v", cur.VLLMTag, err))
 	}
 
+	src, err = d.Hub.ModelRegistry(ctx, cur.VLLMTag)
+	if err != nil {
+		return fail("model_registry_unreadable", fmt.Sprintf("read the vLLM %s model registry: %v", cur.VLLMTag, err))
+	}
+	archs, err := ParseModelRegistry(src)
+	if err != nil {
+		return fail("model_registry_unusable", fmt.Sprintf("vLLM %s: %v", cur.VLLMTag, err))
+	}
+
 	items, orgsRead, budgetStopped := discoverOrgs(ctx, cfg, d, &r)
 	if ctx.Err() != nil {
 		return cancelled()
@@ -119,7 +128,7 @@ func Run(ctx context.Context, cfg Config, cur Current, d Deps) (Report, error) {
 			notEnriched++
 			continue
 		}
-		row, reason, err := enrich(ctx, cfg, cur, d, reg, c, budget)
+		row, reason, err := enrich(ctx, cfg, cur, d, reg, archs, c, budget)
 		if ctx.Err() != nil {
 			return cancelled()
 		}
@@ -265,7 +274,7 @@ func rank(cs []candidate) {
 	})
 }
 
-func enrich(ctx context.Context, cfg Config, cur Current, d Deps, reg Registry, c candidate, budget float64) (CandidateRow, string, error) {
+func enrich(ctx context.Context, cfg Config, cur Current, d Deps, reg Registry, archs Architectures, c candidate, budget float64) (CandidateRow, string, error) {
 	id, sha := c.item.ID, c.item.SHA
 	info, err := d.Hub.ModelInfo(ctx, id, sha)
 	if err != nil {
@@ -291,6 +300,9 @@ func enrich(ctx context.Context, cfg Config, cur Current, d Deps, reg Registry, 
 	}
 	rule, reason := ResolveCandidateParser(cfg, reg, cur.VLLMTag, id, conf)
 	if reason != "" {
+		return CandidateRow{}, reason, nil
+	}
+	if reason := CheckArchitecture(archs, cur.VLLMTag, conf); reason != "" {
 		return CandidateRow{}, reason, nil
 	}
 	fit := Estimate(conf, tree, cur.ContextTokens, BatchedTokens(cur, cfg.GPUMemMiB), cfg.OverheadGiB, budget)

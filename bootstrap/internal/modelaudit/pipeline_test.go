@@ -3,6 +3,7 @@ package modelaudit
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestRunReportsAFittingCandidateWithItsTrialSteps(t *testing.T) {
 	}
 	assert.Equal(t, "2026-W40", r.Summary.Week)
 	assert.Equal(t, 28.66, r.Summary.BudgetGiB)
-	assert.Equal(t, 6, r.Summary.Requests, "registry, one org page, trending, three enrich requests")
+	assert.Equal(t, 7, r.Summary.Requests, "two registries, one org page, trending, three enrich requests")
 	assert.Contains(t, r.Skipped, Skip{Source: "jira", Error: "dedupe skipped: test"})
 }
 
@@ -217,14 +218,14 @@ func TestRunNeverEnrichesTheIncumbent(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "incumbent", rejected(r)["QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ"])
-	assert.Equal(t, 3, r.Summary.Requests, "registry, one org page, trending; no enrich request")
+	assert.Equal(t, 4, r.Summary.Requests, "two registries, one org page, trending; no enrich request")
 }
 
 func TestRunSpendsATightEnrichmentBudgetOnlyOnUnreportedRepos(t *testing.T) {
 	h := audittest.NewHub(t)
 	h.Orgs["Qwen"] = [][]audittest.Model{{fits("Qwen/Old-News-Instruct", shaA, 9), fits("Qwen/New-Instruct", shaB, 1)}}
 	cfg := runConfig(t, "Qwen")
-	cfg.MaxRequests = 6 // registry, org page, trending, three enrich requests for one repo
+	cfg.MaxRequests = 7 // two registries, org page, trending, three enrich requests for one repo
 	d := deps(h, cfg)
 	d.Reported = map[string]bool{"Qwen/Old-News-Instruct": true}
 
@@ -244,7 +245,7 @@ func TestRunNamesEveryOrgTheDiscoveryBudgetStopped(t *testing.T) {
 	h.Orgs["Deep"] = [][]audittest.Model{{fits("Deep/A-Instruct", shaA, 1)}, {fits("Deep/B-Instruct", shaB, 1)}}
 	h.Orgs["Unread"] = [][]audittest.Model{{fits("Unread/C-Instruct", shaC, 1)}}
 	cfg := runConfig(t, "Broken", "Deep", "Unread")
-	cfg.DiscoveryRequests = 6 // registry, four attempts at Broken, Deep's first page
+	cfg.DiscoveryRequests = 7 // two registries, four attempts at Broken, Deep's first page
 
 	r, err := Run(context.Background(), cfg, testCurrent(t), deps(h, cfg))
 
@@ -264,14 +265,14 @@ func TestRunFailsWhenTheBudgetStopsDiscoveryBeforeAnyOrg(t *testing.T) {
 	h := audittest.NewHub(t)
 	h.Orgs["Qwen"] = [][]audittest.Model{{fits("Qwen/A-Instruct", shaA, 1)}}
 	cfg := runConfig(t, "Qwen")
-	cfg.DiscoveryRequests = 1
+	cfg.DiscoveryRequests = 2 // the two registries
 
 	r, err := Run(context.Background(), cfg, testCurrent(t), deps(h, cfg))
 
 	var f *Failure
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, "discovery_budget_spent", f.Code)
-	assert.Contains(t, f.Msg, "discoveryRequests=1")
+	assert.Contains(t, f.Msg, "discoveryRequests=2")
 	assert.Same(t, f, r.Failure)
 }
 
@@ -310,7 +311,7 @@ func TestRunRejectsAndNamesCandidatesTheEnrichmentBudgetStopped(t *testing.T) {
 	h := audittest.NewHub(t)
 	h.Orgs["Qwen"] = [][]audittest.Model{{fits("Qwen/First-Instruct", shaA, 3), fits("Qwen/Second-Instruct", shaB, 2), fits("Qwen/Third-Instruct", shaC, 1)}}
 	cfg := runConfig(t, "Qwen")
-	cfg.MaxRequests = 6 // registry, org page, trending, three enrich requests for First
+	cfg.MaxRequests = 7 // two registries, org page, trending, three enrich requests for First
 
 	r, err := Run(context.Background(), cfg, testCurrent(t), deps(h, cfg))
 
@@ -337,8 +338,8 @@ func TestRunSendsTheTokenOnlyToTheHubAndEnrichesGatedRepos(t *testing.T) {
 	require.Len(t, r.Candidates, 1)
 	assert.Equal(t, "manual", r.Candidates[0].Gated)
 	auth := h.AuthHeaders()
-	assert.Equal(t, "", auth[0], "the registry request goes to GitHub")
-	for _, a := range auth[1:] {
+	assert.Equal(t, []string{"", ""}, auth[:2], "both registry requests go to GitHub")
+	for _, a := range auth[2:] {
 		assert.Equal(t, "Bearer hf_test", a)
 	}
 }
@@ -356,4 +357,51 @@ func TestTrialStepsForAnUnquantizedModelSayWhy(t *testing.T) {
 	steps := TrialSteps(testCurrent(t), "Org/M", shaA, "none", Rule{Parser: "llama3_json", ExtraArgs: []string{"--chat-template=<model's tool chat template>"}})
 	assert.Contains(t, steps, "remove --quantization=awq_marlin: this model has no quantization_config")
 	assert.Contains(t, steps, "add --chat-template=<model's tool chat template>")
+}
+
+func TestRunFailsOnAnUnusableModelRegistry(t *testing.T) {
+	for code, mut := range map[string]func(*audittest.Hub){
+		"model_registry_unreadable": func(h *audittest.Hub) { h.ModelRegistryStatus = http.StatusNotFound },
+		"model_registry_unusable":   func(h *audittest.Hub) { h.ModelRegistry = []byte("# moved\n") },
+	} {
+		t.Run(code, func(t *testing.T) {
+			h := audittest.NewHub(t)
+			mut(h)
+			cfg := runConfig(t, "Qwen")
+			_, err := Run(context.Background(), cfg, testCurrent(t), deps(h, cfg))
+			var f *Failure
+			require.ErrorAs(t, err, &f)
+			assert.Equal(t, code, f.Code)
+			assert.Contains(t, f.Msg, "v0.24.0")
+		})
+	}
+}
+
+// The recorded Qwen3.8 repo is a Qwen3_5ForConditionalGeneration; the same
+// config renamed to Qwen3_5ForCausalLM is the text-only class vLLM v0.24.0
+// does not register.
+func TestRunChecksTheArchitectureBeforeTheFit(t *testing.T) {
+	h := audittest.NewHub(t)
+	conf := audittest.Fixture("qwen3.8-27b-nvfp4-config.json")
+	tree := audittest.Fixture("qwen3.8-27b-nvfp4-tree.json")
+	wrapped := fits("Qwen/Qwen3.8-Instruct", shaA, 3)
+	wrapped.Config, wrapped.Tree = conf, tree
+	textOnly := fits("Qwen/Qwen3.8-Text-Instruct", shaB, 2)
+	textOnly.Config = []byte(strings.Replace(string(conf), "Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", 1))
+	textOnly.Tree = tree
+	bare := fits("Qwen/No-Architecture-Instruct", shaC, 1)
+	bare.Config = []byte(`{"model_type":"qwen3_moe"}`)
+	h.Orgs["Qwen"] = [][]audittest.Model{{wrapped, textOnly, bare}}
+	cfg := runConfig(t, "Qwen")
+	cfg.Parsers = append(cfg.Parsers, Rule{ModelType: "qwen3_5", Parser: "qwen3_xml"})
+
+	r, err := Run(context.Background(), cfg, testCurrent(t), deps(h, cfg))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Qwen/Qwen3.8-Instruct"}, repos(r.Candidates))
+	assert.Equal(t, 27.35, r.Candidates[0].TotalGiB)
+	assert.Equal(t, map[string]string{
+		"Qwen/Qwen3.8-Text-Instruct":    "architecture Qwen3_5ForCausalLM not in vLLM v0.24.0",
+		"Qwen/No-Architecture-Instruct": "architecture missing",
+	}, rejected(r))
 }

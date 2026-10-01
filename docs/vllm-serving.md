@@ -554,6 +554,11 @@ It does:
 - read vLLM's tool-parser registry (`vllm/tool_parsers/__init__.py` at
   `serving.yaml`'s tag) from GitHub. The run fails if that file is
   unreadable, has fewer than 10 parsers, or lacks the incumbent's parser;
+- read vLLM's model registry (`vllm/model_executor/models/registry.py` at
+  the same tag) from GitHub. Every table `_VLLM_MODELS` spreads is read, and
+  each key indented four spaces is an architecture. The run fails if that
+  file is unreadable, a table is missing or unclosed, it yields fewer than
+  100 architectures, or it lacks `LlamaForCausalLM`;
 - list the models each allow-listed org created in the last `windowDays`,
   plus the top `trendingN` trending `text-generation` repos created in the
   last `trendingWindowDays`. Trending repos are flagged **unvetted** and rank
@@ -567,6 +572,10 @@ It does:
     This check runs before enrichment, so it spends no requests;
   - it must be instruction-tuned;
   - a parser rule must match, and that parser must exist in the registry;
+  - one of `config.json`'s `architectures` must be in the model registry,
+    else it is rejected as `architecture <first listed> not in vLLM <tag>`,
+    or `architecture missing` when the list is absent or empty. vLLM's
+    fallback to the Transformers backend is not counted;
   - it must fit the GPU;
 - file one Jira ticket per ISO week, labelled `model-audit` and
   `model-audit-<YYYY-Www>`, under `jira.parent`:
@@ -594,15 +603,18 @@ or trending read, or an org cut short by the budget, is a `skipped` row; a
 candidate the budget left unread is rejected as `not enriched: request
 budget spent`. A run stops with exit 1 and files nothing when:
 
-- the registry, `serving.yaml` or `audit.yaml` cannot be used;
+- either registry, `serving.yaml` or `audit.yaml` cannot be used
+  (`registry_*` for the tool-parser registry, `model_registry_*` for the
+  model registry);
 - every allow-listed org query fails, or the discovery budget runs out
   before any org is read;
 - the Jira history search fails, because filing without dedupe would repeat
   candidates;
 - the run is interrupted (`SIGINT`/`SIGTERM`) during discovery,
   enrichment or filing's Jira reads, with code `cancelled`. An interrupt
-  during the registry read or the Jira history search is reported as
-  `registry_unreadable` or `jira_read_failed` instead.
+  during a registry read or the Jira history search is reported as
+  `registry_unreadable`, `model_registry_unreadable` or `jira_read_failed`
+  instead.
 
 A failed Jira create or comment also exits 1, as `jira_write_failed`.
 
@@ -626,7 +638,7 @@ not here; they come from `serving.yaml`, so the two files cannot disagree.
 | `trendingN` | how many trending repos are read (one page) | 1–100 |
 | `maxCandidates` | candidates reported; the rest are rejected as `over maxCandidates (N)` | 1–50 |
 | `maxRequests` | hard cap on Hub and GitHub attempts, retries included; Jira is not counted | 1–500 (the Hub's anonymous limit is 500 per 5 minutes per IP) |
-| `discoveryRequests` | the share of `maxRequests` the registry read and the listings may spend; enrichment gets the rest | 1 to `maxRequests`−1 |
+| `discoveryRequests` | the share of `maxRequests` the two registry reads and the listings may spend; enrichment gets the rest | 1 to `maxRequests`−1 |
 | `gpuMemMiB` | the card's total memory. The budget is `gpuMemMiB / 1024 × --gpu-memory-utilization` | 1024–1048576 |
 | `overheadGiB` | constant added to weights and KV cache in the fit estimate | 0–64 |
 | `orgs` | the allow-listed Hub organisations | at least one, no duplicates |

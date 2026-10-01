@@ -92,17 +92,21 @@ type Hub struct {
 	TrendingStatus int
 	Registry       []byte
 	RegistryStatus int
-	requests       []string
-	auth           []string
+	// ModelRegistry is vllm/model_executor/models/registry.py.
+	ModelRegistry       []byte
+	ModelRegistryStatus int
+	requests            []string
+	auth                []string
 }
 
-// NewHub starts a fake serving the recorded v0.24.0 registry and no models.
+// NewHub starts a fake serving the recorded v0.24.0 registries and no models.
 func NewHub(t *testing.T) *Hub {
 	t.Helper()
 	h := &Hub{
-		Orgs:      map[string][][]Model{},
-		OrgStatus: map[string]int{},
-		Registry:  Fixture("tool_parsers_v0.24.0.py"),
+		Orgs:          map[string][][]Model{},
+		OrgStatus:     map[string]int{},
+		Registry:      Fixture("tool_parsers_v0.24.0.py"),
+		ModelRegistry: Fixture("model_registry_v0.24.0.py"),
 	}
 	h.Server = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.Server.Close)
@@ -154,6 +158,12 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write(h.Registry)
+	case strings.HasPrefix(path, "/vllm-project/vllm/") && strings.HasSuffix(path, "/vllm/model_executor/models/registry.py"):
+		if h.ModelRegistryStatus != 0 {
+			w.WriteHeader(h.ModelRegistryStatus)
+			return
+		}
+		_, _ = w.Write(h.ModelRegistry)
 	case path == "/api/models":
 		h.serveList(w, r)
 	case strings.HasPrefix(path, "/api/models/"):

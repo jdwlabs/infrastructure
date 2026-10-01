@@ -170,7 +170,7 @@ func TestAuditDedupeSearchFailureFilesNothing(t *testing.T) {
 }
 
 func TestAuditDiscoveryBudgetSpentBeforeAnyOrgFilesNothing(t *testing.T) {
-	e := newAuditEnv(t, set("discoveryRequests: 120", "discoveryRequests: 1"))
+	e := newAuditEnv(t, set("discoveryRequests: 120", "discoveryRequests: 2"))
 
 	_, err := e.run(t, false)
 
@@ -247,8 +247,8 @@ func TestAuditCancelledWhileFilingReadsJiraFailsAsCancelled(t *testing.T) {
 }
 
 func TestAuditEnrichmentBudgetSpentStillFilesAndNamesTheRest(t *testing.T) {
-	// registry, two org pages, trending, then three enrich requests for A
-	e := newAuditEnv(t, set("maxRequests: 400", "maxRequests: 7"), set("discoveryRequests: 120", "discoveryRequests: 6"))
+	// two registries, two org pages, trending, then three enrich requests for A
+	e := newAuditEnv(t, set("maxRequests: 400", "maxRequests: 8"), set("discoveryRequests: 120", "discoveryRequests: 7"))
 	e.hub.Orgs["Qwen"] = [][]audittest.Model{{newModel("Qwen/A-Instruct", shaA, 20), newModel("Qwen/B-Instruct", shaB, 10)}}
 
 	out, err := e.run(t, false)
@@ -261,8 +261,8 @@ func TestAuditEnrichmentBudgetSpentStillFilesAndNamesTheRest(t *testing.T) {
 }
 
 func TestAuditFailedAndTruncatedOrgsAreFiledAsSkipped(t *testing.T) {
-	// registry, four attempts at Qwen, QuantTrio's first page
-	e := newAuditEnv(t, set("discoveryRequests: 120", "discoveryRequests: 6"))
+	// two registries, four attempts at Qwen, QuantTrio's first page
+	e := newAuditEnv(t, set("discoveryRequests: 120", "discoveryRequests: 7"))
 	e.hub.OrgStatus["Qwen"] = http.StatusInternalServerError
 	e.hub.Orgs["QuantTrio"] = [][]audittest.Model{{newModel("QuantTrio/A-Instruct", shaA, 1)}, {newModel("QuantTrio/B-Instruct", shaB, 1)}}
 
