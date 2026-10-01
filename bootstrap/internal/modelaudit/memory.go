@@ -171,10 +171,11 @@ func architectures(cfg map[string]any) []string {
 var gatedDeltaNetTypes = map[string]bool{"qwen3_5": true, "qwen3_5_moe": true, "qwen3_next": true}
 
 // CacheBytes is what vLLM v0.24.0 reserves for one sequence of contextTokens:
-// each layer's max_memory_usage_bytes (vllm/v1/kv_cache_interface.py), which
-// is what its own startup check sums. Block rounding is left out; it is
-// under one block per layer. A layout it cannot price is a reason, never a
-// guess.
+// each layer's max_memory_usage_bytes (vllm/v1/kv_cache_interface.py). Its
+// own startup check prices grouped, padded pages instead
+// (v1/core/kv_cache_utils.py); the block rounding and group padding that
+// adds are left out, 0.01 GiB for Qwen3.8. A layout it cannot price is a
+// reason, never a guess.
 func CacheBytes(cfg map[string]any, contextTokens int, sv Serving) (float64, string) {
 	if field(cfg, "kv_lora_rank") != nil {
 		return 0, "fit unknown: MLA (kv_lora_rank) not modelled"

@@ -769,8 +769,9 @@ that URL includes the `JIRA_BASE_URL` host.
     `--mamba-ssm-cache-dtype` other than `auto`, or `--speculative-config`.
     The reason names the flag. Full-attention models are priced the same
     either way;
-  - a config missing a field the formula needs. A Qwen3.5 config without
-    `layer_types` counts as missing, although vLLM would fill in a default;
+  - a config missing a field the formula needs. A Qwen3.5 or Qwen3-Next
+    config without `layer_types` counts as missing, although vLLM would fill
+    in a default from `full_attention_interval`;
   - weights that are not root-level `*.safetensors`.
 
   Qwen3's `sliding_window: null` with `use_sliding_window: false` is
@@ -778,8 +779,9 @@ that URL includes the `JIRA_BASE_URL` host.
 - **The estimate is approximate.**
   - The KV cache and conv state are priced at 2 bytes per element, so an
     FP8 KV cache is over-counted.
-  - Rounding up to whole cache blocks is left out; it is under one block per
-    layer.
+  - Block rounding and hybrid group padding are left out. They are small
+    (0.01 GiB for Qwen3.8), but can exceed one block per layer when a
+    model's layer counts per type are not multiples of each other.
   - `overheadGiB` is one constant for every model, calibrated on the
     text-only incumbent. A multimodal model adds startup memory it does not
     cover: encoder profiling, sampler warm-up over a larger vocabulary, and
