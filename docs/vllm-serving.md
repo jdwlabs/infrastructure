@@ -550,7 +550,9 @@ used:
 It does:
 
 - read `serving.yaml` for the incumbent repo, revision, vLLM tag,
-  `--tool-call-parser`, `--max-model-len` and `--gpu-memory-utilization`;
+  `--tool-call-parser`, `--max-model-len` and `--gpu-memory-utilization`,
+  plus the flags the fit estimate and trial steps depend on (see
+  [Known limits](#known-limits));
 - read vLLM's tool-parser registry (`vllm/tool_parsers/__init__.py` at
   `serving.yaml`'s tag) from GitHub. The run fails if that file is
   unreadable, has fewer than 10 parsers, or lacks the incumbent's parser;
@@ -749,9 +751,10 @@ that URL includes the `JIRA_BASE_URL` host.
     state. The recurrent state is float32 when a Qwen3.5 multimodal wrapper's
     `mamba_ssm_dtype` says so;
   - a MiMo-V2 sliding layer (`hybrid_layer_pattern` entry `1`) holds
-    `sliding_window_size − 1 + max_num_batched_tokens` tokens, not just the
-    window, because a chunked-prefill step keeps the previous window beside
-    the new chunk. `max_num_batched_tokens` is `serving.yaml`'s
+    `sliding_window_size − 1 + max_num_batched_tokens` tokens, capped at
+    `--max-model-len`, not just the window, because a chunked-prefill step
+    keeps the previous window beside the new chunk.
+    `max_num_batched_tokens` is `serving.yaml`'s
     `--max-num-batched-tokens`, else vLLM's default for the card: 2048 below
     70 GiB, 8192 at or above it.
 
