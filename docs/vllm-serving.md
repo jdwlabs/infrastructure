@@ -587,7 +587,15 @@ It does:
 
 Each candidate carries trial steps: an args delta against `serving.yaml`,
 written as a starting point. `servedName` is never changed in them, because
-consumers request the model by that name.
+consumers request the model by that name. A candidate whose architecture is
+a multimodal `*ForConditionalGeneration` wrapper also gets
+`add --language-model-only`, unless `serving.yaml` already sets it. That
+flag skips building the vision tower and profiling its encoder at startup,
+neither of which the memory estimate prices.
+
+Each candidate also carries `marginGiB`, the budget minus the estimated
+total: how far the one-constant `overheadGiB` can be wrong before the model
+stops fitting.
 
 It does not:
 
@@ -772,7 +780,11 @@ that URL includes the `JIRA_BASE_URL` host.
     FP8 KV cache is over-counted.
   - Rounding up to whole cache blocks is left out; it is under one block per
     layer.
-  - `overheadGiB` is one constant for every model.
+  - `overheadGiB` is one constant for every model, calibrated on the
+    text-only incumbent. A multimodal model adds startup memory it does not
+    cover: encoder profiling, sampler warm-up over a larger vocabulary, and
+    CUDA graphs. A `marginGiB` below about 2 GiB on a multimodal model is
+    tight; trial it with `--language-model-only` and watch the startup log.
   - The incumbent calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
     3 GiB overhead = 21.66 GiB, against a 28.66 GiB budget.
     `RedHatAI/Qwen3.8-27B-NVFP4` calibrates at 22.20 GiB weights + 2.14 GiB

@@ -25,12 +25,12 @@ func RenderTOON(r Report) string {
 	fmt.Fprintf(&b, "  requests: %d\n", s.Requests)
 	fmt.Fprintf(&b, "  dryRun: %t\n", s.DryRun)
 
-	fmt.Fprintf(&b, "candidates[%d]{repo,pool,createdAt,downloads,quant,weightsGiB,totalGiB,parser,license,gated,url}:\n", len(r.Candidates))
+	fmt.Fprintf(&b, "candidates[%d]{repo,pool,createdAt,downloads,quant,weightsGiB,totalGiB,marginGiB,parser,license,gated,url}:\n", len(r.Candidates))
 	var steps int
 	for _, c := range r.Candidates {
-		fmt.Fprintf(&b, "  %s,%s,%s,%d,%s,%.2f,%.2f,%s,%s,%s,%s\n",
+		fmt.Fprintf(&b, "  %s,%s,%s,%d,%s,%.2f,%.2f,%.2f,%s,%s,%s,%s\n",
 			toonCell(c.Repo), c.Pool, c.CreatedAt.UTC().Format(time.RFC3339), c.Downloads, toonCell(c.Quant),
-			c.WeightsGiB, c.TotalGiB, toonCell(c.Parser), toonCell(c.License), toonCell(c.Gated), toonCell(c.URL))
+			c.WeightsGiB, c.TotalGiB, c.MarginGiB, toonCell(c.Parser), toonCell(c.License), toonCell(c.Gated), toonCell(c.URL))
 		steps += len(c.TrialSteps)
 	}
 	if steps > 0 {

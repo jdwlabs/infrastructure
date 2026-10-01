@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/modelaudit/hub"
@@ -325,11 +326,12 @@ func enrich(ctx context.Context, cfg Config, cur Current, d Deps, reg Registry, 
 		Quant:      quant,
 		WeightsGiB: fit.WeightsGiB,
 		TotalGiB:   fit.TotalGiB,
+		MarginGiB:  fit.MarginGiB,
 		Parser:     rule.Parser,
 		License:    c.license,
 		Gated:      string(c.item.Gated),
 		URL:        fmt.Sprintf("%s/%s/tree/%s", PublicHubURL, id, sha),
-		TrialSteps: TrialSteps(cur, id, sha, quant, rule),
+		TrialSteps: TrialSteps(cur, id, sha, quant, rule, conf),
 	}, "", nil
 }
 
@@ -352,7 +354,16 @@ func enrichFailure(err error, c candidate) (CandidateRow, string, error) {
 // TrialSteps is the args delta against serving.yaml. servedName stays fixed:
 // consumers request the model by it, and the health gate checks the new name,
 // so renaming would pass the gate while every consumer broke.
-func TrialSteps(cur Current, repo, sha, quant string, rule Rule) []string {
+// languageModelOnlyStep keeps a multimodal wrapper's startup inside the
+// estimate. --language-model-only sets every modality limit to 0
+// (vllm/config/multimodal.py:77-79, 315-316); the vision tower is then never
+// built (model_executor/models/interfaces.py:252-292, which qwen3_5.py:587
+// wraps it in) and no modality is profiled (multimodal/encoder_budget.py:72-77).
+// The estimate prices neither the tower's activations nor that profiling,
+// and a coding deployment sends only text.
+const languageModelOnlyStep = "add --language-model-only: skips the vision tower and its startup profiling, which the memory estimate does not price"
+
+func TrialSteps(cur Current, repo, sha, quant string, rule Rule, conf map[string]any) []string {
 	steps := []string{
 		fmt.Sprintf("set model.repo=%s and model.revision=%s", repo, sha),
 		fmt.Sprintf("keep servedName=%s: consumers request the model by it", cur.ServedName),
@@ -367,6 +378,11 @@ func TrialSteps(cur Current, repo, sha, quant string, rule Rule) []string {
 	}
 	for _, a := range rule.ExtraArgs {
 		steps = append(steps, "add "+a)
+	}
+	if !cur.LanguageModelOnly && slices.ContainsFunc(architectures(conf), func(a string) bool {
+		return strings.HasSuffix(a, "ForConditionalGeneration")
+	}) {
+		steps = append(steps, languageModelOnlyStep)
 	}
 	return append(steps,
 		fmt.Sprintf("keep --max-model-len=%d", cur.ContextTokens),

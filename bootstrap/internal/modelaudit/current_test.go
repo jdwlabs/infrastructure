@@ -98,3 +98,13 @@ func TestCurrentRecordsServingFlagsTheHybridEstimateDoesNotModel(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentReadsLanguageModelOnly(t *testing.T) {
+	c, err := CurrentFromSpec(spec(pinnedImage, "--max-model-len=32768", "--tool-call-parser=hermes"))
+	require.NoError(t, err)
+	assert.False(t, c.LanguageModelOnly)
+
+	c, err = CurrentFromSpec(spec(pinnedImage, "--max-model-len=32768", "--language_model_only", "--tool-call-parser=hermes"))
+	require.NoError(t, err)
+	assert.True(t, c.LanguageModelOnly)
+}
