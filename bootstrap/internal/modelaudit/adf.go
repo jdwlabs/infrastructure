@@ -95,7 +95,7 @@ func candidateSections(rows []CandidateRow, pool Pool, budgetGiB float64) []jira
 			{jira.Link(c.Repo+" @ "+shortSHA(c.SHA), c.URL), jira.Text(" (" + string(c.Pool) + ")")},
 			{jira.Text("created: " + c.CreatedAt.UTC().Format(time.RFC3339))},
 			{jira.Text("quantization: " + c.Quant)},
-			{jira.Text(fmt.Sprintf("weights %.2f GiB; estimated total %.2f GiB of %.2f GiB budget", c.WeightsGiB, c.TotalGiB, budgetGiB))},
+			{jira.Text(fmt.Sprintf("weights %.2f GiB; estimated total %.2f GiB of %.2f GiB budget; margin %.2f GiB", c.WeightsGiB, c.TotalGiB, budgetGiB, c.MarginGiB))},
 			{jira.Text("parser: " + c.Parser + "; license: " + c.License)},
 		}
 		if c.Gated != "" {

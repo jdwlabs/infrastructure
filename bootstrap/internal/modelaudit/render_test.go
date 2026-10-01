@@ -22,7 +22,7 @@ func goldenReport() Report {
 		Candidates: []CandidateRow{{
 			Repo: "Qwen/Qwen3-Coder-Next-Instruct", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Pool: PoolAllowListed,
 			CreatedAt: time.Date(2026, 9, 26, 6, 0, 0, 0, time.UTC), Downloads: 500, Quant: "awq",
-			WeightsGiB: 15.66, TotalGiB: 21.66, Parser: "qwen3_xml", License: "apache-2.0", Gated: "manual",
+			WeightsGiB: 15.66, TotalGiB: 21.66, MarginGiB: 7.00, Parser: "qwen3_xml", License: "apache-2.0", Gated: "manual",
 			URL: "https://huggingface.co/Qwen/Qwen3-Coder-Next-Instruct/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			TrialSteps: []string{
 				"set --tool-call-parser=qwen3_xml",

@@ -52,6 +52,7 @@ type CandidateRow struct {
 	Quant      string    `json:"quant"`
 	WeightsGiB float64   `json:"weightsGiB"`
 	TotalGiB   float64   `json:"totalGiB"`
+	MarginGiB  float64   `json:"marginGiB"`
 	Parser     string    `json:"parser"`
 	License    string    `json:"license"`
 	Gated      string    `json:"gated"`

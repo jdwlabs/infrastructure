@@ -22,7 +22,10 @@ type Fit struct {
 	OverheadGiB float64
 	TotalGiB    float64
 	BudgetGiB   float64
-	Fits        bool
+	// MarginGiB is BudgetGiB - TotalGiB: how much the constant overheadGiB
+	// can be wrong by before the model stops fitting.
+	MarginGiB float64
+	Fits      bool
 }
 
 // BudgetGiB is the memory vLLM may claim: the card's total times
@@ -398,6 +401,7 @@ func Estimate(cfg map[string]any, tree []hub.TreeEntry, contextTokens int, sv Se
 	fit.KVGiB = round2(kvBytes / gib)
 	total := float64(weights)/gib + kvBytes/gib + overheadGiB
 	fit.TotalGiB = round2(total)
+	fit.MarginGiB = round2(budgetGiB - total)
 	fit.Fits = total <= budgetGiB
 	if !fit.Fits {
 		fit.Reason = fmt.Sprintf("does not fit: %.2f GiB > %.2f GiB budget", total, budgetGiB)

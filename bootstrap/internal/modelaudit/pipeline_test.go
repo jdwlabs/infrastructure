@@ -88,6 +88,7 @@ func TestRunReportsAFittingCandidateWithItsTrialSteps(t *testing.T) {
 	assert.Equal(t, "awq", c.Quant)
 	assert.Equal(t, 15.66, c.WeightsGiB)
 	assert.Equal(t, 21.66, c.TotalGiB)
+	assert.Equal(t, 7.00, c.MarginGiB, "28.66 GiB budget - 21.66 GiB")
 	assert.Equal(t, "https://huggingface.co/Qwen/Qwen3-Coder-Next-Instruct/tree/"+shaA, c.URL)
 	assert.Equal(t, []string{
 		"set model.repo=Qwen/Qwen3-Coder-Next-Instruct and model.revision=" + shaA,
@@ -354,7 +355,7 @@ func TestWeekUsesTheISOYearAndPadsTheWeek(t *testing.T) {
 }
 
 func TestTrialStepsForAnUnquantizedModelSayWhy(t *testing.T) {
-	steps := TrialSteps(testCurrent(t), "Org/M", shaA, "none", Rule{Parser: "llama3_json", ExtraArgs: []string{"--chat-template=<model's tool chat template>"}})
+	steps := TrialSteps(testCurrent(t), "Org/M", shaA, "none", Rule{Parser: "llama3_json", ExtraArgs: []string{"--chat-template=<model's tool chat template>"}}, nil)
 	assert.Contains(t, steps, "remove --quantization=awq_marlin: this model has no quantization_config")
 	assert.Contains(t, steps, "add --chat-template=<model's tool chat template>")
 }
@@ -400,8 +401,25 @@ func TestRunChecksTheArchitectureBeforeTheFit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Qwen/Qwen3.8-Instruct"}, repos(r.Candidates))
 	assert.Equal(t, 27.35, r.Candidates[0].TotalGiB)
+	assert.Equal(t, 1.31, r.Candidates[0].MarginGiB)
+	assert.Contains(t, r.Candidates[0].TrialSteps, languageModelOnlyStep,
+		"a multimodal wrapper is trialled without the vision tower the estimate does not price")
 	assert.Equal(t, map[string]string{
 		"Qwen/Qwen3.8-Text-Instruct":    "architecture Qwen3_5ForCausalLM not in vLLM v0.24.0",
 		"Qwen/No-Architecture-Instruct": "architecture missing",
 	}, rejected(r))
+}
+
+func TestTrialStepsTurnOffTheVisionTowerOnlyForMultimodalWrappers(t *testing.T) {
+	rule := Rule{Parser: "qwen3_xml"}
+	wrapper := map[string]any{"architectures": []any{"Qwen3_5ForConditionalGeneration"}}
+	textOnly := map[string]any{"architectures": []any{"Qwen3MoeForCausalLM"}}
+
+	assert.Contains(t, TrialSteps(testCurrent(t), "Org/M", shaA, "none", rule, wrapper), languageModelOnlyStep)
+	assert.NotContains(t, TrialSteps(testCurrent(t), "Org/M", shaA, "none", rule, textOnly), languageModelOnlyStep)
+
+	cur := testCurrent(t)
+	cur.LanguageModelOnly = true
+	assert.NotContains(t, TrialSteps(cur, "Org/M", shaA, "none", rule, wrapper), languageModelOnlyStep,
+		"serving.yaml already sets it")
 }

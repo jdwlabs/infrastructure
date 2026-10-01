@@ -22,6 +22,7 @@ type Current struct {
 	Quantization         string
 	MaxNumBatchedTokens  int
 	UnmodelledFlags      []string
+	LanguageModelOnly    bool
 }
 
 var vllmTagRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
@@ -82,6 +83,7 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 	}
 
 	c.UnmodelledFlags = unmodelledFlags(s.Args)
+	c.LanguageModelOnly = hasFlag(s.Args, "--language-model-only")
 
 	p, ok := argValue(s.Args, "--tool-call-parser")
 	if !ok || p == "" {
