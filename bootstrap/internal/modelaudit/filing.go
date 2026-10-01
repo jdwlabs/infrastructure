@@ -102,7 +102,7 @@ func create(ctx context.Context, api JiraAPI, cfg Config, r *Report, label, week
 		Project:     cfg.Jira.Project,
 		IssueType:   cfg.Jira.IssueType,
 		Parent:      cfg.Jira.Parent,
-		Summary:     fmt.Sprintf("Review %d local model candidates for %s", len(r.Candidates), week),
+		Summary:     summary(len(r.Candidates), week),
 		Labels:      []string{"model-audit", label, "upgrade", "monitoring"},
 		Description: DescriptionADF(*r),
 	})
@@ -111,4 +111,12 @@ func create(ctx context.Context, api JiraAPI, cfg Config, r *Report, label, week
 	}
 	r.Jira = JiraOutcome{Action: "created", Key: key}
 	return nil
+}
+
+func summary(n int, week string) string {
+	noun := "candidates"
+	if n == 1 {
+		noun = "candidate"
+	}
+	return fmt.Sprintf("Review %d local model %s for %s", n, noun, week)
 }
