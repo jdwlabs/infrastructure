@@ -355,6 +355,14 @@ itself is going down as part of this procedure.
    no ordering trick that avoids the dashboards/alerting gap, it's what "the
    heavy one" means for this host.
 
+   Before running the drain below: `--force` deletes pods that have no
+   controller, and nothing recreates them. List those first and move or accept
+   losing them:
+   ```
+   kubectl get pods -A --field-selector spec.nodeName=talos-lx0-6a4 -o json \
+     | jq -r '.items[] | select(.metadata.ownerReferences == null) | "\(.metadata.namespace)/\(.metadata.name)"'
+   ```
+
    The drain will **not** run to completion, and waiting longer will not
    help. `platform-litellm-db-cluster` and `platform-postgresql-cluster-non`
    are single-instance, so their CNPG `-primary` PodDisruptionBudget allows
@@ -406,7 +414,7 @@ itself is going down as part of this procedure.
    already exists` — its cloud-init drive lives on the NFS datastore, and that
    drive is deleted and recreated on every start, so the recreate collides with
    the mount arriving mid-operation. Observed on both boots that reached
-   `pve-guests` (2026-09-23, 00:39:56 and 01:05:35). Start it by hand once the
+   `pve-guests` (2026-09-23, 00:39:56 and 01:05:35 CDT). Start it by hand once the
    host is up, which succeeds because the mount has settled by then:
    ```
    ssh root@pve5 'qm start 111'

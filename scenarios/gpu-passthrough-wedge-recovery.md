@@ -142,7 +142,14 @@ with no DKMS module for the running kernel, which is a real second fault and had
 to be repaired separately, but it did not cause this one. The boot before it
 (2026-09-12) had loaded 580.173.02 successfully.
 
-Recovery was a cold power cycle at approximately 06:05 UTC on 2026-09-23:
+Recovery was a cold power cycle, and there were two on 2026-09-23. The first
+(host off about 05:10 UTC, on about 05:39 UTC) booted normally, and the host
+journal shows VM 500 starting with the GPU reset cleanly. A mistaken
+power-button press then sent the host into GRUB recovery mode, and a second cold
+cycle at approximately 06:05 UTC brought it back. The first nvidia-smi evidence
+of a healthy card was taken after that second cycle, so the record does not show
+whether the first cycle alone had already cleared the wedge. Either way, only a
+full host power loss clears it:
 
 ```
 NVIDIA GeForce RTX 5090, 580.178.04, 32607 MiB, 36     # immediately after
