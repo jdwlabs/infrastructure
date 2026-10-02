@@ -81,12 +81,12 @@ const (
 
 // EnsureHost prepares the GPU host for vLLM: it installs the NVIDIA
 // Container Toolkit at its pinned release and any other required package
-// that is missing, creates
-// the directories hostconverge and the Quadlet unit write into, keeps the
-// NVIDIA Container Device Interface spec in step with the installed
-// driver, and checks (without rewriting) node-exporter's
-// textfile collector config. It returns a description of what it changed —
-// an empty slice means the host already matched.
+// that is missing, creates the directories hostconverge and the Quadlet
+// unit write into, keeps both NVIDIA Container Device Interface specs in
+// step with the installed driver and the pinned toolkit, and checks
+// (without rewriting) node-exporter's textfile collector config. It returns
+// a description of what it changed — an empty slice means the host already
+// matched.
 //
 // Directory creation runs before anything that writes under a directory it
 // creates (the CDI record write under /etc/vllm): on a fresh host neither
