@@ -172,6 +172,12 @@ func validate(s Spec) error {
 		} else {
 			flagName = arg
 		}
+		// FlexibleArgumentParser (vllm/utils/argparse_utils.py, v0.24.0)
+		// rewrites --root.key=value into --root '{"key": value}' before
+		// argparse parses it, so the flag a dotted option sets is its root.
+		if dotIdx := strings.Index(flagName, "."); dotIdx >= 0 && strings.HasPrefix(flagName, "--") {
+			flagName = flagName[:dotIdx]
+		}
 
 		// vLLM's FlexibleArgumentParser normalises '_' to '-' in long-option
 		// names, so --served_model_name is the same flag to vLLM as
