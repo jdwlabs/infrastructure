@@ -7,7 +7,7 @@ on `gpu-node.tf` for that).
 
 **VM:** `vllm-inference`, static `192.168.1.50`, user `vllm`
 **GPU:** RTX 5090, PCI `0000:01:00` (VGA + audio, IOMMU group 13), cluster mapping `gpu-rtx5090`
-**Model:** `QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ`, served as `local-chat`, also answering to its previous name `qwen/qwen3-coder-30b-a3b` until all three consumers have moved (see [docs/vllm-serving.md](../docs/vllm-serving.md#renaming-the-served-model)) (AWQ 4-bit, ~15.7GiB — 30B-total/3.3B-active MoE coder; GQA keeps the 32k-ctx KV cache ~3GiB on the 32GiB card)
+**Model:** whatever [`inference/vllm/serving.yaml`](../inference/vllm/serving.yaml) pins, served as `local-chat` (names and aliases: [docs/vllm-serving.md](../docs/vllm-serving.md#what-serves-and-who-depends-on-it))
 
 ---
 

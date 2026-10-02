@@ -40,23 +40,9 @@ change, so a plan doubles as the announcement list for a change window.
 
 ## `serving.yaml` fields and validation
 
-```yaml
-image: docker.io/vllm/vllm-openai:v0.24.0@sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f
-model:
-  repo: QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
-  revision: c58857a7f41c0920f73d1b56678640f9c02017d7
-servedName: local-chat
-servedAliases:
-  - qwen/qwen3-coder-30b-a3b
-port: 8000
-args:
-  - --quantization=awq_marlin
-  - --max-model-len=32768
-  - --enable-auto-tool-choice
-  - --tool-call-parser=qwen3_xml
-healthGate:
-  timeout: 10m
-```
+The committed [`serving.yaml`](../inference/vllm/serving.yaml) is the worked
+example: it sets every field below, and its comments explain the current
+model's values.
 
 | Field | Required | Rule | Why |
 |---|---|---|---|
@@ -67,7 +53,7 @@ healthGate:
 | `servedAliases` | no | each matches the same charset and does not start with `-`; no duplicates; none equal to `servedName` | Further names the server answers to, so a consumer can keep requesting an old name while it moves to `servedName`. Rendered after `servedName` under the one `--served-model-name` flag. |
 | `port` | no (default `8000`) | 1–65535 | |
 | `args` | no | each element matches the same charset; JSON-valued vLLM args (anything needing a literal `{`/`}`/space) are unsupported for this reason | Every element is a literal `Exec=` word. |
-| `healthGate.timeout` | no (default `10m`) | duration, must be `> 0` and `<= 10m` (the 15m rollback bound minus 5m for restore and restart, since a rollback re-runs this gate against the restored server) | Model load on this card is minutes, not seconds — the AWQ 30B-A3B MoE weights alone take a while to page onto the GPU. |
+| `healthGate.timeout` | no (default `10m`) | duration, must be `> 0` and `<= 10m` (the 15m rollback bound minus 5m for restore and restart, since a rollback re-runs this gate against the restored server) | Model load on this card is minutes, not seconds — the weights alone take a while to page onto the GPU. |
 
 Unknown keys are rejected outright (`KnownFields(true)`), and `args` may not
 set `--model`, `--revision`, `--port`, `--served-model-name`, or `--host`,
@@ -897,7 +883,9 @@ estimate cannot price its layers. See [Known limits](#known-limits).
 A family on the allow-list with no rule shows up every week as `no parser
 rule for <model_type>`. To add one, add a rule in a PR. A config test checks
 that the committed rules still resolve the incumbent to `serving.yaml`'s
-`--tool-call-parser`.
+`--tool-call-parser`. `serving.yaml` does not carry a `model_type`, so a PR
+that swaps the model also records the new repo's in that test's
+`servedModelTypes` (`internal/modelaudit/config_test.go`).
 
 ### Secrets
 
@@ -1005,11 +993,12 @@ that URL includes the `JIRA_BASE_URL` host.
     (0.01 GiB for Qwen3.8), but can exceed one block per layer when a
     model's layer counts per type are not multiples of each other.
   - `overheadGiB` is one constant for every model, calibrated on the
-    text-only incumbent. A multimodal model adds startup memory it does not
-    cover: encoder profiling, sampler warm-up over a larger vocabulary, and
-    CUDA graphs. A `marginGiB` below about 2 GiB on a multimodal model is
-    tight; trial it with `--language-model-only` and watch the startup log.
-  - The incumbent calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
+    text-only `QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ`. A multimodal
+    model adds startup memory it does not cover: encoder profiling, sampler
+    warm-up over a larger vocabulary, and CUDA graphs. A `marginGiB` below
+    about 2 GiB on a multimodal model is tight; trial it with
+    `--language-model-only` and watch the startup log.
+  - That model calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
     3 GiB overhead = 21.66 GiB, against a 28.66 GiB budget.
     `RedHatAI/Qwen3.8-27B-NVFP4` calibrates at 22.20 GiB weights + 2.14 GiB
     (2.00 GiB for its 16 full-attention layers, 0.14 GiB of state for its 48
