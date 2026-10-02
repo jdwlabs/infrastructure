@@ -77,8 +77,9 @@ const (
 	wantAptCachePolicyCmd    = "apt-cache policy nvidia-container-toolkit 2>/dev/null"
 	wantMkdirCmd             = "sudo mkdir -p /usr/local/libexec /etc/containers/systemd /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter"
 	wantNvidiaSmiCmd         = "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null"
-	wantCDIRecordReadCmd     = "sudo cat /etc/vllm/cdi-driver-version 2>/dev/null"
+	wantCDIRecordReadCmd     = "sudo cat /etc/vllm/cdi-generated-for 2>/dev/null"
 	wantNvidiaCtkGenerateCmd = "sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"
+	wantCDIRefreshCmd        = "sudo systemctl restart nvidia-cdi-refresh.service"
 	wantNodeExporterGrepCmd  = "grep '^ARGS=' /etc/default/prometheus-node-exporter 2>/dev/null"
 
 	wantDfVllmCmd       = "df --output=avail -B1 /var/lib/vllm 2>/dev/null | tail -1"
@@ -94,8 +95,10 @@ const (
 	wantIsEnabledCmd = "systemctl is-enabled vllm.service 2>/dev/null"
 )
 
-func wantCDIRecordWriteCmd(version string) string {
-	return "printf '%s' '" + version + "' | sudo tee /etc/vllm/cdi-driver-version >/dev/null"
+// wantCDIRecordWriteCmd is the record write for driver under the pinned
+// toolkit, the only toolkit EnsureHost ever generates with.
+func wantCDIRecordWriteCmd(driver string) string {
+	return "printf '%s' '" + driver + "|1.18.2-1' | sudo tee /etc/vllm/cdi-generated-for >/dev/null"
 }
 
 func wantMarkerProbeCmd(rev string) string { return "sudo test -e /var/lib/vllm/hf/.staged-" + rev }
@@ -137,7 +140,7 @@ func allInstalledOK() *fakeRunner {
 		out: map[string]string{
 			"dpkg-query":                            dpkgReady,
 			"nvidia-smi":                            "550.90.07\n",
-			"sudo cat /etc/vllm/cdi-driver-version": "550.90.07",
+			"sudo cat /etc/vllm/cdi-generated-for":  "550.90.07|1.18.2-1",
 			"/etc/default/prometheus-node-exporter": "ARGS=\"--collector.textfile.directory=/var/lib/prometheus/node-exporter\"\n",
 		},
 	}
@@ -321,7 +324,7 @@ func TestEnsureHostMkdirFailurePropagates(t *testing.T) {
 // fails permanently the first time the CDI record needs writing.
 func TestEnsureHostCreatesDirectoriesBeforeWritingCDIRecord(t *testing.T) {
 	r := allInstalledOK()
-	r.out["sudo cat /etc/vllm/cdi-driver-version"] = "550.54.15" // forces regenerate + write
+	r.out["sudo cat /etc/vllm/cdi-generated-for"] = "550.54.15|1.18.2-1" // forces regenerate + write
 
 	_, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
@@ -372,37 +375,87 @@ func TestEnsureHostMalformedDriverVersionIsRejected(t *testing.T) {
 func TestEnsureHostUsesFirstNonEmptyDriverVersionLine(t *testing.T) {
 	r := allInstalledOK()
 	r.out["nvidia-smi"] = "550.90.07\n999.99.99\n"
-	r.out["sudo cat /etc/vllm/cdi-driver-version"] = "999.99.99" // mismatches the SECOND line, matches neither if the first is used correctly... see below
+	r.out["sudo cat /etc/vllm/cdi-generated-for"] = "999.99.99|1.18.2-1" // the SECOND line's key: a record that matches it must still regenerate
 
 	_, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
 	assert.Contains(t, r.cmds, wantCDIRecordWriteCmd("550.90.07"), "must record the FIRST GPU's driver version, not the second")
 }
 
-func TestEnsureHostRegeneratesCDIWhenDriverVersionDiffers(t *testing.T) {
+const wantCDIRegeneratedChange = "regenerated /etc/cdi/nvidia.yaml and /var/run/cdi/nvidia.yaml for driver 550.90.07, toolkit 1.18.2-1"
+
+// The record is keyed on driver AND toolkit: either one changing changes
+// what nvidia-ctk writes. A driver-only record, the format before the
+// toolkit was pinned, is a toolkit change too — it was written by whatever
+// toolkit the host had then, which is how a 1.20.1 spec outlived the pin.
+func TestEnsureHostRegeneratesCDIWhenItsKeyDiffers(t *testing.T) {
+	for name, record := range map[string]string{
+		"driver differs":       "550.54.15|1.18.2-1",
+		"toolkit differs":      "550.90.07|1.20.1-1",
+		"driver-only record":   "550.90.07",
+		"key with extra field": "550.90.07|1.18.2-1|x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := allInstalledOK()
+			r.out["sudo cat /etc/vllm/cdi-generated-for"] = record
+
+			changed, err := EnsureHost(context.Background(), r)
+			require.NoError(t, err)
+			assert.Equal(t, []string{
+				wantDpkgQueryCmd,
+				wantMkdirCmd,
+				wantNvidiaSmiCmd,
+				wantCDIRecordReadCmd,
+				wantNvidiaCtkGenerateCmd,
+				wantCDIRefreshCmd,
+				wantCDIRecordWriteCmd("550.90.07"),
+				wantNodeExporterGrepCmd,
+			}, r.cmds)
+			assert.Equal(t, []string{wantCDIRegeneratedChange}, changed)
+		})
+	}
+}
+
+// Installing the pinned toolkit changes its version, so the CDI specs are
+// regenerated in the same run even when the host had a record from before.
+func TestEnsureHostRegeneratesCDIAfterMovingTheToolkitOntoThePin(t *testing.T) {
 	r := allInstalledOK()
-	r.out["sudo cat /etc/vllm/cdi-driver-version"] = "550.54.15"
+	r.out["dpkg-query"] = strings.Replace(dpkgReady, "nvidia-container-toolkit 1.18.2-1", "nvidia-container-toolkit 1.20.1-1", 1)
+	r.out["sudo cat /etc/vllm/cdi-generated-for"] = "550.90.07|1.20.1-1"
 
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
+	assert.Equal(t, []string{wantInstalledChange, wantCDIRegeneratedChange}, changed)
+	assert.Less(t, indexOf(r.cmds, wantAptMarkHoldCmd), indexOf(r.cmds, wantNvidiaCtkGenerateCmd), "the spec must be generated by the pinned nvidia-ctk")
+}
+
+// /var/run/cdi wins over /etc/cdi for the same device name, so a refresh
+// that fails leaves a spec from before the change in force: the record
+// must not claim a regeneration that only half happened.
+func TestEnsureHostCDIRefreshFailurePropagatesAndSkipsTheRecord(t *testing.T) {
+	r := allInstalledOK()
+	r.out["sudo cat /etc/vllm/cdi-generated-for"] = "550.90.07|1.20.1-1"
+	r.fail = map[string]error{"nvidia-cdi-refresh": errFail}
+
+	_, err := EnsureHost(context.Background(), r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refresh /var/run/cdi/nvidia.yaml")
 	assert.Equal(t, []string{
 		wantDpkgQueryCmd,
 		wantMkdirCmd,
 		wantNvidiaSmiCmd,
 		wantCDIRecordReadCmd,
 		wantNvidiaCtkGenerateCmd,
-		wantCDIRecordWriteCmd("550.90.07"),
-		wantNodeExporterGrepCmd,
+		wantCDIRefreshCmd,
 	}, r.cmds)
-	assert.Equal(t, []string{"regenerated /etc/cdi/nvidia.yaml for driver 550.90.07"}, changed)
 }
 
 func TestEnsureHostRegeneratesCDIWhenRecordMissing(t *testing.T) {
 	r := allInstalledOK()
-	// Matches only the read ("sudo cat ...cdi-driver-version"), not the
-	// write ("... | sudo tee ...cdi-driver-version"): failing both would
-	// turn this into an unrelated "record CDI driver version" error.
-	r.fail = map[string]error{"sudo cat /etc/vllm/cdi-driver-version": errFail}
+	// Matches only the read ("sudo cat ...cdi-generated-for"), not the
+	// write ("... | sudo tee ...cdi-generated-for"): failing both would
+	// turn this into an unrelated "record CDI spec key" error.
+	r.fail = map[string]error{"sudo cat /etc/vllm/cdi-generated-for": errFail}
 
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
@@ -412,10 +465,11 @@ func TestEnsureHostRegeneratesCDIWhenRecordMissing(t *testing.T) {
 		wantNvidiaSmiCmd,
 		wantCDIRecordReadCmd,
 		wantNvidiaCtkGenerateCmd,
+		wantCDIRefreshCmd,
 		wantCDIRecordWriteCmd("550.90.07"),
 		wantNodeExporterGrepCmd,
 	}, r.cmds)
-	assert.Equal(t, []string{"regenerated /etc/cdi/nvidia.yaml for driver 550.90.07"}, changed)
+	assert.Equal(t, []string{wantCDIRegeneratedChange}, changed)
 }
 
 // TestEnsureHostNvidiaCtkGenerateFailurePropagates kills the "nvidia-ctk
@@ -423,7 +477,7 @@ func TestEnsureHostRegeneratesCDIWhenRecordMissing(t *testing.T) {
 // write of the driver-version record it didn't actually produce.
 func TestEnsureHostNvidiaCtkGenerateFailurePropagates(t *testing.T) {
 	r := allInstalledOK()
-	r.out["sudo cat /etc/vllm/cdi-driver-version"] = "550.54.15" // forces a regenerate attempt
+	r.out["sudo cat /etc/vllm/cdi-generated-for"] = "550.54.15|1.18.2-1" // forces a regenerate attempt
 	r.fail = map[string]error{"nvidia-ctk cdi generate": errFail}
 
 	_, err := EnsureHost(context.Background(), r)

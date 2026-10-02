@@ -58,6 +58,10 @@ var imageIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // same way the image reference is.
 var driverVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
 
+// cdiRecordPath holds "<driver>|<toolkit>", the pair the CDI specs were
+// last generated for.
+const cdiRecordPath = "/etc/vllm/cdi-generated-for"
+
 const giB = 1024 * 1024 * 1024
 
 // Staging space requirements, checked on the two filesystems Stage
@@ -120,20 +124,33 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 		return changed, fmt.Errorf("nvidia-smi returned a malformed driver version %q", driverVersion)
 	}
 
-	// talops records the driver version it last generated the CDI spec
-	// for, rather than parsing that spec back out of /etc/cdi/nvidia.yaml:
-	// the generated YAML's shape isn't part of nvidia-ctk's contract, so
-	// scraping a key out of it is one nvidia-ctk release away from silently
-	// never matching again.
-	recordOut, recErr := r.Run(ctx, "sudo cat /etc/vllm/cdi-driver-version 2>/dev/null")
-	if recErr != nil || strings.TrimSpace(recordOut) != driverVersion {
+	// talops records what it last generated the CDI specs for, rather than
+	// parsing that spec back out of /etc/cdi/nvidia.yaml: the generated
+	// YAML's shape isn't part of nvidia-ctk's contract, so scraping a key
+	// out of it is one nvidia-ctk release away from silently never matching
+	// again. The key is the driver and the toolkit, because both decide what
+	// nvidia-ctk writes: a spec a newer toolkit wrote is unreadable to the
+	// host's podman even when the driver never changed.
+	cdiKey := driverVersion + "|" + toolkitVersion
+	recordOut, recErr := r.Run(ctx, "sudo cat "+cdiRecordPath+" 2>/dev/null")
+	if recErr != nil || strings.TrimSpace(recordOut) != cdiKey {
 		if _, err := r.Run(ctx, "sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"); err != nil {
 			return changed, fmt.Errorf("generate CDI spec: %w", err)
 		}
-		if _, err := r.Run(ctx, "printf '%s' '"+driverVersion+"' | sudo tee /etc/vllm/cdi-driver-version >/dev/null"); err != nil {
-			return changed, fmt.Errorf("record CDI driver version: %w", err)
+		// The toolkit's own nvidia-cdi-refresh.service writes a second spec
+		// to /var/run/cdi, which outranks /etc/cdi for the same device name
+		// whenever podman can parse it, so a stale one there shadows the
+		// spec just generated; on the host this was found on, it held the
+		// same unreadable spec as /etc/cdi. It is re-run rather than
+		// disabled: it is also what regenerates that spec after a driver
+		// upgrade or a reboot, with the pinned nvidia-ctk.
+		if _, err := r.Run(ctx, "sudo systemctl restart nvidia-cdi-refresh.service"); err != nil {
+			return changed, fmt.Errorf("refresh /var/run/cdi/nvidia.yaml (nvidia-cdi-refresh.service): %w", err)
 		}
-		changed = append(changed, "regenerated /etc/cdi/nvidia.yaml for driver "+driverVersion)
+		if _, err := r.Run(ctx, "printf '%s' '"+cdiKey+"' | sudo tee "+cdiRecordPath+" >/dev/null"); err != nil {
+			return changed, fmt.Errorf("record CDI spec key: %w", err)
+		}
+		changed = append(changed, "regenerated /etc/cdi/nvidia.yaml and /var/run/cdi/nvidia.yaml for driver "+driverVersion+", toolkit "+toolkitVersion)
 	}
 
 	// The package default already sets this on Ubuntu; a mismatch is

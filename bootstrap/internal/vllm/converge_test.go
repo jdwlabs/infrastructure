@@ -310,7 +310,7 @@ const fortyGiB = "42949672960"
 // itself is installed yet.
 func newHost(legacy string) *fakeHost {
 	h := &fakeHost{
-		files:   map[string][]byte{"/etc/vllm/cdi-driver-version": []byte("550.90.07")},
+		files:   map[string][]byte{"/etc/vllm/cdi-generated-for": []byte("550.90.07|1.18.2-1")},
 		active:  map[string]bool{},
 		enabled: map[string]bool{},
 	}
