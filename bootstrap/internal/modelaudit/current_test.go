@@ -1,6 +1,7 @@
 package modelaudit
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,15 +21,55 @@ func spec(image string, args ...string) vllm.Spec {
 
 const pinnedImage = "docker.io/vllm/vllm-openai:v0.24.0@sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f"
 
-func TestCurrentFromCommittedServingSpec(t *testing.T) {
-	c, err := LoadCurrent("../../../inference/vllm/serving.yaml")
+const (
+	committedSpec = "../../../inference/vllm/serving.yaml"
+	fixtureSpec   = "testdata/serving.yaml"
+)
+
+func TestCurrentFromServingSpecFile(t *testing.T) {
+	c, err := LoadCurrent(fixtureSpec)
 	require.NoError(t, err)
 	assert.Equal(t, "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ", c.Repo)
+	assert.Equal(t, "c58857a7f41c0920f73d1b56678640f9c02017d7", c.Revision)
+	assert.Equal(t, "local-chat", c.ServedName)
+	assert.Equal(t, []string{"qwen/qwen3-coder-30b-a3b"}, c.ServedAliases)
 	assert.Equal(t, "v0.24.0", c.VLLMTag)
 	assert.Equal(t, 32768, c.ContextTokens)
 	assert.InDelta(t, 0.90, c.GPUMemoryUtilization, 1e-9)
 	assert.Equal(t, "qwen3_xml", c.ToolCallParser)
 	assert.Equal(t, "awq_marlin", c.Quantization)
+	assert.False(t, c.LanguageModelOnly)
+}
+
+// A validity guard, not a content freeze: the served model changes by PR and
+// reverts by PR, so this asserts only that the audit can read whatever
+// serving.yaml holds and that what it reads agrees with the file's own
+// fields and flags.
+func TestCommittedServingSpecYieldsACurrent(t *testing.T) {
+	s, err := vllm.Load(committedSpec)
+	require.NoError(t, err)
+	c, err := CurrentFromSpec(s)
+	require.NoError(t, err)
+
+	assert.Equal(t, s.Model.Repo, c.Repo)
+	assert.Equal(t, s.Model.Revision, c.Revision)
+	assert.Equal(t, s.ServedName, c.ServedName)
+	assert.Equal(t, s.ServedAliases, c.ServedAliases)
+	assert.Contains(t, s.Image, ":"+c.VLLMTag+"@")
+
+	flags := map[string]string{}
+	for i, a := range s.Args {
+		name, val, hasEq := strings.Cut(a, "=")
+		if !hasEq && i+1 < len(s.Args) && !strings.HasPrefix(s.Args[i+1], "--") {
+			val = s.Args[i+1]
+		}
+		flags[strings.ReplaceAll(name, "_", "-")] = val
+	}
+	assert.Equal(t, flags["--max-model-len"], strconv.Itoa(c.ContextTokens))
+	assert.Equal(t, flags["--tool-call-parser"], c.ToolCallParser)
+	assert.Equal(t, flags["--quantization"], c.Quantization)
+	_, lmOnly := flags["--language-model-only"]
+	assert.Equal(t, lmOnly, c.LanguageModelOnly)
 }
 
 func TestCurrentAcceptsBothFlagSpellings(t *testing.T) {

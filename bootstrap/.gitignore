@@ -22,6 +22,8 @@ clusters/*/*.log
 !*.example
 # Source YAML files embedded in the binary are not generated configs
 !internal/talos/patches/*.yaml
+# Nor is the serving spec the audit's tests load as a fixed incumbent
+!internal/modelaudit/testdata/serving.yaml
 # The encrypted SOPS vault is the shared source of truth — keep it tracked
 !clusters/*/vault/
 !clusters/*/vault/*.enc.yaml

@@ -37,9 +37,11 @@ func runConfig(t *testing.T, orgs ...string) Config {
 	return c
 }
 
+// testCurrent is the fixture incumbent, not the committed serving.yaml: these
+// tests assert its repo, quantization and flags by value.
 func testCurrent(t *testing.T) Current {
 	t.Helper()
-	cur, err := LoadCurrent("../../../inference/vllm/serving.yaml")
+	cur, err := LoadCurrent(fixtureSpec)
 	require.NoError(t, err)
 	return cur
 }
