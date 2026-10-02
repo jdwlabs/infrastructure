@@ -44,6 +44,12 @@ url="${BASE_URL%/}/chat/completions"
 
 auth=()
 if [ -n "${API_KEY:-}" ]; then
+  # A bearer key over plain HTTP crosses the network readable. Loopback is
+  # the exception: that is a kubectl port-forward, whose tunnel is encrypted.
+  case "$BASE_URL" in
+    https://* | http://localhost[:/]* | http://127.0.0.1[:/]*) ;;
+    *) fail "refusing to send API_KEY over plain HTTP to ${BASE_URL}; use https:// or a localhost port-forward" ;;
+  esac
   auth=(-H "Authorization: Bearer ${API_KEY}")
 fi
 
