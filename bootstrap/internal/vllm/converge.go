@@ -634,10 +634,11 @@ func Status(ctx context.Context, t Target, s Spec) StatusResult {
 		}
 	}
 
-	var recDigest, recServed string
+	var recDigest string
 	if rec != nil {
-		recDigest, recServed = rec.ImageDigest, rec.ServedName
+		recDigest = rec.ImageDigest
 	}
+	liveName, liveAliases := liveServedNames(ctx, t.Models)
 
 	res.Fields = []Field{
 		{
@@ -659,7 +660,13 @@ func Status(ctx context.Context, t Target, s Spec) StatusResult {
 			Name:    "servedName",
 			Git:     s.ServedName,
 			Applied: applied(func(a Applied) string { return a.ServedName }),
-			Live:    liveServedName(ctx, t.Models, s.ServedName, recServed),
+			Live:    liveName,
+		},
+		{
+			Name:    "servedAliases",
+			Git:     joinNames(s.ServedAliases),
+			Applied: applied(func(a Applied) string { return joinNames(a.ServedAliases) }),
+			Live:    liveAliases,
 		},
 		{
 			Name:    "argsHash",
@@ -704,25 +711,36 @@ func liveDigest(l Live, candidates ...string) string {
 	return "(no repo digest)"
 }
 
-func liveServedName(ctx context.Context, m ModelsReader, candidates ...string) string {
+// liveServedNames reads the served name and aliases back from /v1/models.
+// vLLM v0.24.0 lists one entry per --served-model-name value, in order and
+// all rooted at the model, then any LoRA adapters rooted at their own paths
+// (entrypoints/openai/models/serving.py:64-76, 149-165). The first entry is
+// therefore the name responses report, and the aliases are the entries
+// after it that share its root.
+func liveServedNames(ctx context.Context, m ModelsReader) (name, aliases string) {
 	if m == nil {
-		return colUnknown
+		return colUnknown, colUnknown
 	}
 	entries, err := m.Models(ctx)
 	if err != nil {
-		return colUnreachable
+		return colUnreachable, colUnreachable
 	}
-	for _, want := range candidates {
-		for _, e := range entries {
-			if want != "" && e.ID == want {
-				return e.ID
-			}
+	if len(entries) == 0 {
+		return colAbsent, colAbsent
+	}
+	var names []string
+	for _, e := range entries[1:] {
+		if e.Root == entries[0].Root {
+			names = append(names, e.ID)
 		}
 	}
-	if len(entries) > 0 {
-		return entries[0].ID
-	}
-	return colAbsent
+	return entries[0].ID, joinNames(names)
+}
+
+// joinNames renders a name list as one column value. A space cannot occur
+// in a served name, so unlike a comma it never makes two lists look alike.
+func joinNames(names []string) string {
+	return strings.Join(names, " ")
 }
 
 // Plan shows the unit diff and every other reason apply would act, and who

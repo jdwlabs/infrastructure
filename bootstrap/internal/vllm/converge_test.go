@@ -1469,8 +1469,14 @@ func liveHost(s Spec) *fakeHost {
 		on("Config.Cmd", strings.Join(ExecArgs(s), "\x00")+"\n")
 }
 
+// servingModels answers /v1/models as vLLM does for s: one entry per served
+// name, servedName first, every one rooted at the model.
 func servingModels(s Spec) fakeModels {
-	return fakeModels{entries: []ModelEntry{{ID: s.ServedName, Root: s.Model.Repo}}}
+	entries := []ModelEntry{{ID: s.ServedName, Root: s.Model.Repo}}
+	for _, a := range s.ServedAliases {
+		entries = append(entries, ModelEntry{ID: a, Root: s.Model.Repo})
+	}
+	return fakeModels{entries: entries}
 }
 
 func statusTarget(h *fakeHost, m ModelsReader) Target {
@@ -1502,6 +1508,7 @@ func TestStatusConvergedHasNoDrift(t *testing.T) {
 		{Name: "imageDigest", Git: s.ImageDigest(), Applied: s.ImageDigest(), Live: s.ImageDigest()},
 		{Name: "modelRevision", Git: s.Model.Revision, Applied: s.Model.Revision, Live: "n/a"},
 		{Name: "servedName", Git: s.ServedName, Applied: s.ServedName, Live: s.ServedName},
+		{Name: "servedAliases", Git: "", Applied: "", Live: ""},
 		{Name: "argsHash", Git: ArgsHash(s), Applied: ArgsHash(s), Live: ArgsHash(s)},
 	}, res.Fields)
 	assert.Zero(t, countContaining(h.cmds, "sudo systemctl"))
@@ -2020,4 +2027,106 @@ func TestPreviousIdentityCarriesTheRecordedAliases(t *testing.T) {
 	assert.Empty(t, got.ServedAliases, "a server applied without aliases answers to none")
 
 	assert.Equal(t, s.ServedAliases, previousIdentity(s, nil).ServedAliases)
+}
+
+func aliasedConvergeSpec() Spec {
+	s := sampleSpec()
+	s.ServedName = "local-chat"
+	s.ServedAliases = []string{"qwen/qwen3-coder-30b-a3b", "old-chat"}
+	return s
+}
+
+func TestStatusConvergedWithAliasesHasNoDrift(t *testing.T) {
+	s := aliasedConvergeSpec()
+	h := liveHost(s)
+
+	res := Status(context.Background(), statusTarget(h, servingModels(s)), s)
+
+	require.Nil(t, res.Failure)
+	assert.False(t, res.Drift, "%+v", res.Fields)
+	assert.Equal(t, Field{Name: "servedName", Git: "local-chat", Applied: "local-chat", Live: "local-chat"},
+		fieldByName(t, res.Fields, "servedName"))
+	assert.Equal(t, Field{
+		Name:    "servedAliases",
+		Git:     "qwen/qwen3-coder-30b-a3b old-chat",
+		Applied: "qwen/qwen3-coder-30b-a3b old-chat",
+		Live:    "qwen/qwen3-coder-30b-a3b old-chat",
+	}, fieldByName(t, res.Fields, "servedAliases"))
+}
+
+// The live servedName is the name responses report, which vLLM takes from
+// the first --served-model-name value and lists first. Matching git's name
+// anywhere in the list would read a server that only aliases it as serving
+// it under that name.
+func TestStatusLiveServedNameIsTheFirstEntryNotAnyMatch(t *testing.T) {
+	running := aliasedConvergeSpec()
+	s := sampleSpec() // git still names the old servedName, with no aliases
+	h := liveHost(running)
+
+	res := Status(context.Background(), statusTarget(h, servingModels(running)), s)
+
+	require.Nil(t, res.Failure)
+	assert.True(t, res.Drift)
+	assert.Equal(t, "local-chat", fieldByName(t, res.Fields, "servedName").Live)
+	assert.Equal(t, "qwen/qwen3-coder-30b-a3b old-chat", fieldByName(t, res.Fields, "servedAliases").Live)
+}
+
+func TestStatusFlagsAliasDrift(t *testing.T) {
+	s := aliasedConvergeSpec()
+
+	t.Run("live server dropped an alias", func(t *testing.T) {
+		h := liveHost(s)
+		m := fakeModels{entries: []ModelEntry{
+			{ID: "local-chat", Root: s.Model.Repo},
+			{ID: "old-chat", Root: s.Model.Repo},
+		}}
+		res := Status(context.Background(), statusTarget(h, m), s)
+
+		assert.True(t, res.Drift)
+		assert.Equal(t, "old-chat", fieldByName(t, res.Fields, "servedAliases").Live)
+	})
+
+	t.Run("record predates the alias", func(t *testing.T) {
+		h := liveHost(s)
+		a := NewApplied(s, "0ld", "x", time.Time{})
+		a.ServedAliases = nil
+		h.files[AppliedPath] = a.JSON()
+		res := Status(context.Background(), statusTarget(h, servingModels(s)), s)
+
+		assert.True(t, res.Drift)
+		assert.Equal(t, "", fieldByName(t, res.Fields, "servedAliases").Applied)
+	})
+
+	// A LoRA adapter is listed after the base names, rooted at its own
+	// path; it is not a name the base model answers to.
+	t.Run("adapter entries are not aliases", func(t *testing.T) {
+		h := liveHost(s)
+		m := servingModels(s)
+		m.entries = append(m.entries, ModelEntry{ID: "some-lora", Root: "/adapters/some-lora"})
+		res := Status(context.Background(), statusTarget(h, m), s)
+
+		assert.False(t, res.Drift, "%+v", res.Fields)
+	})
+
+	t.Run("unreachable", func(t *testing.T) {
+		h := liveHost(s)
+		res := Status(context.Background(), statusTarget(h, fakeModels{err: errFail}), s)
+
+		assert.Equal(t, "unreachable", fieldByName(t, res.Fields, "servedAliases").Live)
+	})
+}
+
+func TestPlanShowsAnAddedAlias(t *testing.T) {
+	before := sampleSpec()
+	before.ServedName = "local-chat"
+	after := aliasedConvergeSpec()
+	h := install(newHost("inactive"), before)
+
+	res := Plan(context.Background(), statusTarget(h, nil), after)
+
+	require.Nil(t, res.Failure)
+	assert.True(t, res.Changed)
+	assert.Contains(t, res.Diff, "--served-model-name local-chat qwen/qwen3-coder-30b-a3b old-chat --host")
+	assert.Contains(t, res.Reasons, AppliedPath+" records a different image, model revision or args")
+	assert.Equal(t, Consumers, res.Consumers)
 }
