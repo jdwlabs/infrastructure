@@ -94,7 +94,10 @@ const (
 func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	var changed []string
 
-	missing, toolkitPinned := packageState(ctx, r)
+	missing, toolkitPinned, err := packageState(ctx, r)
+	if err != nil {
+		return changed, err
+	}
 
 	// The toolkit goes first: its repository is the manual prerequisite, so
 	// a host without it fails before anything else is installed.
@@ -265,9 +268,17 @@ func textfileDirectory(argsLines string) (string, bool) {
 // silently dropping another's would still produce the "right" number of
 // installed-looking lines, and a positional line-to-package mapping can't
 // tell that apart from every package actually being present.
-func packageState(ctx context.Context, r hostconverge.Runner) (missing []string, toolkitPinned bool) {
+//
+// dpkg-query exits 1 when any package it was asked about is unknown, which
+// is the answer on a fresh host and so not a failure; anything else that
+// fails, a dropped connection included, is returned rather than read as
+// "nothing is installed", which would reinstall packages that are there.
+func packageState(ctx context.Context, r hostconverge.Runner) (missing []string, toolkitPinned bool, err error) {
 	all := append(append([]string(nil), hostPackages...), toolkitPackages...)
-	out, _ := r.Run(ctx, "dpkg-query -W -f='"+dpkgStatusFormat+"' "+strings.Join(all, " ")+" 2>/dev/null")
+	out, err := r.Run(ctx, "dpkg-query -W -f='"+dpkgStatusFormat+"' "+strings.Join(all, " ")+" 2>/dev/null || test $? -eq 1")
+	if err != nil {
+		return nil, false, fmt.Errorf("read installed packages (dpkg-query): %w", err)
+	}
 
 	type state struct{ version, want string }
 	installed := make(map[string]state, len(all))
@@ -290,7 +301,7 @@ func packageState(ctx context.Context, r hostconverge.Runner) (missing []string,
 			toolkitPinned = false
 		}
 	}
-	return missing, toolkitPinned
+	return missing, toolkitPinned, nil
 }
 
 // firstNonEmptyLine returns the first non-blank line of s, trimmed. A
@@ -380,12 +391,12 @@ func Stage(ctx context.Context, r hostconverge.Runner, s Spec) error {
 	return nil
 }
 
-// ErrCDIUnresolvable marks a PreflightCDI failure in which podman itself
+// ErrCDIUnresolvable marks a CheckGPU failure in which podman itself
 // reported that it could not resolve the GPU through CDI, as opposed to the
-// preflight run failing for a reason that says nothing about the CDI spec.
+// check's run failing for a reason that says nothing about the CDI spec.
 var ErrCDIUnresolvable = errors.New("podman could not give the image the GPU through CDI (--device nvidia.com/gpu=all)")
 
-// PreflightCDI asks podman to give the staged image the GPU through CDI,
+// CheckGPU asks podman to give the staged image the GPU through CDI,
 // the same way the Quadlet's AddDevice does, while the previous server keeps
 // serving. A CDI spec podman cannot parse otherwise shows up only once the
 // swap has already stopped the previous server. The entrypoint is true, so
@@ -395,7 +406,7 @@ var ErrCDIUnresolvable = errors.New("podman could not give the image the GPU thr
 // The same command also fails when SSH drops, container storage is broken
 // or the runtime cannot start the container, so only a failure whose output
 // names CDI is returned as ErrCDIUnresolvable.
-func PreflightCDI(ctx context.Context, r hostconverge.Runner, s Spec) error {
+func CheckGPU(ctx context.Context, r hostconverge.Runner, s Spec) error {
 	out, err := r.Run(ctx, "sudo podman run --rm --entrypoint true --device nvidia.com/gpu=all '"+s.Image+"'")
 	if err == nil {
 		return nil
@@ -403,7 +414,7 @@ func PreflightCDI(ctx context.Context, r hostconverge.Runner, s Spec) error {
 	if reported := out + "\n" + err.Error(); strings.Contains(reported, "CDI") || strings.Contains(strings.ToLower(reported), "unresolvable") {
 		return fmt.Errorf("%w: %w", ErrCDIUnresolvable, err)
 	}
-	return fmt.Errorf("could not verify that podman can give the image the GPU (preflight run with --device nvidia.com/gpu=all): %w", err)
+	return fmt.Errorf("could not verify that podman can give the image the GPU (pre-swap GPU check, --device nvidia.com/gpu=all): %w", err)
 }
 
 // Live is the state of the running vllm container, read the same way and

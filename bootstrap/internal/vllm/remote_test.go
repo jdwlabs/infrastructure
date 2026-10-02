@@ -72,7 +72,7 @@ func indexOf(cmds []string, want string) int {
 // the two ever drift instead of silently matching a looser substring ----
 
 const (
-	wantDpkgQueryCmd         = "dpkg-query -W -f='${Package} ${Version} ${db:Status-Want} ${db:Status-Status}\\n' podman prometheus-node-exporter nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1 2>/dev/null"
+	wantDpkgQueryCmd         = "dpkg-query -W -f='${Package} ${Version} ${db:Status-Want} ${db:Status-Status}\\n' podman prometheus-node-exporter nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1 2>/dev/null || test $? -eq 1"
 	wantToolkitInstallCmd    = "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --allow-change-held-packages nvidia-container-toolkit=1.18.2-1 nvidia-container-toolkit-base=1.18.2-1 libnvidia-container-tools=1.18.2-1 libnvidia-container1=1.18.2-1"
 	wantHostInstallCmd       = "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y podman prometheus-node-exporter"
 	wantAptMarkHoldCmd       = "sudo apt-mark hold nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1"
@@ -112,7 +112,7 @@ func wantDownloadCmd(image, repo, rev string) string {
 		image, repo, rev,
 	)
 }
-func wantCDIPreflightCmd(image string) string {
+func wantGPUCheckCmd(image string) string {
 	return "sudo podman run --rm --entrypoint true --device nvidia.com/gpu=all '" + image + "'"
 }
 func wantRepoDigestsCmd(imageID string) string {
@@ -280,6 +280,21 @@ func TestEnsureHostReinstallsOnlyTheToolkitUnlessExactlyPinnedAndHeld(t *testing
 			}
 		})
 	}
+}
+
+// A dpkg-query that could not be run says nothing about what is installed:
+// reading it as "nothing is" would reinstall, and so upgrade, packages the
+// host already has.
+func TestEnsureHostPackageQueryFailureInstallsNothing(t *testing.T) {
+	r := allInstalledOK()
+	r.fail = map[string]error{"dpkg-query": errFail}
+
+	changed, err := EnsureHost(context.Background(), r)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errFail)
+	assert.Contains(t, err.Error(), "read installed packages")
+	assert.Empty(t, changed)
+	assert.Equal(t, []string{wantDpkgQueryCmd}, r.cmds)
 }
 
 // The unpinned packages are left at whatever version the host has: only
@@ -778,21 +793,21 @@ func TestStageMarkerTouchFailurePropagates(t *testing.T) {
 
 // ---- ReadLive ----
 
-// ---- PreflightCDI ----
+// ---- CheckGPU ----
 
-// The preflight asks podman to resolve the GPU through CDI exactly as the
+// The check asks podman to resolve the GPU through CDI exactly as the
 // Quadlet will, but runs true instead of the server, so it never loads a
 // model or holds GPU memory beside the server still serving.
-func TestPreflightCDIResolvesTheGPUWithoutStartingTheServer(t *testing.T) {
+func TestCheckGPUResolvesTheGPUWithoutStartingTheServer(t *testing.T) {
 	s := stageSpec()
 	r := &fakeRunner{}
-	require.NoError(t, PreflightCDI(context.Background(), r, s))
-	assert.Equal(t, []string{wantCDIPreflightCmd(s.Image)}, r.cmds)
+	require.NoError(t, CheckGPU(context.Background(), r, s))
+	assert.Equal(t, []string{wantGPUCheckCmd(s.Image)}, r.cmds)
 }
 
-// Podman's own words decide whether a failed preflight is a CDI failure:
+// Podman's own words decide whether a failed check is a CDI failure:
 // the run can also fail for reasons that say nothing about the CDI spec.
-func TestPreflightCDIFailureIsACDIFailureOnlyWhenPodmanSaysSo(t *testing.T) {
+func TestCheckGPUFailureIsACDIFailureOnlyWhenPodmanSaysSo(t *testing.T) {
 	cases := map[string]struct {
 		out     string
 		err     error
@@ -808,7 +823,7 @@ func TestPreflightCDIFailureIsACDIFailureOnlyWhenPodmanSaysSo(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			s := stageSpec()
-			err := PreflightCDI(context.Background(), scriptedOutErrRunner{out: tc.out, err: tc.err}, s)
+			err := CheckGPU(context.Background(), scriptedOutErrRunner{out: tc.out, err: tc.err}, s)
 			require.Error(t, err)
 			assert.Equal(t, tc.wantCDI, errors.Is(err, ErrCDIUnresolvable))
 			assert.ErrorIs(t, err, tc.err, "the underlying error stays in the chain")
