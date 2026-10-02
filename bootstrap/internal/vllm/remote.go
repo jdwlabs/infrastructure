@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -14,7 +15,8 @@ import (
 )
 
 // hostPackages are the apt packages EnsureHost requires on the GPU host at
-// whatever version apt offers.
+// whatever version is there: a missing one is installed, a present one is
+// never upgraded.
 var hostPackages = []string{"podman", "prometheus-node-exporter"}
 
 // toolkitVersion is the NVIDIA Container Toolkit release EnsureHost installs
@@ -77,8 +79,9 @@ const (
 	stageRequiredImageBytes = 12 * giB
 )
 
-// EnsureHost prepares the GPU host for vLLM: it installs the required
-// packages (the NVIDIA Container Toolkit at its pinned release), creates
+// EnsureHost prepares the GPU host for vLLM: it installs the NVIDIA
+// Container Toolkit at its pinned release and any other required package
+// that is missing, creates
 // the directories hostconverge and the Quadlet unit write into, keeps the
 // NVIDIA Container Device Interface spec in step with the installed
 // driver, and checks (without rewriting) node-exporter's
@@ -91,7 +94,11 @@ const (
 func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	var changed []string
 
-	if !packagesInstalled(ctx, r) {
+	missing, toolkitPinned := packageState(ctx, r)
+
+	// The toolkit goes first: its repository is the manual prerequisite, so
+	// a host without it fails before anything else is installed.
+	if !toolkitPinned {
 		pinned := make([]string, len(toolkitPackages))
 		for i, pkg := range toolkitPackages {
 			pinned[i] = pkg + "=" + toolkitVersion
@@ -100,7 +107,7 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 		// the pin back onto it; --allow-change-held-packages lets a change
 		// to toolkitVersion move packages this function held at the old one.
 		installCmd := "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --allow-change-held-packages " +
-			strings.Join(hostPackages, " ") + " " + strings.Join(pinned, " ")
+			strings.Join(pinned, " ")
 		if _, err := r.Run(ctx, installCmd); err != nil {
 			return changed, diagnoseInstallFailure(ctx, r, err)
 		}
@@ -109,7 +116,18 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 		if _, err := r.Run(ctx, "sudo apt-mark hold "+strings.Join(toolkitPackages, " ")); err != nil {
 			return changed, fmt.Errorf("hold nvidia-container-toolkit packages at %s: %w", toolkitVersion, err)
 		}
-		changed = append(changed, "installed "+strings.Join(hostPackages, ", ")+"; installed and held "+strings.Join(toolkitPackages, ", ")+" at "+toolkitVersion)
+		changed = append(changed, "installed and held "+strings.Join(toolkitPackages, ", ")+" at "+toolkitVersion)
+	}
+
+	// Only the missing ones are named: apt-get install upgrades a package
+	// that is already installed, and moving podman or restarting
+	// node-exporter is not something a toolkit reinstall should cause.
+	if len(missing) > 0 {
+		installCmd := "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y " + strings.Join(missing, " ")
+		if _, err := r.Run(ctx, installCmd); err != nil {
+			return changed, fmt.Errorf("install %s: %w", strings.Join(missing, ", "), err)
+		}
+		changed = append(changed, "installed "+strings.Join(missing, ", "))
 	}
 
 	if _, err := r.Run(ctx, "sudo mkdir -p /usr/local/libexec /etc/containers/systemd /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter"); err != nil {
@@ -240,14 +258,14 @@ func textfileDirectory(argsLines string) (string, bool) {
 	return dir, true
 }
 
-// packagesInstalled reports whether every package in hostPackages has an
-// "installed" status line naming it, and every package in toolkitPackages
-// one that is also exactly toolkitVersion and held — checked per package,
-// not by counting lines: a query that duplicates one package's line while
+// packageState reports which of hostPackages have no "installed" status
+// line naming them, and whether every package in toolkitPackages has one
+// that is also exactly toolkitVersion and held — checked per package, not
+// by counting lines: a query that duplicates one package's line while
 // silently dropping another's would still produce the "right" number of
 // installed-looking lines, and a positional line-to-package mapping can't
 // tell that apart from every package actually being present.
-func packagesInstalled(ctx context.Context, r hostconverge.Runner) bool {
+func packageState(ctx context.Context, r hostconverge.Runner) (missing []string, toolkitPinned bool) {
 	all := append(append([]string(nil), hostPackages...), toolkitPackages...)
 	out, _ := r.Run(ctx, "dpkg-query -W -f='"+dpkgStatusFormat+"' "+strings.Join(all, " ")+" 2>/dev/null")
 
@@ -262,16 +280,17 @@ func packagesInstalled(ctx context.Context, r hostconverge.Runner) bool {
 
 	for _, pkg := range hostPackages {
 		if _, ok := installed[pkg]; !ok {
-			return false
+			missing = append(missing, pkg)
 		}
 	}
+	toolkitPinned = true
 	for _, pkg := range toolkitPackages {
 		st, ok := installed[pkg]
 		if !ok || st.version != toolkitVersion || st.want != "hold" {
-			return false
+			toolkitPinned = false
 		}
 	}
-	return true
+	return missing, toolkitPinned
 }
 
 // firstNonEmptyLine returns the first non-blank line of s, trimmed. A
@@ -361,17 +380,30 @@ func Stage(ctx context.Context, r hostconverge.Runner, s Spec) error {
 	return nil
 }
 
+// ErrCDIUnresolvable marks a PreflightCDI failure in which podman itself
+// reported that it could not resolve the GPU through CDI, as opposed to the
+// preflight run failing for a reason that says nothing about the CDI spec.
+var ErrCDIUnresolvable = errors.New("podman could not give the image the GPU through CDI (--device nvidia.com/gpu=all)")
+
 // PreflightCDI asks podman to give the staged image the GPU through CDI,
 // the same way the Quadlet's AddDevice does, while the previous server keeps
 // serving. A CDI spec podman cannot parse otherwise shows up only once the
 // swap has already stopped the previous server. The entrypoint is true, so
 // the container exits as soon as its devices are set up: it never loads a
 // model or takes GPU memory from the server still running.
+//
+// The same command also fails when SSH drops, container storage is broken
+// or the runtime cannot start the container, so only a failure whose output
+// names CDI is returned as ErrCDIUnresolvable.
 func PreflightCDI(ctx context.Context, r hostconverge.Runner, s Spec) error {
-	if _, err := r.Run(ctx, "sudo podman run --rm --entrypoint true --device nvidia.com/gpu=all '"+s.Image+"'"); err != nil {
-		return fmt.Errorf("podman could not give the image the GPU through CDI (--device nvidia.com/gpu=all): %w", err)
+	out, err := r.Run(ctx, "sudo podman run --rm --entrypoint true --device nvidia.com/gpu=all '"+s.Image+"'")
+	if err == nil {
+		return nil
 	}
-	return nil
+	if reported := out + "\n" + err.Error(); strings.Contains(reported, "CDI") || strings.Contains(strings.ToLower(reported), "unresolvable") {
+		return fmt.Errorf("%w: %w", ErrCDIUnresolvable, err)
+	}
+	return fmt.Errorf("could not verify that podman can give the image the GPU (preflight run with --device nvidia.com/gpu=all): %w", err)
 }
 
 // Live is the state of the running vllm container, read the same way and

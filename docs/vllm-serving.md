@@ -192,8 +192,9 @@ with nothing running yet, that default reads misleadingly; cross-check with
 | (success, `changed: false`) | Host already matched `serving.yaml`; one health check ran against the untouched server, and nothing was restarted | `new` | `false` | Nothing to do. |
 | `host_prereq_failed` | `EnsureHost` failed. The **running server is unchanged**, but `EnsureHost` may already have installed or downgraded packages, created directories, or regenerated the CDI specs before hitting the failure (`EnsureHost` in `internal/vllm/remote.go`) — those are host-state side effects, not a swap. | `previous` | `false` | Commonly the NVIDIA Container Toolkit apt repo is missing, or no longer carries the pinned toolkit release — see [Host prerequisites](#host-prerequisites). Fix and re-run; re-running is safe, `EnsureHost` is idempotent. |
 | `stage_failed` | The image pull or model download failed, or the apply was interrupted (Ctrl-C, SIGTERM) before the swap — the message then starts `cancelled before the swap`. **The running server is unchanged** — `Stage` never touches it, and an interrupt during host preparation, staging or the CDI preflight stops before the swap even if the step in flight finished. | `previous` | `false` | For an interrupt, just re-run. Otherwise usually disk space: `Stage` needs 30 GiB free on `/var/lib/vllm` when the model revision isn't already staged, and 12 GiB free on `/var/lib/containers` every run (`internal/vllm/remote.go`). Free space, re-run. |
-| `cdi_unresolvable` | The CDI preflight failed: podman could not give the staged image the GPU (`--device nvidia.com/gpu=all`). It runs after staging and before the swap, so **the running server is unchanged** — nothing was stopped, written or restarted. | `previous` | `false` | See [Troubleshooting: unresolvable CDI devices](#unresolvable-cdi-devices). Fix the CDI spec, re-run. |
-| `legacy_state_unknown` | Reading `vllm.service`'s active/enabled state failed — either an SSH/run error that came back with empty output, or a `systemctl` state talops doesn't recognise (`remote.go:407-412`). Can happen before staging (`changed` still `false`, via `pendingReasons`) or again right after staging succeeds on **any** apply with something to change (`changed: true`, the `ReadLegacy` call after `Stage` in `vllm.Apply`, `internal/vllm/converge.go`) — not only a host's first apply; every changed apply re-reads legacy state to build its `Activate` hook. | `previous` | `false` | Investigate the legacy unit's state by hand, then re-run. |
+| `cdi_unresolvable` | The CDI preflight failed, and podman's output names CDI: it could not give the staged image the GPU (`--device nvidia.com/gpu=all`). It runs after staging and before the swap, so **the running server is unchanged** — nothing was stopped, written or restarted. | `previous` | `false` | See [Troubleshooting: unresolvable CDI devices](#unresolvable-cdi-devices). Fix the CDI spec, re-run. |
+| `preflight_failed` | The CDI preflight's `podman run` failed for a reason podman did not attribute to CDI — SSH dropped, container storage or the OCI runtime failed — so the GPU could not be verified either way (`PreflightCDI` in `internal/vllm/remote.go`). **The running server is unchanged**, exactly as for `cdi_unresolvable`. | `previous` | `false` | The message carries the underlying error; fix that (host access, `podman` itself), re-run. The CDI spec is not implicated. |
+| `legacy_state_unknown` | Reading `vllm.service`'s active/enabled state failed — either an SSH/run error that came back with empty output, or a `systemctl` state talops doesn't recognise (`legacyStateError` in `internal/vllm/remote.go`). Can happen before staging (`changed` still `false`, via `pendingReasons`) or again right after staging succeeds on **any** apply with something to change (`changed: true`, the `ReadLegacy` call after `Stage` in `vllm.Apply`, `internal/vllm/converge.go`) — not only a host's first apply; every changed apply re-reads legacy state to build its `Activate` hook. | `previous` | `false` | Investigate the legacy unit's state by hand, then re-run. |
 | `read_failed` | Couldn't read the installed Quadlet unit, the drift-check script/service/timer files, or `/etc/vllm/applied.json` while comparing against `serving.yaml` (`pendingReasons` in `internal/vllm/converge.go`) | `previous` | `false` | Check SSH/host access, re-run. |
 | `config_invalid` | No health gate configured — a talops misconfiguration, not a host problem | `previous` | `false` | File an issue; this isn't something re-running fixes. |
 | `converge_failed` (write path) | Writing, backing up, moving, or `chmod`-ing one of the files to install failed, **before `Activate` ever ran** (the install loop in `hostconverge.Apply` and its `abortInstall`, `internal/hostconverge/converge.go`) — `hostconverge` cleans up its own partial temp/installed files inline, but never calls `Activate`/`Verify` again, so this path is **not** a rollback. | `previous` | `false` | Nothing was activated; the running server was never touched. Check the failure reason (disk, permissions, SSH), re-run. |
@@ -242,7 +243,7 @@ case status runs with no models reader configured at all. A live-container
 read failure of any kind — SSH broken, `podman` broken, the container
 simply not running — collapses to `(not running)` instead (`ReadLive`
 treats every such failure as "not running," never as "unknown";
-`remote.go:272-275`). `(none)` means nothing has ever been applied in the
+`ReadLive` in `internal/vllm/remote.go`). `(none)` means nothing has ever been applied in the
 `applied` column; in `servedName`'s `live` column it instead means
 `/v1/models` answered with an empty list — reachable, but serving nothing
 (`converge.go`, `liveServedName`). `unreachable` is specific to
@@ -365,7 +366,8 @@ the server ever starts.
 ### Unresolvable CDI devices
 
 `apply` fails with `cdi_unresolvable`, or `journalctl -u vllm-server`
-shows:
+shows the error below. (`preflight_failed` is the same preflight failing
+without podman naming CDI; start from the error in its message instead.)
 
 ```
 Error: setting up CDI devices: unresolvable CDI devices nvidia.com/gpu=all
@@ -436,7 +438,10 @@ host-level setup, not something `serving.yaml` should own:
 `toolkitVersion` (`internal/vllm/remote.go`), downgrading them if apt has
 moved them past it, and `apt-mark hold`s all four so an unattended upgrade
 cannot move them between applies. A host whose installed version or hold
-differs is reinstalled on the next apply. The reason is the host's podman:
+differs is reinstalled on the next apply. That reinstall names only those
+four: `podman` and `prometheus-node-exporter` are installed when missing
+and never upgraded, so moving the toolkit does not also move podman or
+restart node-exporter. The reason is the host's podman:
 Ubuntu 24.04 ships podman 4.9.3, whose CDI parser rejects the spec that
 nvidia-ctk 1.19 and later generate (`cdiVersion: 0.7.0`, with an
 `additionalGids` field it does not know), so every GPU container fails with
@@ -546,10 +551,11 @@ against it.
    substitute for the tfvars entry, not just a fallback — but without one
    or the other, the first `talops vllm apply` fails immediately with
    `vllm_host_unset`, before touching anything.
-3. **What the migration itself does.** `EnsureHost` installs `podman` and
-   `prometheus-node-exporter`, installs and holds the NVIDIA Container
-   Toolkit at its pinned release (downgrading a toolkit the host already
-   has at a newer one — see [Host prerequisites](#host-prerequisites)), and
+3. **What the migration itself does.** `EnsureHost` installs and holds the
+   NVIDIA Container Toolkit at its pinned release (downgrading a toolkit
+   the host already has at a newer one — see [Host
+   prerequisites](#host-prerequisites)), installs `podman` and
+   `prometheus-node-exporter` if either is missing, and
    generates both CDI specs for it. `Stage` pulls the pinned image and
    downloads the model, and the CDI preflight runs that image once with the
    GPU; a host whose CDI spec podman cannot read stops there with

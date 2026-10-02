@@ -25,6 +25,7 @@ const (
 	CodeHostPrereq      = "host_prereq_failed"
 	CodeStage           = "stage_failed"
 	CodeCDIUnresolvable = "cdi_unresolvable"
+	CodePreflight       = "preflight_failed"
 	CodeConverge        = "converge_failed"
 	CodeGate            = "gate_failed"
 	CodeRecord          = "record_failed"
@@ -300,7 +301,10 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return failApply(res, CodeStage, cancelledMsg(ctxErr))
 		}
-		return failApply(res, CodeCDIUnresolvable, err.Error())
+		if errors.Is(err, ErrCDIUnresolvable) {
+			return failApply(res, CodeCDIUnresolvable, err.Error())
+		}
+		return failApply(res, CodePreflight, err.Error())
 	}
 	if err := ctx.Err(); err != nil {
 		return failApply(res, CodeStage, cancelledMsg(err))
@@ -563,6 +567,12 @@ func failApply(res ApplyResult, code, msg string) ApplyResult {
 		res.Help = []string{
 			"nothing changed on the running server: podman could not give the new image the GPU, so the swap was never attempted",
 			"see docs/vllm-serving.md#troubleshooting (unresolvable CDI devices)",
+			"talops vllm apply --confirm  # re-run once the cause is fixed",
+		}
+	case code == CodePreflight:
+		res.Help = []string{
+			"nothing changed on the running server: the GPU could not be verified for the new image, so the swap was never attempted",
+			"the failure message carries the underlying error; podman did not report a CDI problem",
 			"talops vllm apply --confirm  # re-run once the cause is fixed",
 		}
 	default:

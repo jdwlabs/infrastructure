@@ -775,6 +775,52 @@ func TestApplyCDIPreflightFailureTouchesNothing(t *testing.T) {
 	}
 }
 
+// The preflight run can fail without podman saying anything about CDI — SSH
+// dropping, broken container storage, a runtime error. That still stops
+// before the swap, but under its own code, so the operator is not sent to
+// the CDI spec for a problem that is not one.
+func TestApplyPreflightFailureThatIsNotCDIHasItsOwnCode(t *testing.T) {
+	pinBackupSuffix(t)
+	h := install(newHost("inactive"), sampleSpec())
+	h.files["/var/lib/vllm/hf/.staged-"+newerSpec().Model.Revision] = nil
+	before := map[string]string{}
+	for p, b := range h.files {
+		before[p] = string(b)
+	}
+	wasActive := map[string]bool{}
+	for u, a := range h.active {
+		wasActive[u] = a
+	}
+	h.prepend(&rule{sub: "--device nvidia.com/gpu=all", out: "Error: creating container storage: layer not known\n", err: errFail})
+	g := &fakeGate{h: h}
+
+	res := Apply(context.Background(), target(h, g), newerSpec())
+
+	require.NotNil(t, res.Failure)
+	assert.Equal(t, CodePreflight, res.Failure.Code)
+	assert.Contains(t, res.Failure.Msg, "could not verify")
+	assert.Contains(t, res.Failure.Msg, "fake failure", "the underlying error is shown")
+	assert.Equal(t, ServingPrevious, res.Serving)
+	assert.True(t, res.Changed)
+	assert.False(t, res.RolledBack)
+	assert.Zero(t, g.calls)
+	assert.Zero(t, countContaining(h.cmds, "sudo systemctl"), "nothing may be restarted")
+	assert.Zero(t, countContaining(h.cmds, "base64 -d"))
+	assert.Equal(t, wantCDIPreflightCmd(newerSpec().Image), h.cmds[len(h.cmds)-1], "nothing runs after a failed preflight")
+	after := map[string]string{}
+	for p, b := range h.files {
+		after[p] = string(b)
+	}
+	assert.Equal(t, before, after)
+	assert.Equal(t, wasActive, h.active)
+	assert.Equal(t, []string{"host", "stage", "cdi-preflight"}, phaseNames(res.Phases))
+	help := strings.Join(res.Help, "\n")
+	assert.Contains(t, help, "nothing changed on the running server")
+	assert.Contains(t, help, "GPU could not be verified")
+	assert.NotContains(t, help, "unresolvable CDI devices")
+	assert.NotContains(t, help, "endpoint is down")
+}
+
 // A preflight that fails because the operator interrupted it says nothing
 // about the CDI spec, so it is reported as the interrupt it was.
 func TestApplyInterruptedCDIPreflightIsACancelNotACDIFailure(t *testing.T) {
