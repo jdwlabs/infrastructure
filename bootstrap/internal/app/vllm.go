@@ -208,8 +208,8 @@ func sshAuthUnconfigured() *vllm.Failure {
 
 // vllmGate builds the health gate for the port serving.yaml declares.
 // Production sets both Target.Gate and Target.Models to it: Status needs
-// Models to read the live served name, and without it that column would
-// only ever say unknown.
+// Models to read the live served name and aliases, and without it those
+// columns would only ever say unknown.
 func vllmGate(host string, spec vllm.Spec) vllm.HealthGate {
 	return vllm.HealthGate{BaseURL: fmt.Sprintf("http://%s:%d", host, spec.Port)}
 }
