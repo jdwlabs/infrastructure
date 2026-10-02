@@ -328,24 +328,28 @@ file does not reproduce goes away with the table:
 sudo nft list table ip minecraft
 ```
 
-**Then find and disable whatever re-applies it at boot.** The table survives
-reboots today, so something loads it. Delete the table without disabling that
-loader and the next reboot brings `minecraft` back alongside `udpnat`,
-restoring the registration-order race described below — weeks later, with
-nothing left to connect it to this migration. The loader predates this runbook
-and is not recorded here, so search for it:
+**Then disable what re-applies it at boot.** Delete the table without
+disabling its loader and the next reboot brings `minecraft` back alongside
+`udpnat`, restoring the registration-order race described below — weeks later,
+with nothing left to connect it to this migration.
+
+The loader is `minecraft-udp-nat.service` ("UDP DNAT for Bedrock servers to
+Kubernetes NodePorts"), a oneshot that runs
+`/usr/sbin/nft -f /etc/minecraft-udp-nat.nft`. Found 2026-10-02 with
+`systemctl cat minecraft-udp-nat`; it is `enabled`, and it reloaded the table
+on that day's boot. Its name does not contain `nft`, so a search for that
+finds nothing. Confirm it is still the only one before relying on this:
 
 ```bash
-systemctl list-units --all | grep -i nft
+systemctl is-enabled minecraft-udp-nat
+systemctl list-unit-files | grep -iE 'nft|nat|minecraft'
 sudo cat /etc/rc.local
 sudo crontab -l
 ```
 
-Disable what you find — `sudo systemctl disable --now <unit>` for a unit, or
-comment out the line in `/etc/rc.local` or the root crontab — and record its
-name in this section so the next operator does not have to rediscover it. If
-nothing turns up, keep looking before you delete anything: a table that
-survives reboots is being applied by something.
+Disable it — `sudo systemctl disable --now minecraft-udp-nat.service` — as
+part of the migration, not before: until `udpnat-rules.service` exists it is
+the only thing that restores UDP ingress after a reboot.
 
 **Delete the old table only then, and apply the new one immediately after.**
 The order matters more than the brief gap it opens:
