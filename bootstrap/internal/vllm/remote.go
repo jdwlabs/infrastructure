@@ -102,6 +102,15 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	// The toolkit goes first: its repository is the manual prerequisite, so
 	// a host without it fails before anything else is installed.
 	if !toolkitPinned {
+		// The record names the pin, not the toolkit that was installed, so
+		// it still matches after the toolkit moved off the pin and rewrote
+		// the specs. Removing it before the reinstall, rather than
+		// remembering the reinstall for the rest of this run, means a run
+		// that fails before the specs are regenerated leaves no record
+		// claiming they are current.
+		if _, err := r.Run(ctx, "sudo rm -f "+cdiRecordPath); err != nil {
+			return changed, fmt.Errorf("remove CDI spec record before reinstalling nvidia-container-toolkit: %w", err)
+		}
 		pinned := make([]string, len(toolkitPackages))
 		for i, pkg := range toolkitPackages {
 			pinned[i] = pkg + "=" + toolkitVersion
@@ -155,13 +164,10 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	// out of it is one nvidia-ctk release away from silently never matching
 	// again. The key is the driver and the toolkit, because both decide what
 	// nvidia-ctk writes: a spec a newer toolkit wrote is unreadable to the
-	// host's podman even when the driver never changed. The record names the
-	// pin, not the toolkit that was installed, so it still matches after the
-	// toolkit moved off the pin and rewrote the specs: a toolkit installed in
-	// this run regenerates them whatever the record says.
+	// host's podman even when the driver never changed.
 	cdiKey := driverVersion + "|" + toolkitVersion
 	recordOut, recErr := r.Run(ctx, "sudo cat "+cdiRecordPath+" 2>/dev/null")
-	if !toolkitPinned || recErr != nil || strings.TrimSpace(recordOut) != cdiKey {
+	if recErr != nil || strings.TrimSpace(recordOut) != cdiKey {
 		if _, err := r.Run(ctx, "sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"); err != nil {
 			return changed, fmt.Errorf("generate CDI spec: %w", err)
 		}
