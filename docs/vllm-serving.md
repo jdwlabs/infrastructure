@@ -270,6 +270,46 @@ every other row in both tables above — including a fully successful, fully
 re-verified rollback. A rolled-back apply exits `1` because the *attempted*
 change didn't take, even though the host ends up healthy.
 
+## Trialling a candidate model
+
+A trial is an ordinary [model change](#changing-the-model-or-version) with a
+measurement on each side and a decision at the end. It takes @server and the
+local LiteLLM tiers down twice — once onto the candidate, once back or onward
+— so both halves happen in announced windows.
+
+1. **Pick the candidate** from the weekly audit ticket. Its trial steps are
+   the args delta; prefer the largest `marginGiB`, because the estimate's
+   overhead allowance was measured on a text-only model.
+2. **Measure the incumbent first**, with production's settings, so the
+   comparison is not against an older agent build. From the gameops repo's
+   `minecraft/agent`, run `cmd/evalllm` six times with `LLM_BASE_URL` set to
+   the host, `LLM_MODEL=local-chat`, and `LLM_MAX_TOKENS`, `LLM_TIMEOUT_MS`,
+   `LLM_TOTAL_TIMEOUT_MS` and `MAX_TOOL_ROUNDS` copied from
+   jdw-deployments `charts/minecraft-fwb/values.yaml` (`agent.llm`). Add
+   `-wiki` runs too, because the wiki cases are part of the gate. evalllm's
+   own defaults are not production's, and a baseline taken at the defaults
+   compares the wrong thing.
+3. **Swap** with a PR to `serving.yaml` applying the trial steps, then
+   `talops vllm plan` and `talops vllm apply --confirm` in an announced
+   window, exactly as for any model change. A model that thinks by default
+   needs thinking turned off (`--default-chat-template-kwargs.enable_thinking=false`
+   when its chat template honours it): @server answers in one short chat
+   line, and thinking tokens spend that budget before the answer starts.
+4. **Measure the candidate** the same way, six runs plus the wiki runs, and
+   run `inference/vllm/smoke-tool-call.sh` against the host and against
+   LiteLLM's `sre-investigator-local` route (`BASE_URL`, `MODEL`, `API_KEY`;
+   the key is LiteLLM's, so run that one from your own terminal).
+5. **Decide against the gate.** The candidate stays only if all of these
+   hold; otherwise revert the `serving.yaml` PR and apply again:
+   - no evalllm case that passed for the incumbent loses two or more of its
+     six passes;
+   - the wiki cases pass at least as often as for the incumbent;
+   - p95 latency stays within `LLM_TIMEOUT_MS`;
+   - the SRE smoke check passes.
+6. **Record it**: the comparison report goes into the gameops repo's
+   `minecraft/agent/docs/eval/`, and the decision, keep or revert, goes on
+   the trial ticket with links to both.
+
 ## Status and drift
 
 `talops vllm status` is a three-way, read-only comparison: the local
