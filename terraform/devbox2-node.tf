@@ -84,6 +84,11 @@ resource "proxmox_virtual_environment_vm" "devbox2" {
     # this VM existed; fixed pre-emptively because a lifeboat that does not
     # return when its own host reboots is not a lifeboat.
     datastore_id = var.devbox2_cloudinit_datastore
+    # raw, not the provider's qcow2 default: the cloud-init drive now sits on
+    # local-lvm, and LVM-thin stores only raw volumes. With qcow2 Proxmox
+    # rejects the create ("unsupported format 'qcow2'") after the provider has
+    # already removed the old drive, leaving the VM stopped and without one.
+    file_format = "raw"
 
     ip_config {
       ipv4 {

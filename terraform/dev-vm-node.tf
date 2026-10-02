@@ -99,6 +99,11 @@ resource "proxmox_virtual_environment_vm" "dev_vm" {
     # mount arriving mid-operation, failing the guest's autostart. See the
     # variable's description for the evidence and the migration cost.
     datastore_id = var.dev_vm_cloudinit_datastore
+    # raw, not the provider's qcow2 default: the cloud-init drive now sits on
+    # local-lvm, and LVM-thin stores only raw volumes. With qcow2 Proxmox
+    # rejects the create ("unsupported format 'qcow2'") after the provider has
+    # already removed the old drive, leaving the VM stopped and without one.
+    file_format = "raw"
 
     # Static, never a DHCP lease — same rule as every other VM here, and this
     # one specifically needs a stable address for Remote-SSH host entries.
