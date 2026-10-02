@@ -54,8 +54,9 @@ const runbook = "scenarios/ai-sre-agent-runbook.md"
 
 // Consumers are the services an apply interrupts while the server restarts.
 var Consumers = []string{
-	"@server answers (jdw-deployments minecraft-fwb agent.llm)",
+	"@server answers (jdw-deployments minecraft-fwb llm.model)",
 	"LiteLLM sre-investigator-local (platform litellm)",
+	"LiteLLM pr-reviewer (platform litellm)",
 }
 
 // Gatekeeper decides whether a server is serving the spec. Wait gates a

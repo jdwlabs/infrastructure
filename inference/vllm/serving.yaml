@@ -8,11 +8,11 @@ model:
 # A neutral name, so a model swap never needs a rename that every consumer
 # has to follow in lockstep.
 servedName: local-chat
-# The server also answers to the previous name, so @server answers and LiteLLM
-# sre-investigator-local keep working while each moves to local-chat
-# separately. Responses report local-chat whichever name was requested. Drop
-# this once both consumers request local-chat (docs/vllm-serving.md,
-# "Renaming the served model").
+# The server also answers to the previous name, so @server answers and
+# LiteLLM's sre-investigator-local and pr-reviewer routes keep working while
+# each moves to local-chat separately. Responses report local-chat whichever
+# name was requested. Drop this once all three consumers request local-chat
+# (docs/vllm-serving.md, "Renaming the served model").
 servedAliases:
   - qwen/qwen3-coder-30b-a3b
 port: 8000

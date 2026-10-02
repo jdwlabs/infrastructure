@@ -21,19 +21,21 @@ this repo. `talops vllm apply --confirm` is the only thing that acts on it —
 merging an edit to that file changes nothing by itself, exactly as the
 comment at the top of the file says.
 
-Two consumers reach the server directly, and both lose it for the duration of
-an `apply`'s restart and health check:
+Three consumers reach the server directly, and all lose it for the duration
+of an `apply`'s restart and health check:
 
-- `@server` answers (`jdw-deployments` `minecraft-fwb` `agent.llm`)
-- LiteLLM's `sre-investigator-local` route (`platform` `litellm`)
+- `@server` answers (`jdw-deployments` `minecraft-fwb` `llm.model`)
+- LiteLLM's `sre-investigator-local` route (`platform`
+  `tenants/platform/services/litellm/values.yaml`)
+- LiteLLM's `pr-reviewer` route (the same `platform` file)
 
-Both name the model in each request, and the server refuses a name it does
-not serve with a 404. The server's name is `local-chat`. Both consumers
+Each names the model in every request, and the server refuses a name it does
+not serve with a 404. The server's name is `local-chat`. All three consumers
 still request the previous name, `qwen/qwen3-coder-30b-a3b`, which stays in
-`servedAliases` until both have moved to `local-chat`. See
+`servedAliases` until all three have moved to `local-chat`. See
 [Renaming the served model](#renaming-the-served-model).
 
-`talops vllm plan` names these same two consumers whenever it reports a
+`talops vllm plan` names these same three consumers whenever it reports a
 change, so a plan doubles as the announcement list for a change window.
 
 ## `serving.yaml` fields and validation
@@ -125,10 +127,12 @@ repos changing at once:
    its own repo and on its own schedule. Nothing on the GPU host changes.
 3. **Drop the alias.** Once every consumer in
    [the list above](#what-serves-and-who-depends-on-it) requests the new
-   name, remove the old name from `servedAliases` and apply again. That is
-   another restart, so it needs another announced window. Do not drop the
-   alias before every consumer has moved: the gate probes `servedName`, so
-   it would pass while a consumer that had not moved got 404s.
+   name — today all three: `@server` answers, LiteLLM's
+   `sre-investigator-local` route and LiteLLM's `pr-reviewer` route — remove
+   the old name from `servedAliases` and apply again. That is another
+   restart, so it needs another announced window. Do not drop the alias
+   before every consumer has moved: the gate probes `servedName`, so it
+   would pass while a consumer that had not moved got 404s.
 
 Do not change the model in the same PR as a rename. The weekly audit's
 trial steps keep both `servedName` and `servedAliases` as they are for this
@@ -146,7 +150,7 @@ reason.
    content and records the wrong commit as having produced it.
 3. In an announced window:
    - Announce the restart with `tools/mc announce` in `jdw-deployments` — the
-     two consumers above lose the server for the length of the restart and
+     three consumers above lose the server for the length of the restart and
      health check.
    - Check LiteLLM's cloud quota has headroom, since the cloud tier is what
      picks up requests while the local tier is unavailable.
@@ -374,10 +378,11 @@ it:
   `internal/vllm/converge.go`) detects the Quadlet is now absent and calls
   `retireNewServer`, which stops the new server and puts `vllm.service` back
   the way it found it. No record exists on a first apply, so the restored
-  `vllm.service` is checked against `serving.yaml`'s `servedName` and
-  `model.repo`; a first apply that also changes either of them rolls back to
-  a server that fails that check and reports `serving: none` although the
-  legacy server is running. If nothing was serving before (no legacy unit, or one
+  `vllm.service` is checked against `serving.yaml`'s `servedName`,
+  `servedAliases` and `model.repo`; a first apply that also changes any of
+  them — including adding an alias the legacy server does not answer to —
+  rolls back to a server that fails that check and reports `serving: none`
+  although the legacy server is running. If nothing was serving before (no legacy unit, or one
   that was enabled but stopped), there is nothing to roll back to, and the
   report says so (`serving: none`) rather than waiting out a health-check
   timeout against nothing.
