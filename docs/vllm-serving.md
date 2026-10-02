@@ -71,7 +71,9 @@ healthGate:
 
 Unknown keys are rejected outright (`KnownFields(true)`), and `args` may not
 set `--model`, `--revision`, `--port`, `--served-model-name`, or `--host`,
-in either the `-` or the `_` spelling, which vLLM treats as the same flag —
+in either the `-` or the `_` spelling, which vLLM treats as the same flag,
+or any shortened form of one (`--served-model-nam`, `--revisio`, `--mod`),
+since vLLM's parser resolves an abbreviated long option to the full one —
 talops's own rendered `Exec=` line already sets all five (`ExecArgs` in
 `internal/vllm/render.go`): `model.repo` positionally, as `vllm serve`'s
 first argument, and the rest as flags. A duplicate in `args` would either
