@@ -11,13 +11,36 @@
 #   BASE_URL=<litellm>/v1 MODEL=sre-investigator-local API_KEY=... \
 #     inference/vllm/smoke-tool-call.sh                   # the SRE tier
 #
-# Exit 0 on a parsed get_time call, 1 on anything else, with the reason on
-# stdout so an agent reading only stdout still sees why.
+# Needs curl and jq. Exit 0 on a parsed get_time call, 1 on anything else,
+# with `result: FAIL` and the reason on stdout so an agent reading only stdout
+# still sees why.
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://192.168.1.50:8000/v1}"
 MODEL="${MODEL:-local-chat}"
 TIMEOUT="${TIMEOUT:-60}"
+
+fail() {
+  echo "result: FAIL"
+  echo "reason: $1"
+  exit 1
+}
+
+# A reason is one line: a server's error page is flattened and cut short.
+excerpt() {
+  local s
+  s=$(tr -s '[:space:]' ' ' <"$1")
+  if [ "${#s}" -gt 500 ]; then
+    s="${s:0:500}..."
+  fi
+  printf '%s' "$s"
+}
+
+for tool in curl jq; do
+  command -v "$tool" >/dev/null 2>&1 || fail "${tool} is not installed"
+done
+
+url="${BASE_URL%/}/chat/completions"
 
 auth=()
 if [ -n "${API_KEY:-}" ]; then
@@ -37,26 +60,45 @@ body=$(jq -n --arg model "$MODEL" '{
   }}],
   tool_choice: "auto",
   max_tokens: 128
-}')
+}') || fail "could not build the request body with jq"
 
-start=$(date +%s.%N)
-if ! resp=$(curl -fsS --max-time "$TIMEOUT" "${auth[@]}" \
-  -H 'Content-Type: application/json' -d "$body" "${BASE_URL%/}/chat/completions" 2>&1); then
-  echo "result: FAIL"
-  echo "reason: request to ${BASE_URL} failed: ${resp}"
-  exit 1
+tmp=$(mktemp -d) || fail "could not create a temporary directory"
+trap 'rm -rf "$tmp"' EXIT
+
+# The body goes to a file and the status and duration to another, so an HTTP
+# error keeps the server's message and stderr holds only curl's own failure.
+# ${auth[@]+...} because bash before 4.4 treats an empty array as unset.
+if ! err=$(curl -sS --max-time "$TIMEOUT" ${auth[@]+"${auth[@]}"} \
+  -H 'Content-Type: application/json' -d "$body" \
+  -o "$tmp/body" -w '%{http_code} %{time_total}\n' "$url" 2>&1 >"$tmp/meta"); then
+  fail "request to ${url} failed: ${err}"
 fi
-secs=$(echo "$(date +%s.%N) - $start" | bc)
+read -r status secs <"$tmp/meta" || fail "curl reported no HTTP status for ${url}"
 
-name=$(jq -r '.choices[0].message.tool_calls[0].function.name // empty' <<<"$resp")
+case "$status" in
+  2??) ;;
+  *) fail "HTTP ${status} from ${url}: $(excerpt "$tmp/body")" ;;
+esac
+
+if ! fields=$(jq -rc '[
+    .model // "-",
+    .choices[0].message.tool_calls[0].function.name // "",
+    (.choices[0].message.content | tojson)
+  ] | .[]' "$tmp/body" 2>/dev/null) || [ -z "$fields" ]; then
+  fail "response from ${url} is not a chat completion: $(excerpt "$tmp/body")"
+fi
+{
+  read -r served
+  read -r name
+  read -r content
+} <<<"$fields"
+
 echo "base_url: ${BASE_URL}"
 echo "model: ${MODEL}"
-echo "served_by: $(jq -r '.model // "-"' <<<"$resp")"
+echo "served_by: ${served}"
 echo "seconds: ${secs}"
 if [ "$name" = "get_time" ]; then
   echo "result: PASS"
   exit 0
 fi
-echo "result: FAIL"
-echo "reason: no parsed get_time call; content was: $(jq -c '.choices[0].message.content' <<<"$resp")"
-exit 1
+fail "no parsed get_time call; content was: ${content}"

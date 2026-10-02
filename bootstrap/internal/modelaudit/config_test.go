@@ -100,14 +100,24 @@ func TestCommittedAuditConfigLoads(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// servedModelTypes is config.json's model_type and text_config.model_type for
+// each repo serving.yaml has named. serving.yaml does not carry them, so a
+// model swap adds a row here; reverting one needs no edit.
+var servedModelTypes = map[string][2]string{
+	"QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ": {"qwen3_moe", ""},
+	"nvidia/Qwen3.8-27B-NVFP4":                   {"qwen3_5", "qwen3_5_text"},
+}
+
 // The rules are only trustworthy if they reproduce what already serves.
 func TestCommittedRulesResolveTheIncumbentToItsServingParser(t *testing.T) {
 	c, err := LoadConfig("../../../inference/vllm/audit.yaml")
 	require.NoError(t, err)
-	cur, err := LoadCurrent("../../../inference/vllm/serving.yaml")
+	cur, err := LoadCurrent(committedSpec)
 	require.NoError(t, err)
+	types, ok := servedModelTypes[cur.Repo]
+	require.True(t, ok, "record %s's model_type in servedModelTypes", cur.Repo)
 
-	r, ok := c.ResolveParser(cur.Repo, "qwen3_moe", "")
+	r, ok := c.ResolveParser(cur.Repo, types[0], types[1])
 	require.True(t, ok)
 	assert.Equal(t, cur.ToolCallParser, r.Parser)
 }
