@@ -92,7 +92,8 @@ func TestRunReportsAFittingCandidateWithItsTrialSteps(t *testing.T) {
 	assert.Equal(t, "https://huggingface.co/Qwen/Qwen3-Coder-Next-Instruct/tree/"+shaA, c.URL)
 	assert.Equal(t, []string{
 		"set model.repo=Qwen/Qwen3-Coder-Next-Instruct and model.revision=" + shaA,
-		"keep servedName=qwen/qwen3-coder-30b-a3b: consumers request the model by it",
+		"keep servedName=local-chat: consumers request the model by it",
+		"keep servedAliases=[qwen/qwen3-coder-30b-a3b]: consumers not yet moved to servedName request the model by them",
 		"set --tool-call-parser=qwen3_xml",
 		"remove --quantization=awq_marlin: vLLM detects awq from quantization_config",
 		"keep --max-model-len=32768",
