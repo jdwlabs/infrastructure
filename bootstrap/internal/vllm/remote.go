@@ -155,10 +155,13 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	// out of it is one nvidia-ctk release away from silently never matching
 	// again. The key is the driver and the toolkit, because both decide what
 	// nvidia-ctk writes: a spec a newer toolkit wrote is unreadable to the
-	// host's podman even when the driver never changed.
+	// host's podman even when the driver never changed. The record names the
+	// pin, not the toolkit that was installed, so it still matches after the
+	// toolkit moved off the pin and rewrote the specs: a toolkit installed in
+	// this run regenerates them whatever the record says.
 	cdiKey := driverVersion + "|" + toolkitVersion
 	recordOut, recErr := r.Run(ctx, "sudo cat "+cdiRecordPath+" 2>/dev/null")
-	if recErr != nil || strings.TrimSpace(recordOut) != cdiKey {
+	if !toolkitPinned || recErr != nil || strings.TrimSpace(recordOut) != cdiKey {
 		if _, err := r.Run(ctx, "sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"); err != nil {
 			return changed, fmt.Errorf("generate CDI spec: %w", err)
 		}
