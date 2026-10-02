@@ -19,6 +19,8 @@ import (
 // scripted output for the first key of out it contains. Every test in this
 // file picks fail/out keys that are substrings of exactly one command it
 // issues, so which key wins isn't sensitive to Go's randomized map order.
+// A successful `sudo rm -f <path>` forgets every scripted output keyed on
+// that path, so a later read of the removed file comes back empty.
 type fakeRunner struct {
 	cmds []string
 	fail map[string]error
@@ -31,6 +33,14 @@ func (f *fakeRunner) Run(ctx context.Context, cmd string) (string, error) {
 		if strings.Contains(cmd, k) {
 			return "", err
 		}
+	}
+	if path, ok := strings.CutPrefix(cmd, "sudo rm -f "); ok {
+		for k := range f.out {
+			if strings.Contains(k, path) {
+				delete(f.out, k)
+			}
+		}
+		return "", nil
 	}
 	for k, o := range f.out {
 		if strings.Contains(cmd, k) {
@@ -80,6 +90,7 @@ const (
 	wantMkdirCmd             = "sudo mkdir -p /usr/local/libexec /etc/containers/systemd /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter"
 	wantNvidiaSmiCmd         = "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null"
 	wantCDIRecordReadCmd     = "sudo cat /etc/vllm/cdi-generated-for 2>/dev/null"
+	wantCDIRecordRemoveCmd   = "sudo rm -f /etc/vllm/cdi-generated-for"
 	wantNvidiaCtkGenerateCmd = "sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"
 	wantCDIRefreshCmd        = "sudo systemctl restart nvidia-cdi-refresh.service"
 	wantNodeExporterGrepCmd  = "grep '^ARGS=' /etc/default/prometheus-node-exporter 2>/dev/null"
@@ -175,6 +186,7 @@ func TestEnsureHostInstallsEverythingOnAFreshHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		wantDpkgQueryCmd,
+		wantCDIRecordRemoveCmd,
 		wantToolkitInstallCmd,
 		wantAptMarkHoldCmd,
 		wantHostInstallCmd,
@@ -196,6 +208,7 @@ func TestEnsureHostInstallsAMissingToolkitPackage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		wantDpkgQueryCmd,
+		wantCDIRecordRemoveCmd,
 		wantToolkitInstallCmd,
 		wantAptMarkHoldCmd,
 		wantMkdirCmd,
@@ -273,7 +286,7 @@ func TestEnsureHostReinstallsOnlyTheToolkitUnlessExactlyPinnedAndHeld(t *testing
 			r.out["dpkg-query"] = dpkg
 			changed, err := EnsureHost(context.Background(), r)
 			require.NoError(t, err)
-			assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptMarkHoldCmd, wantMkdirCmd}, r.cmds[:4])
+			assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptMarkHoldCmd, wantMkdirCmd}, r.cmds[:5])
 			assert.Equal(t, []string{wantToolkitInstalledChange, wantCDIRegeneratedChange}, changed)
 			for _, cmd := range r.cmds {
 				if !strings.Contains(cmd, "apt-get install") {
@@ -322,7 +335,7 @@ func TestEnsureHostHoldFailurePropagates(t *testing.T) {
 	_, err := EnsureHost(context.Background(), r)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "hold nvidia-container-toolkit packages at 1.18.2-1")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptMarkHoldCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptMarkHoldCmd}, r.cmds)
 }
 
 // A repository that carries the toolkit but no longer the pinned release
@@ -338,7 +351,7 @@ func TestEnsureHostPinnedVersionMissingFromRepoIsNamed(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1.18.2-1 is not available")
 	assert.Contains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostNoAptCandidateReturnsDocumentedErrorAndSkipsCDIAndMkdir(t *testing.T) {
@@ -351,7 +364,7 @@ func TestEnsureHostNoAptCandidateReturnsDocumentedErrorAndSkipsCDIAndMkdir(t *te
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "NVIDIA Container Toolkit apt repository")
 	assert.Contains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostEmptyPolicyOutputReturnsDocumentedError(t *testing.T) {
@@ -363,7 +376,7 @@ func TestEnsureHostEmptyPolicyOutputReturnsDocumentedError(t *testing.T) {
 	_, err := EnsureHost(context.Background(), r)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no apt installation candidate")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostInstallFailsWithCandidatePresentReturnsGenericError(t *testing.T) {
@@ -376,7 +389,7 @@ func TestEnsureHostInstallFailsWithCandidatePresentReturnsGenericError(t *testin
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
 	assert.Contains(t, err.Error(), "install host packages")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostAptCachePolicyErrorWrapsBothErrors(t *testing.T) {
@@ -391,7 +404,7 @@ func TestEnsureHostAptCachePolicyErrorWrapsBothErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "install host packages")
 	assert.NotContains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 // TestEnsureHostMkdirFailurePropagates kills the "mkdir failure" mutant and
@@ -519,7 +532,8 @@ func TestEnsureHostRegeneratesCDIAfterMovingTheToolkitOntoThePin(t *testing.T) {
 
 // The record holds the pin, never the toolkit that was actually installed,
 // so a host converged earlier still has a matching record after its toolkit
-// moved off the pin and rewrote the specs. Moving it back regenerates both.
+// moved off the pin and rewrote the specs. Moving it back removes the record
+// first, and so regenerates both.
 func TestEnsureHostRegeneratesCDIAfterRepinningDespiteAMatchingRecord(t *testing.T) {
 	for name, dpkg := range map[string]string{
 		"toolkit upgraded past the pin": strings.ReplaceAll(dpkgReady, "1.18.2-1 hold", "1.20.1-1 install"),
@@ -533,6 +547,7 @@ func TestEnsureHostRegeneratesCDIAfterRepinningDespiteAMatchingRecord(t *testing
 			require.NoError(t, err)
 			assert.Equal(t, []string{
 				wantDpkgQueryCmd,
+				wantCDIRecordRemoveCmd,
 				wantToolkitInstallCmd,
 				wantAptMarkHoldCmd,
 				wantMkdirCmd,
@@ -546,6 +561,62 @@ func TestEnsureHostRegeneratesCDIAfterRepinningDespiteAMatchingRecord(t *testing
 			assert.Equal(t, []string{wantToolkitInstalledChange, wantCDIRegeneratedChange}, changed)
 		})
 	}
+}
+
+// A run that re-pins the toolkit and then fails before the specs are
+// regenerated must not leave the earlier record behind: the next run finds
+// the toolkit pinned and held, and that record would be its only reason to
+// think the specs are current.
+func TestEnsureHostRegeneratesCDIOnTheRunAfterARepinThatFailedPartWay(t *testing.T) {
+	for name, failing := range map[string]string{
+		"driver read fails":   "nvidia-smi",
+		"spec generate fails": "nvidia-ctk cdi generate",
+		"spec refresh fails":  "nvidia-cdi-refresh",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := allInstalledOK()
+			r.out["dpkg-query"] = strings.ReplaceAll(dpkgReady, "1.18.2-1 hold", "1.20.1-1 install")
+			r.fail = map[string]error{failing: errFail}
+
+			changed, err := EnsureHost(context.Background(), r)
+			require.Error(t, err)
+			assert.Equal(t, []string{wantToolkitInstalledChange}, changed)
+			assert.Less(t, indexOf(r.cmds, wantCDIRecordRemoveCmd), indexOf(r.cmds, wantToolkitInstallCmd), "the record must be gone before the toolkit moves")
+			assert.Equal(t, -1, indexOf(r.cmds, wantCDIRecordWriteCmd("550.90.07")))
+
+			r.out["dpkg-query"] = dpkgReady
+			r.fail = nil
+			r.cmds = nil
+
+			changed, err = EnsureHost(context.Background(), r)
+			require.NoError(t, err)
+			assert.Equal(t, []string{
+				wantDpkgQueryCmd,
+				wantMkdirCmd,
+				wantNvidiaSmiCmd,
+				wantCDIRecordReadCmd,
+				wantNvidiaCtkGenerateCmd,
+				wantCDIRefreshCmd,
+				wantCDIRecordWriteCmd("550.90.07"),
+				wantNodeExporterGrepCmd,
+			}, r.cmds)
+			assert.Equal(t, []string{wantCDIRegeneratedChange}, changed)
+		})
+	}
+}
+
+// A record that could not be removed would survive a failed run, so the
+// toolkit is not moved while it is still there.
+func TestEnsureHostRecordRemovalFailureLeavesTheToolkitAlone(t *testing.T) {
+	r := allInstalledOK()
+	r.out["dpkg-query"] = strings.ReplaceAll(dpkgReady, "1.18.2-1 hold", "1.20.1-1 install")
+	r.fail = map[string]error{"rm -f /etc/vllm/cdi-generated-for": errFail}
+
+	changed, err := EnsureHost(context.Background(), r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remove CDI spec record")
+	assert.Empty(t, changed)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantCDIRecordRemoveCmd}, r.cmds)
 }
 
 // /var/run/cdi wins over /etc/cdi for the same device name, so a refresh

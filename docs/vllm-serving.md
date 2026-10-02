@@ -463,7 +463,11 @@ driver and toolkit versions it last generated the CDI specs for
 (`/etc/vllm/cdi-generated-for`, `<driver>|<toolkit>`), and whenever either
 differs it regenerates `/etc/cdi/nvidia.yaml` (`nvidia-ctk cdi generate`) and
 restarts the toolkit's own `nvidia-cdi-refresh.service`, which rewrites
-`/var/run/cdi/nvidia.yaml`. Both have to be regenerated: podman reads both,
+`/var/run/cdi/nvidia.yaml`. It also regenerates them whenever it reinstalls
+or re-holds the toolkit, even if the record already matched: it deletes the
+record before that reinstall and writes it again only after both specs are
+regenerated, so an apply that fails in between is finished by the next one.
+Both have to be regenerated: podman reads both,
 and the `/var/run/cdi` one wins for the same device name whenever podman can
 parse it, so a stale one there would shadow a fresh `/etc/cdi` one. The
 service is kept rather than disabled because it is also what regenerates
