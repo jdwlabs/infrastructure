@@ -58,6 +58,10 @@ var imageIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // same way the image reference is.
 var driverVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
 
+// nodeExporterTextfileDir is where the drift check writes its metrics, and
+// the textfile directory Ubuntu's node-exporter reads by default.
+const nodeExporterTextfileDir = "/var/lib/prometheus/node-exporter"
+
 // cdiRecordPath holds "<driver>|<toolkit>", the pair the CDI specs were
 // last generated for.
 const cdiRecordPath = "/etc/vllm/cdi-generated-for"
@@ -153,12 +157,17 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 		changed = append(changed, "regenerated /etc/cdi/nvidia.yaml and /var/run/cdi/nvidia.yaml for driver "+driverVersion+", toolkit "+toolkitVersion)
 	}
 
-	// The package default already sets this on Ubuntu; a mismatch is
-	// reported for a human to fix, not rewritten, since /etc/default files
-	// are exactly the kind of local edit hostconverge is not meant to own.
+	// Ubuntu's node-exporter binary already defaults the textfile directory
+	// to the one the drift check writes, and the package ships ARGS="", so
+	// only an ARGS that names another directory is a problem. No ARGS line,
+	// or no file, leaves the default in force. A mismatch is reported for a
+	// human to fix, not rewritten, since /etc/default files are exactly the
+	// kind of local edit hostconverge is not meant to own.
 	neOut, neErr := r.Run(ctx, "grep '^ARGS=' /etc/default/prometheus-node-exporter 2>/dev/null")
-	if neErr != nil || !strings.Contains(neOut, "/var/lib/prometheus/node-exporter") {
-		changed = append(changed, "warning: prometheus-node-exporter's --collector.textfile.directory does not match /var/lib/prometheus/node-exporter; check /etc/default/prometheus-node-exporter")
+	if neErr == nil {
+		if dir, set := textfileDirectory(neOut); set && dir != nodeExporterTextfileDir {
+			changed = append(changed, "warning: prometheus-node-exporter's ARGS sets --collector.textfile.directory to "+dir+", not "+nodeExporterTextfileDir+", so the drift check's metrics are never exported; check /etc/default/prometheus-node-exporter")
+		}
 	}
 
 	return changed, nil
@@ -199,6 +208,36 @@ func policyListsVersion(policy, version string) bool {
 		}
 	}
 	return false
+}
+
+// textfileDirectory returns the --collector.textfile.directory value the
+// ARGS lines grep printed set, and whether they set one at all. Only the
+// last ARGS line counts, because it is the assignment systemd's
+// EnvironmentFile keeps. The value is compared as a path, so quoting and a
+// trailing slash don't read as a different directory.
+func textfileDirectory(argsLines string) (string, bool) {
+	lines := strings.Split(strings.TrimSpace(argsLines), "\n")
+	args := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "ARGS=")
+	const flag = "--collector.textfile.directory"
+	var dir string
+	set := false
+	fields := strings.Fields(strings.Trim(args, `"'`))
+	for i, f := range fields {
+		switch {
+		case strings.HasPrefix(f, flag+"="):
+			dir, set = strings.TrimPrefix(f, flag+"="), true
+		case f == flag && i+1 < len(fields):
+			dir, set = fields[i+1], true
+		}
+	}
+	if !set {
+		return "", false
+	}
+	dir = strings.Trim(dir, `"'`)
+	if len(dir) > 1 {
+		dir = strings.TrimRight(dir, "/")
+	}
+	return dir, true
 }
 
 // packagesInstalled reports whether every package in hostPackages has an
