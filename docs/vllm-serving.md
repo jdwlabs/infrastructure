@@ -280,6 +280,10 @@ local LiteLLM tiers down twice — once onto the candidate, once back or onward
    needs thinking turned off (`--default-chat-template-kwargs.enable_thinking=false`
    when its chat template honours it): @server answers in one short chat
    line, and thinking tokens spend that budget before the answer starts.
+   A hybrid candidate, one with linear-attention layers, also needs
+   `--max-num-seqs` sized to the consumers' concurrency. The audit's trial
+   steps do not add it, and without it vLLM's default can run the card out
+   of memory at startup (see [Known limits](#known-limits)).
 4. **Measure the candidate** the same way, six runs plus the wiki runs, and
    run `inference/vllm/smoke-tool-call.sh` against the host and against
    LiteLLM's `sre-investigator-local` route (`BASE_URL`, `MODEL`, `API_KEY`;
@@ -998,7 +1002,16 @@ that URL includes the `JIRA_BASE_URL` host.
     warm-up over a larger vocabulary, and CUDA graphs. A `marginGiB` below
     about 2 GiB on a multimodal model is tight; trial it with
     `--language-model-only` and watch the startup log.
-  - That model calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
+  - The estimate prices one sequence, but vLLM v0.24.0 serves up to 256
+    concurrently by default (`--max-num-seqs`) and at startup captures CUDA
+    graphs up to batch `min(2 × max_num_seqs, 512)`, which the estimate does
+    not price. On 2026-10-02 `nvidia/Qwen3.8-27B-NVFP4`, a hybrid
+    linear-attention model, loaded 19.08 GiB of weights and then ran the
+    31.4 GiB card out of memory in CUDA-graph profiling, even with
+    `--language-model-only`. With `--max-num-seqs=8`, enough for these
+    consumers, it started with 28.4 GiB in use. Trial a hybrid candidate
+    with `--max-num-seqs` sized to the consumers' concurrency.
+  - The text-only model calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
     3 GiB overhead = 21.66 GiB, against a 28.66 GiB budget.
     `RedHatAI/Qwen3.8-27B-NVFP4` calibrates at 22.20 GiB weights + 2.14 GiB
     (2.00 GiB for its 16 full-attention layers, 0.14 GiB of state for its 48
