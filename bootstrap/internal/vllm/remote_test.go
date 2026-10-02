@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -72,7 +73,8 @@ func indexOf(cmds []string, want string) int {
 
 const (
 	wantDpkgQueryCmd         = "dpkg-query -W -f='${Package} ${Version} ${db:Status-Want} ${db:Status-Status}\\n' podman prometheus-node-exporter nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1 2>/dev/null"
-	wantAptGetInstallCmd     = "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --allow-change-held-packages podman prometheus-node-exporter nvidia-container-toolkit=1.18.2-1 nvidia-container-toolkit-base=1.18.2-1 libnvidia-container-tools=1.18.2-1 libnvidia-container1=1.18.2-1"
+	wantToolkitInstallCmd    = "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --allow-change-held-packages nvidia-container-toolkit=1.18.2-1 nvidia-container-toolkit-base=1.18.2-1 libnvidia-container-tools=1.18.2-1 libnvidia-container1=1.18.2-1"
+	wantHostInstallCmd       = "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y podman prometheus-node-exporter"
 	wantAptMarkHoldCmd       = "sudo apt-mark hold nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1"
 	wantAptCachePolicyCmd    = "apt-cache policy nvidia-container-toolkit 2>/dev/null"
 	wantMkdirCmd             = "sudo mkdir -p /usr/local/libexec /etc/containers/systemd /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter"
@@ -132,7 +134,10 @@ const dpkgReady = "podman 4.9.3+ds1-1ubuntu0.2 install installed\n" +
 	"libnvidia-container-tools 1.18.2-1 hold installed\n" +
 	"libnvidia-container1 1.18.2-1 hold installed\n"
 
-const wantInstalledChange = "installed podman, prometheus-node-exporter; installed and held nvidia-container-toolkit, nvidia-container-toolkit-base, libnvidia-container-tools, libnvidia-container1 at 1.18.2-1"
+const (
+	wantToolkitInstalledChange = "installed and held nvidia-container-toolkit, nvidia-container-toolkit-base, libnvidia-container-tools, libnvidia-container1 at 1.18.2-1"
+	wantHostInstalledChange    = "installed podman, prometheus-node-exporter"
+)
 
 // allInstalledOK scripts a fakeRunner where every package is installed, the
 // CDI record matches nvidia-smi's driver version, and node-exporter's
@@ -163,21 +168,69 @@ func TestEnsureHostAllPresentAndMatchingIsANoOp(t *testing.T) {
 	}, r.cmds)
 }
 
-func TestEnsureHostInstallsMissingPackages(t *testing.T) {
+func TestEnsureHostInstallsEverythingOnAFreshHost(t *testing.T) {
+	r := allInstalledOK()
+	r.out["dpkg-query"] = ""
+	changed, err := EnsureHost(context.Background(), r)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		wantDpkgQueryCmd,
+		wantToolkitInstallCmd,
+		wantAptMarkHoldCmd,
+		wantHostInstallCmd,
+		wantMkdirCmd,
+		wantNvidiaSmiCmd,
+		wantCDIRecordReadCmd,
+		wantNodeExporterGrepCmd,
+	}, r.cmds)
+	assert.Equal(t, []string{wantToolkitInstalledChange, wantHostInstalledChange}, changed)
+}
+
+func TestEnsureHostInstallsAMissingToolkitPackage(t *testing.T) {
 	r := allInstalledOK()
 	r.out["dpkg-query"] = strings.Replace(dpkgReady, "nvidia-container-toolkit 1.18.2-1 hold installed\n", "", 1)
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		wantDpkgQueryCmd,
-		wantAptGetInstallCmd,
+		wantToolkitInstallCmd,
 		wantAptMarkHoldCmd,
 		wantMkdirCmd,
 		wantNvidiaSmiCmd,
 		wantCDIRecordReadCmd,
 		wantNodeExporterGrepCmd,
 	}, r.cmds)
-	assert.Equal(t, []string{wantInstalledChange}, changed)
+	assert.Equal(t, []string{wantToolkitInstalledChange}, changed)
+}
+
+// Only the missing unpinned package is installed: naming podman too would
+// upgrade it, and the toolkit, already pinned and held, is left alone.
+func TestEnsureHostInstallsOnlyTheMissingUnpinnedPackage(t *testing.T) {
+	r := allInstalledOK()
+	r.out["dpkg-query"] = strings.Replace(dpkgReady, "prometheus-node-exporter 1.7.0-1ubuntu0.3 install installed\n", "", 1)
+	changed, err := EnsureHost(context.Background(), r)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		wantDpkgQueryCmd,
+		"sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y prometheus-node-exporter",
+		wantMkdirCmd,
+		wantNvidiaSmiCmd,
+		wantCDIRecordReadCmd,
+		wantNodeExporterGrepCmd,
+	}, r.cmds)
+	assert.Equal(t, []string{"installed prometheus-node-exporter"}, changed)
+}
+
+func TestEnsureHostUnpinnedInstallFailurePropagates(t *testing.T) {
+	r := allInstalledOK()
+	r.out["dpkg-query"] = strings.Replace(dpkgReady, "podman 4.9.3+ds1-1ubuntu0.2 install installed\n", "", 1)
+	r.fail = map[string]error{"apt-get install": errFail}
+
+	_, err := EnsureHost(context.Background(), r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "install podman")
+	assert.Contains(t, err.Error(), "fake failure")
+	assert.Len(t, r.cmds, 2, "a failed install stops EnsureHost: %v", r.cmds)
 }
 
 // TestEnsureHostDuplicateInstalledLineDoesNotMaskAMissingPackage kills the
@@ -189,18 +242,20 @@ func TestEnsureHostDuplicateInstalledLineDoesNotMaskAMissingPackage(t *testing.T
 	r.out["dpkg-query"] = strings.Replace(dpkgReady, "prometheus-node-exporter 1.7.0-1ubuntu0.3", "podman 4.9.3+ds1-1ubuntu0.2", 1)
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
-	assert.Contains(t, r.cmds, wantAptGetInstallCmd)
-	assert.Equal(t, []string{wantInstalledChange}, changed)
+	assert.Equal(t, []string{"installed prometheus-node-exporter"}, changed)
 }
 
 // The toolkit pin is only met by the exact version, installed and held:
 // presence alone is how a host that apt upgraded to a release podman cannot
-// read kept passing the check.
-func TestEnsureHostReinstallsTheToolkitUnlessExactlyPinnedAndHeld(t *testing.T) {
+// read kept passing the check. Podman and node-exporter are already there,
+// so the reinstall names neither: apt-get install would upgrade them, and
+// restart node-exporter, as a side effect of moving the toolkit.
+func TestEnsureHostReinstallsOnlyTheToolkitUnlessExactlyPinnedAndHeld(t *testing.T) {
 	cases := map[string]string{
 		"newer toolkit":        strings.Replace(dpkgReady, "nvidia-container-toolkit 1.18.2-1", "nvidia-container-toolkit 1.20.1-1", 1),
 		"newer base":           strings.Replace(dpkgReady, "nvidia-container-toolkit-base 1.18.2-1", "nvidia-container-toolkit-base 1.20.1-1", 1),
 		"newer libnvidia":      strings.Replace(dpkgReady, "libnvidia-container1 1.18.2-1", "libnvidia-container1 1.20.1-1", 1),
+		"every package newer":  strings.ReplaceAll(dpkgReady, "1.18.2-1 hold", "1.20.1-1 install"),
 		"older tools":          strings.Replace(dpkgReady, "libnvidia-container-tools 1.18.2-1", "libnvidia-container-tools 1.17.8-1", 1),
 		"pinned but not held":  strings.Replace(dpkgReady, "libnvidia-container1 1.18.2-1 hold", "libnvidia-container1 1.18.2-1 install", 1),
 		"removed, config kept": strings.Replace(dpkgReady, "nvidia-container-toolkit 1.18.2-1 hold installed", "nvidia-container-toolkit 1.18.2-1 hold config-files", 1),
@@ -212,8 +267,17 @@ func TestEnsureHostReinstallsTheToolkitUnlessExactlyPinnedAndHeld(t *testing.T) 
 			r.out["dpkg-query"] = dpkg
 			changed, err := EnsureHost(context.Background(), r)
 			require.NoError(t, err)
-			assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptMarkHoldCmd}, r.cmds[:3])
-			assert.Equal(t, []string{wantInstalledChange}, changed)
+			assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptMarkHoldCmd, wantMkdirCmd}, r.cmds[:4])
+			assert.Equal(t, []string{wantToolkitInstalledChange}, changed)
+			for _, cmd := range r.cmds {
+				if !strings.Contains(cmd, "apt-get install") {
+					continue
+				}
+				for _, arg := range strings.Fields(cmd) {
+					assert.NotEqual(t, "podman", arg, "podman must not be reinstalled: %s", cmd)
+					assert.NotEqual(t, "prometheus-node-exporter", arg, "node-exporter must not be reinstalled: %s", cmd)
+				}
+			}
 		})
 	}
 }
@@ -226,7 +290,7 @@ func TestEnsureHostLeavesUnpinnedPackageVersionsAlone(t *testing.T) {
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
-	assert.NotContains(t, r.cmds, wantAptGetInstallCmd)
+	assert.Zero(t, countContaining(r.cmds, "apt-get"))
 }
 
 func TestEnsureHostHoldFailurePropagates(t *testing.T) {
@@ -237,7 +301,7 @@ func TestEnsureHostHoldFailurePropagates(t *testing.T) {
 	_, err := EnsureHost(context.Background(), r)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "hold nvidia-container-toolkit packages at 1.18.2-1")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptMarkHoldCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptMarkHoldCmd}, r.cmds)
 }
 
 // A repository that carries the toolkit but no longer the pinned release
@@ -253,7 +317,7 @@ func TestEnsureHostPinnedVersionMissingFromRepoIsNamed(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1.18.2-1 is not available")
 	assert.Contains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostNoAptCandidateReturnsDocumentedErrorAndSkipsCDIAndMkdir(t *testing.T) {
@@ -266,7 +330,7 @@ func TestEnsureHostNoAptCandidateReturnsDocumentedErrorAndSkipsCDIAndMkdir(t *te
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "NVIDIA Container Toolkit apt repository")
 	assert.Contains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostEmptyPolicyOutputReturnsDocumentedError(t *testing.T) {
@@ -278,7 +342,7 @@ func TestEnsureHostEmptyPolicyOutputReturnsDocumentedError(t *testing.T) {
 	_, err := EnsureHost(context.Background(), r)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no apt installation candidate")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostInstallFailsWithCandidatePresentReturnsGenericError(t *testing.T) {
@@ -291,7 +355,7 @@ func TestEnsureHostInstallFailsWithCandidatePresentReturnsGenericError(t *testin
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
 	assert.Contains(t, err.Error(), "install host packages")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 func TestEnsureHostAptCachePolicyErrorWrapsBothErrors(t *testing.T) {
@@ -306,7 +370,7 @@ func TestEnsureHostAptCachePolicyErrorWrapsBothErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "install host packages")
 	assert.NotContains(t, err.Error(), "docs/vllm-serving.md#host-prerequisites")
-	assert.Equal(t, []string{wantDpkgQueryCmd, wantAptGetInstallCmd, wantAptCachePolicyCmd}, r.cmds)
+	assert.Equal(t, []string{wantDpkgQueryCmd, wantToolkitInstallCmd, wantAptCachePolicyCmd}, r.cmds)
 }
 
 // TestEnsureHostMkdirFailurePropagates kills the "mkdir failure" mutant and
@@ -428,7 +492,7 @@ func TestEnsureHostRegeneratesCDIAfterMovingTheToolkitOntoThePin(t *testing.T) {
 
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
-	assert.Equal(t, []string{wantInstalledChange, wantCDIRegeneratedChange}, changed)
+	assert.Equal(t, []string{wantToolkitInstalledChange, wantCDIRegeneratedChange}, changed)
 	assert.Less(t, indexOf(r.cmds, wantAptMarkHoldCmd), indexOf(r.cmds, wantNvidiaCtkGenerateCmd), "the spec must be generated by the pinned nvidia-ctk")
 }
 
@@ -726,13 +790,32 @@ func TestPreflightCDIResolvesTheGPUWithoutStartingTheServer(t *testing.T) {
 	assert.Equal(t, []string{wantCDIPreflightCmd(s.Image)}, r.cmds)
 }
 
-func TestPreflightCDIFailureNamesTheCause(t *testing.T) {
-	s := stageSpec()
-	r := &fakeRunner{fail: map[string]error{"--device nvidia.com/gpu=all": errFail}}
-	err := PreflightCDI(context.Background(), r, s)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nvidia.com/gpu=all")
-	assert.Contains(t, err.Error(), "fake failure")
+// Podman's own words decide whether a failed preflight is a CDI failure:
+// the run can also fail for reasons that say nothing about the CDI spec.
+func TestPreflightCDIFailureIsACDIFailureOnlyWhenPodmanSaysSo(t *testing.T) {
+	cases := map[string]struct {
+		out     string
+		err     error
+		wantCDI bool
+	}{
+		"unresolvable devices on stderr":     {out: "Error: setting up CDI devices: unresolvable CDI devices nvidia.com/gpu=all\n", err: errFail, wantCDI: true},
+		"podman output carried in the error": {err: fmt.Errorf("run SSH command: Process exited with status 125, output: Error: setting up CDI devices: unresolvable CDI devices nvidia.com/gpu=all"), wantCDI: true},
+		"unparseable spec":                   {out: "Error: failed to parse CDI Spec \"/etc/cdi/nvidia.yaml\"\n", err: errFail, wantCDI: true},
+		"ssh dropped":                        {err: fmt.Errorf("dial SSH: connection refused")},
+		"container storage broken":           {out: "Error: creating container storage: layer not known\n", err: errFail},
+		"runtime failed":                     {out: "Error: OCI runtime error: crun: executable file `true` not found in $PATH\n", err: errFail},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := stageSpec()
+			err := PreflightCDI(context.Background(), scriptedOutErrRunner{out: tc.out, err: tc.err}, s)
+			require.Error(t, err)
+			assert.Equal(t, tc.wantCDI, errors.Is(err, ErrCDIUnresolvable))
+			assert.ErrorIs(t, err, tc.err, "the underlying error stays in the chain")
+			assert.Contains(t, err.Error(), "nvidia.com/gpu=all")
+			assert.Contains(t, err.Error(), tc.err.Error())
+		})
+	}
 }
 
 func TestReadLiveNotRunningOnInspectFailure(t *testing.T) {
