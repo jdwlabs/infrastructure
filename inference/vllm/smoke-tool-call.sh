@@ -57,7 +57,6 @@ if [ -n "${API_KEY:-}" ]; then
     http://localhost[:/]* | http://127.0.0.1[:/]*) ;;
     *) fail "refusing to send API_KEY over plain HTTP to ${BASE_URL}; use https:// or a localhost port-forward" ;;
   esac
-  auth=(-H "Authorization: Bearer ${API_KEY}")
 fi
 
 body=$(jq -n --arg model "$MODEL" '{
@@ -77,6 +76,15 @@ body=$(jq -n --arg model "$MODEL" '{
 
 tmp=$(mktemp -d) || fail "could not create a temporary directory"
 trap 'rm -rf "$tmp"' EXIT
+
+# The key goes to curl as a header file, not an argument: argv is readable by
+# every local user through /proc while curl runs. printf is a builtin, so the
+# key never lands in an argv on the way to the file either.
+if [ -n "${API_KEY:-}" ]; then
+  (umask 077 && printf 'Authorization: Bearer %s\n' "$API_KEY" >"$tmp/auth") ||
+    fail "could not write the auth header file"
+  auth=(-H "@$tmp/auth")
+fi
 
 # The body goes to a file and the status and duration to another, so an HTTP
 # error keeps the server's message and stderr holds only curl's own failure.
