@@ -137,3 +137,16 @@ func TestHAProxyNeverExitsTwo(t *testing.T) {
 		})
 	}
 }
+
+// A caller that has only ever seen one load balancer needs to learn from the
+// help, not from a surprising report, that a group is addressed per instance.
+func TestHAProxyHelpExplainsHowAVRRPGroupIsAddressed(t *testing.T) {
+	out, err := execute(t, haproxyCmd(setupTestApp(t)), "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "virtual address")
+	assert.Contains(t, out, "every haproxy_vms instance")
+
+	out, err = execute(t, haproxyCmd(setupTestApp(t)), "apply", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "group_divergent")
+}

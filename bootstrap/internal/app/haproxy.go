@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/haproxy"
@@ -31,12 +33,15 @@ type HAProxyOptions struct {
 }
 
 // haproxyContext is everything the three commands share: resolved config, the
-// deployed cluster state the config is rendered from, and the target address.
+// deployed cluster state the config is rendered from, and the push targets.
+// host is the single target of a standalone load balancer or a --host
+// override; a VRRP group is addressed through group.Instances instead.
 type haproxyContext struct {
 	cfg      *types.Config
 	stateMgr *state.Manager
 	deployed *types.ClusterState
 	host     string
+	group    haproxy.Group
 }
 
 // loadHAProxyContext resolves tfvars and cluster state. Both are read-only.
@@ -82,7 +87,15 @@ func (app *App) loadHAProxyContext(ctx context.Context, opts HAProxyOptions) (*h
 		}
 	}
 
-	return &haproxyContext{cfg: cfg, stateMgr: stateMgr, deployed: deployed, host: host}, nil
+	group, err := haproxy.ResolveGroup(cfg, opts.Host)
+	if err != nil {
+		return nil, &haproxy.Failure{
+			Code: "haproxy_group_invalid",
+			Msg:  fmt.Sprintf("haproxy_vms does not describe a usable set of instances: %v", err),
+		}
+	}
+
+	return &haproxyContext{cfg: cfg, stateMgr: stateMgr, deployed: deployed, host: host, group: group}, nil
 }
 
 // renderConfig builds the config the generator would push for current state.
@@ -96,9 +109,11 @@ func (hc *haproxyContext) renderConfig() (string, int, *haproxy.Failure) {
 
 	// The generator binds frontends to the address it is told about. Rendering
 	// for an override host without carrying it through would produce a config
-	// that binds the production address on a VM that does not hold it.
+	// that binds the production address on a VM that does not hold it. A VRRP
+	// group member is the exception: it binds the virtual address whether or
+	// not it currently holds it, so the config is the same on every instance.
 	cfg := *hc.cfg
-	cfg.HAProxyIP = net.ParseIP(hc.host)
+	cfg.HAProxyIP = hc.group.BindAddress
 
 	haConfig := haproxy.ConfigFromClusterState(&cfg, hc.deployed)
 	rendered, err := haConfig.Generate()
@@ -111,12 +126,13 @@ func (hc *haproxyContext) renderConfig() (string, int, *haproxy.Failure) {
 	return rendered, len(haConfig.ControlPlanes) + len(haConfig.IngressNodes), nil
 }
 
-// client builds the SSH client for the resolved host.
+// haproxyClient builds the SSH client for the single resolved host.
 func (app *App) haproxyClient(hc *haproxyContext) (*haproxy.Client, *haproxy.Failure) {
-	cfg := *hc.cfg
-	cfg.HAProxyIP = net.ParseIP(hc.host)
+	return app.haproxyClientFor(hc, hc.host)
+}
 
-	client := app.createHAProxyClient(&cfg)
+func (app *App) haproxyClientFor(hc *haproxyContext, host string) (*haproxy.Client, *haproxy.Failure) {
+	client := app.createHAProxyClientFor(hc.cfg, host)
 	if client == nil {
 		return nil, &haproxy.Failure{
 			Code: "ssh_auth_unconfigured",
@@ -144,9 +160,12 @@ func (app *App) RunHAProxyStatus(ctx context.Context, opts HAProxyOptions) error
 		res.Help = helpForFailure(failure)
 		return app.emitHAProxy(opts, "status", haproxy.ReportStatus(res), res)
 	}
+	if hc.group.Virtual {
+		return app.runHAProxyGroupStatus(ctx, opts, hc)
+	}
 	res.Host = hc.host
 
-	vm, vmNotes := app.resolveHAProxyVM(ctx, hc)
+	vm, vmNotes := app.describeHAProxyVM(hc.cfg, hc.host, app.terraformStateReader(ctx))
 	res.VM = vm
 	res.Notes = append(res.Notes, vmNotes...)
 
@@ -254,6 +273,9 @@ func (app *App) RunHAProxyPlan(ctx context.Context, opts HAProxyOptions) error {
 		res.Help = helpForFailure(failure)
 		return app.emitHAProxy(opts, "plan", haproxy.ReportPlan(res), res)
 	}
+	if hc.group.Virtual {
+		return app.runHAProxyGroupPlan(ctx, opts, hc)
+	}
 	res.Host = hc.host
 
 	rendered, backends, failure := hc.renderConfig()
@@ -316,6 +338,9 @@ func (app *App) RunHAProxyApply(ctx context.Context, opts HAProxyOptions) error 
 		res.Failure = failure
 		res.Help = helpForFailure(failure)
 		return app.emitHAProxy(opts, "apply", haproxy.ReportApply(res), res)
+	}
+	if hc.group.Virtual {
+		return app.runHAProxyGroupApply(ctx, opts, hc)
 	}
 	res.Host = hc.host
 
@@ -399,21 +424,49 @@ func (app *App) recordHAProxyHash(
 	}
 }
 
-// resolveHAProxyVM identifies the VM behind the target address. Both reads are
-// read-only: the tfvars declaration, and `terraform show -json`, which inspects
-// state without locking or planning it.
-func (app *App) resolveHAProxyVM(ctx context.Context, hc *haproxyContext) (haproxy.VMInfo, []string) {
+// terraformStateReader returns a memoised read of Terraform state, so a group
+// status pays for one `terraform show -json` rather than one per instance. The
+// read is read-only: it inspects state without locking or planning it.
+func (app *App) terraformStateReader(ctx context.Context) func() (*terraform.StateOutput, error) {
+	return sync.OnceValues(func() (*terraform.StateOutput, error) {
+		tfDir, err := app.ResolveTerraformDir()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := terraform.LookPath(); err != nil {
+			return nil, errors.New("terraform is not on PATH")
+		}
+
+		lookupCtx, cancel := context.WithTimeout(ctx, vmLookupTimeout)
+		defer cancel()
+
+		return terraform.NewRunner(tfDir, app.Logger).ShowStateJSON(lookupCtx)
+	})
+}
+
+// describeHAProxyVM identifies the VM behind host from the tfvars declaration
+// and Terraform state.
+func (app *App) describeHAProxyVM(
+	cfg *types.Config,
+	host string,
+	readState func() (*terraform.StateOutput, error),
+) (haproxy.VMInfo, []string) {
 	var declared *types.HAProxyVM
-	for i := range hc.cfg.HAProxyVMs {
-		if hc.cfg.HAProxyVMs[i].IP == hc.host {
-			declared = &hc.cfg.HAProxyVMs[i]
+	for i := range cfg.HAProxyVMs {
+		if cfg.HAProxyVMs[i].IP == host {
+			declared = &cfg.HAProxyVMs[i]
 			break
 		}
 	}
 
 	if declared == nil {
+		if len(cfg.HAProxyVMs) > 1 && cfg.HAProxyIP != nil && cfg.HAProxyIP.String() == host {
+			return haproxy.VMInfo{State: haproxy.Unknown, Source: "virtual"}, []string{
+				fmt.Sprintf("%s is the virtual address: this report is of whichever instance holds it right now — drop --host to see every instance", host),
+			}
+		}
 		return haproxy.VMInfo{State: haproxy.Unknown, Source: "unmanaged"}, []string{
-			fmt.Sprintf("%s matches no haproxy_vms entry — this load balancer is not reproducible from this repo", hc.host),
+			fmt.Sprintf("%s matches no haproxy_vms entry — this load balancer is not reproducible from this repo", host),
 		}
 	}
 
@@ -425,18 +478,7 @@ func (app *App) resolveHAProxyVM(ctx context.Context, hc *haproxyContext) (hapro
 		Source: "declared",
 	}
 
-	tfDir, err := app.ResolveTerraformDir()
-	if err != nil {
-		return vm, []string{"VM state unread: " + err.Error()}
-	}
-	if _, err := terraform.LookPath(); err != nil {
-		return vm, []string{"VM state unread: terraform is not on PATH"}
-	}
-
-	lookupCtx, cancel := context.WithTimeout(ctx, vmLookupTimeout)
-	defer cancel()
-
-	stateOut, err := terraform.NewRunner(tfDir, app.Logger).ShowStateJSON(lookupCtx)
+	stateOut, err := readState()
 	if err != nil {
 		return vm, []string{"VM state unread: " + err.Error()}
 	}
@@ -510,6 +552,12 @@ func (app *App) emitHAProxy(opts HAProxyOptions, event, toon string, payload any
 	case haproxy.PlanResult:
 		return failureOf(res.Failure)
 	case haproxy.ApplyResult:
+		return failureOf(res.Failure)
+	case haproxy.GroupStatusResult:
+		return failureOf(res.Failure)
+	case haproxy.GroupPlanResult:
+		return failureOf(res.Failure)
+	case haproxy.GroupApplyResult:
 		return failureOf(res.Failure)
 	}
 	return nil

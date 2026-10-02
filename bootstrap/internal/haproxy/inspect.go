@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -37,15 +38,41 @@ var systemdStates = map[string]bool{
 // `is-active` exits 3 for an inactive unit, so the exit status is deliberately
 // not what decides success here.
 func (c *Client) ServiceState(_ context.Context) (string, error) {
-	out, err := c.runner.runSSHOutput("systemctl is-active haproxy")
+	return c.unitState("haproxy")
+}
+
+// KeepalivedState returns the systemd activation state of the keepalived unit.
+// An instance where it is not active cannot take the virtual address over, so
+// a group with one such member is not redundant however healthy it looks.
+func (c *Client) KeepalivedState(_ context.Context) (string, error) {
+	return c.unitState("keepalived")
+}
+
+func (c *Client) unitState(unit string) (string, error) {
+	out, err := c.runner.runSSHOutput("systemctl is-active " + unit)
 	state := strings.TrimSpace(lastLine(out))
 	if systemdStates[state] {
 		return state, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read haproxy service state: %w", err)
+		return "", fmt.Errorf("read %s service state: %w", unit, err)
 	}
-	return "", fmt.Errorf("read haproxy service state: unexpected answer %q", state)
+	return "", fmt.Errorf("read %s service state: unexpected answer %q", unit, state)
+}
+
+// HoldsAddress reports whether addr is configured on the host right now. Asked
+// of each instance directly rather than inferred from which one answers on the
+// virtual address: that would name one holder even when two instances both
+// believe they hold it.
+func (c *Client) HoldsAddress(_ context.Context, addr net.IP) (bool, error) {
+	out, err := c.runner.runSSHOutput("ip -o -4 addr show")
+	if err != nil {
+		return false, fmt.Errorf("read interface addresses: %w", err)
+	}
+	if !strings.Contains(out, "inet ") {
+		return false, fmt.Errorf("read interface addresses: unexpected answer %q", strings.TrimSpace(out))
+	}
+	return strings.Contains(out, "inet "+addr.String()+"/"), nil
 }
 
 // Stats reads per-server health from the runtime stats socket.
