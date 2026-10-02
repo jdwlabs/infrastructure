@@ -13,8 +13,28 @@ import (
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/hostconverge"
 )
 
-// hostPackages are the apt packages EnsureHost requires on the GPU host.
-var hostPackages = []string{"podman", "nvidia-container-toolkit", "prometheus-node-exporter"}
+// hostPackages are the apt packages EnsureHost requires on the GPU host at
+// whatever version apt offers.
+var hostPackages = []string{"podman", "prometheus-node-exporter"}
+
+// toolkitVersion is the NVIDIA Container Toolkit release EnsureHost installs
+// and holds. Podman 4.9.3, the version Ubuntu 24.04 ships, rejects the whole
+// CDI spec that nvidia-ctk 1.19 and later generate (cdiVersion 0.7.0, whose
+// additionalGids field its older CDI parser does not know), so every GPU
+// container fails with "unresolvable CDI devices". 1.18.x still writes
+// cdiVersion 0.5.0. The pin can go once the host's podman vendors a CDI
+// library that parses CDI 0.7.0.
+const toolkitVersion = "1.18.2-1"
+
+// toolkitPackages are pinned together: they are one release, and apt
+// refuses to downgrade nvidia-container-toolkit while its base and library
+// packages stay at a newer version.
+var toolkitPackages = []string{
+	"nvidia-container-toolkit",
+	"nvidia-container-toolkit-base",
+	"libnvidia-container-tools",
+	"libnvidia-container1",
+}
 
 // dpkgStatusFormat pairs each reported line with the package it describes:
 // checking status lines against a fixed count only proves N status lines
@@ -23,8 +43,9 @@ var hostPackages = []string{"podman", "nvidia-container-toolkit", "prometheus-no
 // The "\n" here must reach dpkg-query as the two literal characters
 // (backslash, n) so dpkg-query itself turns it into the newline that
 // separates one package's line from the next — a Go-escaped actual newline
-// would collapse every package's output onto one line.
-const dpkgStatusFormat = `${Package} ${db:Status-Status}\n`
+// would collapse every package's output onto one line. Status-Want reads
+// "hold" for a package apt-mark has held.
+const dpkgStatusFormat = `${Package} ${Version} ${db:Status-Want} ${db:Status-Status}\n`
 
 // imageIDPattern is what a genuine podman image ID looks like; ReadLive
 // refuses to build a second command around whatever `{{.Image}}` printed
@@ -49,9 +70,10 @@ const (
 )
 
 // EnsureHost prepares the GPU host for vLLM: it installs the required
-// packages, creates the directories hostconverge and the Quadlet unit write
-// into, keeps the NVIDIA Container Device Interface spec in step with the
-// installed driver, and checks (without rewriting) node-exporter's
+// packages (the NVIDIA Container Toolkit at its pinned release), creates
+// the directories hostconverge and the Quadlet unit write into, keeps the
+// NVIDIA Container Device Interface spec in step with the installed
+// driver, and checks (without rewriting) node-exporter's
 // textfile collector config. It returns a description of what it changed —
 // an empty slice means the host already matched.
 //
@@ -62,24 +84,24 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	var changed []string
 
 	if !packagesInstalled(ctx, r) {
-		installCmd := "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y " + strings.Join(hostPackages, " ")
-		if _, err := r.Run(ctx, installCmd); err != nil {
-			// A missing apt candidate for the toolkit fails the install with
-			// a generic apt error; diagnose that specific, common cause so
-			// the operator is pointed at the manual step instead of a bare
-			// apt-get failure. A policy read that itself fails can't tell us
-			// which case this is, so it's folded into the install error
-			// rather than misreported as either verdict.
-			policy, policyErr := r.Run(ctx, "apt-cache policy nvidia-container-toolkit 2>/dev/null")
-			if policyErr != nil {
-				return changed, fmt.Errorf("install host packages: %w (diagnosing candidate: %v)", err, policyErr)
-			}
-			if !strings.Contains(policy, "Candidate:") || strings.Contains(policy, "Candidate: (none)") {
-				return changed, fmt.Errorf("nvidia-container-toolkit has no apt installation candidate: add the NVIDIA Container Toolkit apt repository first (talops does not add apt repositories from code) — see docs/vllm-serving.md#host-prerequisites")
-			}
-			return changed, fmt.Errorf("install host packages: %w", err)
+		pinned := make([]string, len(toolkitPackages))
+		for i, pkg := range toolkitPackages {
+			pinned[i] = pkg + "=" + toolkitVersion
 		}
-		changed = append(changed, "installed "+strings.Join(hostPackages, ", "))
+		// --allow-downgrades moves a host that apt already upgraded past
+		// the pin back onto it; --allow-change-held-packages lets a change
+		// to toolkitVersion move packages this function held at the old one.
+		installCmd := "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades --allow-change-held-packages " +
+			strings.Join(hostPackages, " ") + " " + strings.Join(pinned, " ")
+		if _, err := r.Run(ctx, installCmd); err != nil {
+			return changed, diagnoseInstallFailure(ctx, r, err)
+		}
+		// Held so an unattended upgrade cannot move the toolkit past the
+		// pin between applies.
+		if _, err := r.Run(ctx, "sudo apt-mark hold "+strings.Join(toolkitPackages, " ")); err != nil {
+			return changed, fmt.Errorf("hold nvidia-container-toolkit packages at %s: %w", toolkitVersion, err)
+		}
+		changed = append(changed, "installed "+strings.Join(hostPackages, ", ")+"; installed and held "+strings.Join(toolkitPackages, ", ")+" at "+toolkitVersion)
 	}
 
 	if _, err := r.Run(ctx, "sudo mkdir -p /usr/local/libexec /etc/containers/systemd /var/lib/vllm/hf /etc/vllm /var/lib/prometheus/node-exporter"); err != nil {
@@ -125,25 +147,71 @@ func EnsureHost(ctx context.Context, r hostconverge.Runner) ([]string, error) {
 	return changed, nil
 }
 
-// packagesInstalled reports whether every package in hostPackages has at
-// least one "installed" status line naming it — checked per package, not
-// by counting lines: a query that duplicates one package's line while
+// diagnoseInstallFailure turns apt's generic failure into the specific,
+// common cause when there is one, so the operator is pointed at the manual
+// step instead of a bare apt-get failure: no toolkit repository at all, or
+// one that no longer carries the pinned release. A policy read that itself
+// fails can't tell which case this is, so it's folded into the install
+// error rather than misreported as either verdict.
+func diagnoseInstallFailure(ctx context.Context, r hostconverge.Runner, installErr error) error {
+	policy, policyErr := r.Run(ctx, "apt-cache policy nvidia-container-toolkit 2>/dev/null")
+	if policyErr != nil {
+		return fmt.Errorf("install host packages: %w (diagnosing candidate: %v)", installErr, policyErr)
+	}
+	if !strings.Contains(policy, "Candidate:") || strings.Contains(policy, "Candidate: (none)") {
+		return fmt.Errorf("nvidia-container-toolkit has no apt installation candidate: add the NVIDIA Container Toolkit apt repository first (talops does not add apt repositories from code) — see docs/vllm-serving.md#host-prerequisites")
+	}
+	if !policyListsVersion(policy, toolkitVersion) {
+		return fmt.Errorf("nvidia-container-toolkit %s is not available from the configured apt repository, and talops pins that release — see docs/vllm-serving.md#host-prerequisites", toolkitVersion)
+	}
+	return fmt.Errorf("install host packages: %w", installErr)
+}
+
+// policyListsVersion reports whether apt-cache policy's version table names
+// version as a whole field, so 1.18.2-1 is never satisfied by 1.18.2-10.
+func policyListsVersion(policy, version string) bool {
+	_, table, ok := strings.Cut(policy, "Version table:")
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(table, "\n") {
+		for _, f := range strings.Fields(line) {
+			if f == version {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// packagesInstalled reports whether every package in hostPackages has an
+// "installed" status line naming it, and every package in toolkitPackages
+// one that is also exactly toolkitVersion and held — checked per package,
+// not by counting lines: a query that duplicates one package's line while
 // silently dropping another's would still produce the "right" number of
 // installed-looking lines, and a positional line-to-package mapping can't
 // tell that apart from every package actually being present.
 func packagesInstalled(ctx context.Context, r hostconverge.Runner) bool {
-	out, _ := r.Run(ctx, "dpkg-query -W -f='"+dpkgStatusFormat+"' "+strings.Join(hostPackages, " ")+" 2>/dev/null")
+	all := append(append([]string(nil), hostPackages...), toolkitPackages...)
+	out, _ := r.Run(ctx, "dpkg-query -W -f='"+dpkgStatusFormat+"' "+strings.Join(all, " ")+" 2>/dev/null")
 
-	installed := make(map[string]bool, len(hostPackages))
+	type state struct{ version, want string }
+	installed := make(map[string]state, len(all))
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		pkg, status, ok := strings.Cut(line, " ")
-		if ok && status == "installed" {
-			installed[pkg] = true
+		f := strings.Fields(line)
+		if len(f) == 4 && f[3] == "installed" {
+			installed[f[0]] = state{version: f[1], want: f[2]}
 		}
 	}
 
 	for _, pkg := range hostPackages {
-		if !installed[pkg] {
+		if _, ok := installed[pkg]; !ok {
+			return false
+		}
+	}
+	for _, pkg := range toolkitPackages {
+		st, ok := installed[pkg]
+		if !ok || st.version != toolkitVersion || st.want != "hold" {
 			return false
 		}
 	}

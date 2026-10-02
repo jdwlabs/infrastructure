@@ -325,7 +325,7 @@ func newHost(legacy string) *fakeHost {
 	}
 	h.reload()
 	return h.
-		on("dpkg-query", "podman installed\nnvidia-container-toolkit installed\nprometheus-node-exporter installed\n").
+		on("dpkg-query", dpkgReady).
 		on("nvidia-smi", "550.90.07\n").
 		on("/etc/default/prometheus-node-exporter", "ARGS=\"--collector.textfile.directory=/var/lib/prometheus/node-exporter\"\n").
 		on("df --output=avail -B1 /var/lib/vllm", fortyGiB).
