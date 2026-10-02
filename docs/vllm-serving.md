@@ -284,7 +284,8 @@ local LiteLLM tiers down twice — once onto the candidate, once back or onward
 4. **Measure the candidate** the same way, six runs plus the wiki runs, and
    run `inference/vllm/smoke-tool-call.sh` against the host and against
    LiteLLM's `sre-investigator-local` route (`BASE_URL`, `MODEL`, `API_KEY`;
-   the key is LiteLLM's, so run that one from your own terminal).
+   the key is LiteLLM's, so run that one from your own terminal, at a URL
+   the script's header says it will send a key to).
 5. **Decide against the gate.** The candidate stays only if all of these
    hold; otherwise revert the `serving.yaml` PR and apply again:
    - no evalllm case that passed for the incumbent loses two or more of its

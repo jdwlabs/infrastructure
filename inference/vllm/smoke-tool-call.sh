@@ -11,6 +11,9 @@
 #   BASE_URL=<litellm>/v1 MODEL=sre-investigator-local API_KEY=... \
 #     inference/vllm/smoke-tool-call.sh                   # the SRE tier
 #
+# With API_KEY set, BASE_URL must be https:// or a plain-HTTP localhost or
+# 127.0.0.1 port-forward; anything else fails before the request is sent.
+#
 # Needs curl and jq. Exit 0 on a parsed get_time call, 1 on anything else,
 # with `result: FAIL` and the reason on stdout so an agent reading only stdout
 # still sees why.
