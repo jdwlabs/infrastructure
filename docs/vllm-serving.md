@@ -41,8 +41,7 @@ change, so a plan doubles as the announcement list for a change window.
 ## `serving.yaml` fields and validation
 
 The committed [`serving.yaml`](../inference/vllm/serving.yaml) is the worked
-example: it sets every field below, and its comments explain the current
-model's values.
+example: it sets every field below.
 
 | Field | Required | Rule | Why |
 |---|---|---|---|
