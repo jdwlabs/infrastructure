@@ -124,12 +124,17 @@ announced window as a model or version change.
 Staging (the image pull and, if the model revision isn't already cached, the
 model download) happens before anything is touched on the running server, so
 a slow pull or a multi-gigabyte download never causes an outage by itself.
+So does the CDI preflight after it: one throwaway run of the pinned image
+with `--device nvidia.com/gpu=all --entrypoint true`, which proves podman can
+hand the new image the GPU before the previous server is stopped. It exits
+as soon as its devices are set up, so it loads no model and takes no GPU
+memory from the server still serving.
 The outage is the restart itself: **the previous server is stopped and the
 new one started before the health check ever runs** — the check decides
 whether to keep the new server or roll back to the old one, not whether to
 start the new one in the first place. `phases` times the restart and the
 check (and the rollback's own re-check, `gate-rollback`, when one happens)
-separately from staging.
+separately from staging and the preflight (`cdi-preflight`).
 
 The health check has three parts, all against the served name: `/v1/models`
 lists it with `root` equal to `model.repo`; a 1-token chat completion
@@ -185,8 +190,9 @@ with nothing running yet, that default reads misleadingly; cross-check with
 |---|---|---|---|---|
 | (success, `changed: true`) | The swap happened and the new server passed its health check | `new` | `false` | Nothing to do — the change took. |
 | (success, `changed: false`) | Host already matched `serving.yaml`; one health check ran against the untouched server, and nothing was restarted | `new` | `false` | Nothing to do. |
-| `host_prereq_failed` | `EnsureHost` failed. The **running server is unchanged**, but `EnsureHost` may already have installed packages, created directories, or regenerated the CDI spec before hitting the failure (`remote.go:64-114`) — those are host-state side effects, not a swap. | `previous` | `false` | Commonly the NVIDIA Container Toolkit apt repo is missing — see [Host prerequisites](#host-prerequisites). Fix and re-run; re-running is safe, `EnsureHost` is idempotent. |
-| `stage_failed` | The image pull or model download failed, or the apply was interrupted (Ctrl-C, SIGTERM) before the swap — the message then starts `cancelled before the swap`. **The running server is unchanged** — `Stage` never touches it, and an interrupt during host preparation or staging stops before the swap even if the step in flight finished. | `previous` | `false` | For an interrupt, just re-run. Otherwise usually disk space: `Stage` needs 30 GiB free on `/var/lib/vllm` when the model revision isn't already staged, and 12 GiB free on `/var/lib/containers` every run (`internal/vllm/remote.go`). Free space, re-run. |
+| `host_prereq_failed` | `EnsureHost` failed. The **running server is unchanged**, but `EnsureHost` may already have installed or downgraded packages, created directories, or regenerated the CDI specs before hitting the failure (`EnsureHost` in `internal/vllm/remote.go`) — those are host-state side effects, not a swap. | `previous` | `false` | Commonly the NVIDIA Container Toolkit apt repo is missing, or no longer carries the pinned toolkit release — see [Host prerequisites](#host-prerequisites). Fix and re-run; re-running is safe, `EnsureHost` is idempotent. |
+| `stage_failed` | The image pull or model download failed, or the apply was interrupted (Ctrl-C, SIGTERM) before the swap — the message then starts `cancelled before the swap`. **The running server is unchanged** — `Stage` never touches it, and an interrupt during host preparation, staging or the CDI preflight stops before the swap even if the step in flight finished. | `previous` | `false` | For an interrupt, just re-run. Otherwise usually disk space: `Stage` needs 30 GiB free on `/var/lib/vllm` when the model revision isn't already staged, and 12 GiB free on `/var/lib/containers` every run (`internal/vllm/remote.go`). Free space, re-run. |
+| `cdi_unresolvable` | The CDI preflight failed: podman could not give the staged image the GPU (`--device nvidia.com/gpu=all`). It runs after staging and before the swap, so **the running server is unchanged** — nothing was stopped, written or restarted. | `previous` | `false` | See [Troubleshooting: unresolvable CDI devices](#unresolvable-cdi-devices). Fix the CDI spec, re-run. |
 | `legacy_state_unknown` | Reading `vllm.service`'s active/enabled state failed — either an SSH/run error that came back with empty output, or a `systemctl` state talops doesn't recognise (`remote.go:407-412`). Can happen before staging (`changed` still `false`, via `pendingReasons`) or again right after staging succeeds on **any** apply with something to change (`changed: true`, the `ReadLegacy` call after `Stage` in `vllm.Apply`, `internal/vllm/converge.go`) — not only a host's first apply; every changed apply re-reads legacy state to build its `Activate` hook. | `previous` | `false` | Investigate the legacy unit's state by hand, then re-run. |
 | `read_failed` | Couldn't read the installed Quadlet unit, the drift-check script/service/timer files, or `/etc/vllm/applied.json` while comparing against `serving.yaml` (`pendingReasons` in `internal/vllm/converge.go`) | `previous` | `false` | Check SSH/host access, re-run. |
 | `config_invalid` | No health gate configured — a talops misconfiguration, not a host problem | `previous` | `false` | File an issue; this isn't something re-running fixes. |
@@ -213,7 +219,7 @@ container's own live state, read directly (`ReadLive`, `converge.go`) plus
 a live `/v1/models` query for the served name (`converge.go`) — it
 genuinely inspects the container, not just files. It never runs the host
 phase (`EnsureHost`) — only `apply` does — so `status` alone never installs
-packages or regenerates the CDI spec.
+packages or regenerates the CDI specs.
 
 ```
 vllm:
@@ -356,6 +362,44 @@ though: the Quadlet sets `Environment=HF_HUB_OFFLINE=1`
 HuggingFace at all — every download happens once, during `Stage`, before
 the server ever starts.
 
+### Unresolvable CDI devices
+
+`apply` fails with `cdi_unresolvable`, or `journalctl -u vllm-server`
+shows:
+
+```
+Error: setting up CDI devices: unresolvable CDI devices nvidia.com/gpu=all
+```
+
+Podman found no usable definition of `nvidia.com/gpu=all`. It reads every
+spec in `/etc/cdi` and `/var/run/cdi` (the latter wins for the same device
+name), a spec it cannot parse contributes no devices, and why it could not
+parse one only shows at debug log level. Ask podman, with the image the
+preflight uses (`image:` in `inference/vllm/serving.yaml`, already pulled by
+`Stage`):
+
+```bash
+# On the vllm-inference VM:
+sudo podman --log-level=debug run --rm --entrypoint true \
+  --device nvidia.com/gpu=all '<image from serving.yaml>' 2>&1 | grep -i cdi
+grep -H cdiVersion /etc/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml
+dpkg-query -W nvidia-container-toolkit nvidia-container-toolkit-base \
+  libnvidia-container-tools libnvidia-container1
+```
+
+- **`failed to parse CDI Spec ... json: unknown field "additionalGids"`**,
+  with `cdiVersion: 0.7.0`: the spec came from nvidia-ctk 1.19 or later,
+  which podman 4.9 cannot read — the reason the toolkit is pinned (see
+  [Host prerequisites](#host-prerequisites)). Re-running `talops vllm apply
+  --confirm` moves the toolkit back onto the pin and regenerates both specs.
+  If the packages already read `1.18.2-1` but a spec still says `0.7.0`,
+  something regenerated it with another binary since; delete
+  `/etc/vllm/cdi-generated-for` so the next apply regenerates both.
+- **No spec at all, or no `nvidia.com/gpu=all` in it**: the driver is not
+  loaded, or nvidia-ctk could not see a GPU when it ran.
+  `nvidia-smi` must work first; then delete `/etc/vllm/cdi-generated-for`
+  and re-run apply.
+
 ## Host prerequisites
 
 Two things `talops vllm apply` does **not** do for you, because they are
@@ -368,8 +412,8 @@ host-level setup, not something `serving.yaml` should own:
   it.
 - **The NVIDIA Container Toolkit's apt repository.** `talops` deliberately
   does not add apt repositories from code — `EnsureHost` installs the
-  `nvidia-container-toolkit` package itself, but only once its apt candidate
-  exists. The runbook doesn't cover this step; add the repository once, by
+  toolkit packages itself, but only once the repository offers them. The
+  runbook doesn't cover this step; add the repository once, by
   hand, on the VM:
 
   ```bash
@@ -382,18 +426,60 @@ host-level setup, not something `serving.yaml` should own:
   ```
 
   Without it, `apply` fails with `host_prereq_failed` and a message pointing
-  back at this section rather than a bare `apt-get` error.
+  back at this section rather than a bare `apt-get` error. The same happens,
+  with a message naming the version, if the repository stops carrying the
+  pinned release below.
+
+**The toolkit is pinned at 1.18.2-1, and held.** `EnsureHost` installs
+`nvidia-container-toolkit`, `nvidia-container-toolkit-base`,
+`libnvidia-container-tools` and `libnvidia-container1` at exactly
+`toolkitVersion` (`internal/vllm/remote.go`), downgrading them if apt has
+moved them past it, and `apt-mark hold`s all four so an unattended upgrade
+cannot move them between applies. A host whose installed version or hold
+differs is reinstalled on the next apply. The reason is the host's podman:
+Ubuntu 24.04 ships podman 4.9.3, whose CDI parser rejects the spec that
+nvidia-ctk 1.19 and later generate (`cdiVersion: 0.7.0`, with an
+`additionalGids` field it does not know), so every GPU container fails with
+`unresolvable CDI devices` — see [Troubleshooting](#unresolvable-cdi-devices).
+1.18.x is the newest release that still writes `cdiVersion: 0.5.0`.
+
+To unpin later: first get a podman on the host whose vendored CDI library
+parses CDI 0.7.0 (check with `podman --log-level=debug` against a spec a
+newer nvidia-ctk generated, as in Troubleshooting, without installing that
+toolkit), then raise `toolkitVersion` to the new release by PR. The next
+apply moves the held packages (`--allow-change-held-packages`), holds them at
+the new version and regenerates both CDI specs. Removing the pin entirely
+means dropping the hold too (`sudo apt-mark unhold` the four packages), or
+they stay at whatever version they were last held at.
 
 **CDI regeneration** needs no manual step, but only happens as part of
 `apply`'s host phase — `status` never runs it. `EnsureHost` records the
-driver version it last generated `/etc/cdi/nvidia.yaml` for
-(`/etc/vllm/cdi-driver-version`), and regenerates the CDI spec
-(`nvidia-ctk cdi generate`) whenever the installed driver's version differs.
+driver and toolkit versions it last generated the CDI specs for
+(`/etc/vllm/cdi-generated-for`, `<driver>|<toolkit>`), and whenever either
+differs it regenerates `/etc/cdi/nvidia.yaml` (`nvidia-ctk cdi generate`) and
+restarts the toolkit's own `nvidia-cdi-refresh.service`, which rewrites
+`/var/run/cdi/nvidia.yaml`. Both have to be regenerated: podman reads both,
+and the `/var/run/cdi` one wins for the same device name whenever podman can
+parse it, so a stale one there would shadow a fresh `/etc/cdi` one. The
+service is kept rather than disabled because it is also what regenerates
+`/var/run/cdi/nvidia.yaml` at boot and after a driver upgrade, with the
+pinned nvidia-ctk. A record from before the
+toolkit was part of the key (`/etc/vllm/cdi-driver-version`) is simply
+ignored, so the first apply after upgrading talops regenerates both specs
+once; the old file can be deleted by hand.
 A driver upgrade therefore takes effect the next time `talops vllm apply`
-runs — and even then, only the CDI spec is regenerated by a no-op apply
+runs — and even then, only the CDI specs are regenerated by a no-op apply
 (`changed: false`); the running container is **not** restarted, so it keeps
 its old device injection until its own next restart (the following apply
 that actually changes something, or a manual restart).
+
+**node-exporter's textfile directory** is checked, never rewritten. Ubuntu's
+`prometheus-node-exporter` already reads `/var/lib/prometheus/node-exporter`,
+where the drift check writes its metrics, and ships `ARGS=""`, so a stock
+host gets no note. Only an `ARGS` line in
+`/etc/default/prometheus-node-exporter` that sets
+`--collector.textfile.directory` to another directory produces a
+`host: warning:` note on the apply report.
 
 > The pinned `vllm/vllm-openai:v0.24.0` image's own CUDA compatibility check
 > (`NVIDIA_REQUIRE_CUDA`) lists driver bands only up to 575, while this host
@@ -460,13 +546,18 @@ against it.
    substitute for the tfvars entry, not just a fallback — but without one
    or the other, the first `talops vllm apply` fails immediately with
    `vllm_host_unset`, before touching anything.
-3. **What the migration itself does.** `EnsureHost` installs `podman`,
-   `nvidia-container-toolkit`, and `prometheus-node-exporter`, and generates
-   the CDI spec for the first time. `Stage` pulls the pinned image and
-   downloads the model. The swap then disables and stops the legacy
-   `vllm.service` and starts the new `vllm-server.service` Quadlet unit —
-   before the health check runs, exactly like every later apply. If the
-   health check fails, rollback restores `vllm.service` to whatever
+3. **What the migration itself does.** `EnsureHost` installs `podman` and
+   `prometheus-node-exporter`, installs and holds the NVIDIA Container
+   Toolkit at its pinned release (downgrading a toolkit the host already
+   has at a newer one — see [Host prerequisites](#host-prerequisites)), and
+   generates both CDI specs for it. `Stage` pulls the pinned image and
+   downloads the model, and the CDI preflight runs that image once with the
+   GPU; a host whose CDI spec podman cannot read stops there with
+   `cdi_unresolvable`, the legacy server still serving. The swap then
+   disables and stops the legacy `vllm.service` and starts the new
+   `vllm-server.service` Quadlet unit — before the health check runs,
+   exactly like every later apply. If the health check fails, rollback
+   restores `vllm.service` to whatever
    active/enabled state it had going in (see [Rollback](#rollback)),
    **not** to a Quadlet unit, since none existed yet.
 4. **Window procedure.** Same as [Changing the model or
@@ -534,10 +625,11 @@ used:
    prerequisites](#host-prerequisites)) is a separate manual step the
    runbook doesn't cover.
 3. **`talops vllm apply --confirm`** does the rest: `EnsureHost` installs
-   `podman`/`nvidia-container-toolkit`/`prometheus-node-exporter` and
-   generates the CDI spec, `Stage` re-pulls the image and re-downloads the
-   model (a fresh disk has no staged marker), and the usual converge/health-check/
-   record sequence brings the host to what `serving.yaml` defines.
+   `podman`/`prometheus-node-exporter` and the pinned, held NVIDIA Container
+   Toolkit and generates the CDI specs, `Stage` re-pulls the image and
+   re-downloads the model (a fresh disk has no staged marker), and the
+   usual converge/health-check/record sequence brings the host to what
+   `serving.yaml` defines.
 
 ## Weekly model audit
 
