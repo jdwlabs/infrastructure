@@ -27,6 +27,12 @@ an `apply`'s restart and health check:
 - `@server` answers (`jdw-deployments` `minecraft-fwb` `agent.llm`)
 - LiteLLM's `sre-investigator-local` route (`platform` `litellm`)
 
+Both name the model in each request, and the server refuses a name it does
+not serve with a 404. The server's name is `local-chat`. Both consumers
+still request the previous name, `qwen/qwen3-coder-30b-a3b`, which stays in
+`servedAliases` until both have moved to `local-chat`. See
+[Renaming the served model](#renaming-the-served-model).
+
 `talops vllm plan` names these same two consumers whenever it reports a
 change, so a plan doubles as the announcement list for a change window.
 
@@ -37,7 +43,9 @@ image: docker.io/vllm/vllm-openai:v0.24.0@sha256:251eba5cc7c12fed0b75da22a9240e5
 model:
   repo: QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
   revision: c58857a7f41c0920f73d1b56678640f9c02017d7
-servedName: qwen/qwen3-coder-30b-a3b
+servedName: local-chat
+servedAliases:
+  - qwen/qwen3-coder-30b-a3b
 port: 8000
 args:
   - --quantization=awq_marlin
@@ -53,13 +61,15 @@ healthGate:
 | `image` | yes | `<repo>:<tag>@sha256:<64 hex>`, lowercase OCI reference charset | The digest pins what runs; the tag is what Renovate reads. |
 | `model.repo` | yes | `[A-Za-z0-9._:/=,+@-]+`, not starting with `-` | Ends up as a literal word on the Quadlet's `Exec=` line — a systemd command line that splits on whitespace and quotes and expands `%` and `$` — and as `vllm serve`'s first argument, where a leading `-` would make it a flag. |
 | `model.revision` | yes | 40 hex characters | A branch moves; a commit pins what's downloaded. |
-| `servedName` | yes | non-empty, same charset as `model.repo` | Identifies the model in client requests, and lands unescaped in a Prometheus label the drift check emits. |
+| `servedName` | yes | non-empty, same charset as `model.repo`, not starting with `-` | Identifies the model in client requests and is the name every response reports. It also lands unescaped in a Prometheus label the drift check emits. `--served-model-name` takes a list, so a leading `-` would end it and be read as the next option. |
+| `servedAliases` | no | each matches the same charset and does not start with `-`; no duplicates; none equal to `servedName` | Further names the server answers to, so a consumer can keep requesting an old name while it moves to `servedName`. Rendered after `servedName` under the one `--served-model-name` flag. |
 | `port` | no (default `8000`) | 1–65535 | |
 | `args` | no | each element matches the same charset; JSON-valued vLLM args (anything needing a literal `{`/`}`/space) are unsupported for this reason | Every element is a literal `Exec=` word. |
 | `healthGate.timeout` | no (default `10m`) | duration, must be `> 0` and `<= 10m` (the 15m rollback bound minus 5m for restore and restart, since a rollback re-runs this gate against the restored server) | Model load on this card is minutes, not seconds — the AWQ 30B-A3B MoE weights alone take a while to page onto the GPU. |
 
 Unknown keys are rejected outright (`KnownFields(true)`), and `args` may not
-set `--model`, `--revision`, `--port`, `--served-model-name`, or `--host` —
+set `--model`, `--revision`, `--port`, `--served-model-name`, or `--host`,
+in either the `-` or the `_` spelling, which vLLM treats as the same flag —
 talops's own rendered `Exec=` line already sets all five (`ExecArgs` in
 `internal/vllm/render.go`): `model.repo` positionally, as `vllm serve`'s
 first argument, and the rest as flags. A duplicate in `args` would either
@@ -84,6 +94,45 @@ from a checkout with no `origin/main` at all, is allowed, since trying a
 change before it merges is legitimate, but the report carries a note saying
 so: the record then names a commit `main` may never contain, and a later
 apply from `main` undoes the change.
+
+### How vLLM treats several served names
+
+`ExecArgs` renders `--served-model-name <servedName> <alias>...`, with
+`servedName` first. In vLLM v0.24.0 (cited on `ExecArgs` in
+`internal/vllm/render.go`):
+
+- A request naming **any** of the names is accepted. Any other non-empty
+  name gets a 404 `NotFoundError`. A request with no `model` at all is
+  accepted too.
+- `/v1/models` lists **every** name as its own entry, in that order, each
+  with `root` set to `model.repo`.
+- A response's `model` field is **always the first name**, `servedName`,
+  whichever name the request used. A consumer still requesting an alias
+  gets `local-chat` back in its responses.
+
+## Renaming the served model
+
+Consumers request the model by name, and a name the server does not serve
+is a 404. So a rename moves one consumer at a time and never relies on two
+repos changing at once:
+
+1. **Add the alias.** In one PR, set `servedName` to the new name and add the
+   old name to `servedAliases`. Apply it in an announced window like any
+   other change. The server now answers to both names, the health gate
+   checks that `/v1/models` lists both, and every consumer keeps working
+   unchanged.
+2. **Move the consumers.** Change each consumer to request the new name, in
+   its own repo and on its own schedule. Nothing on the GPU host changes.
+3. **Drop the alias.** Once every consumer in
+   [the list above](#what-serves-and-who-depends-on-it) requests the new
+   name, remove the old name from `servedAliases` and apply again. That is
+   another restart, so it needs another announced window. Do not drop the
+   alias before every consumer has moved: the gate probes `servedName`, so
+   it would pass while a consumer that had not moved got 404s.
+
+Do not change the model in the same PR as a rename. The weekly audit's
+trial steps keep both `servedName` and `servedAliases` as they are for this
+reason.
 
 ## Changing the model or version
 
@@ -137,7 +186,8 @@ check (and the rollback's own re-check, `gate-rollback`, when one happens)
 separately from staging and the GPU check (`gpu-check`).
 
 The health check has three parts, all against the served name: `/v1/models`
-lists it with `root` equal to `model.repo`; a 1-token chat completion
+lists it, and every one of `servedAliases`, with `root` equal to
+`model.repo`; a 1-token chat completion
 finishes with `stop` or `length`; and a request offering one `get_time`
 tool comes back with at least one parsed `tool_calls` entry. That last
 request sends `tool_choice: "auto"`, the way consumers do, because only
@@ -217,7 +267,7 @@ merge is invisible to `status` exactly the same way it's invisible to
 `plan`, see [step 2 above](#changing-the-model-or-version)), the record
 `apply` last wrote to the host (`/etc/vllm/applied.json`), and the running
 container's own live state, read directly (`ReadLive`, `converge.go`) plus
-a live `/v1/models` query for the served name (`converge.go`) — it
+a live `/v1/models` query for the served names (`converge.go`) — it
 genuinely inspects the container, not just files. It never runs the host
 phase (`EnsureHost`) — only `apply` does — so `status` alone never installs
 packages or regenerates the CDI specs.
@@ -227,27 +277,38 @@ vllm:
   host: 192.168.1.50
   drift: false
   legacy: false
-fields[4]{name,git,applied,live}:
+fields[5]{name,git,applied,live}:
   imageDigest,sha256:251eba...,sha256:251eba...,sha256:251eba...
   modelRevision,c58857a...,c58857a...,n/a
-  servedName,qwen/qwen3-coder-30b-a3b,qwen/qwen3-coder-30b-a3b,qwen/qwen3-coder-30b-a3b
+  servedName,local-chat,local-chat,local-chat
+  servedAliases,qwen/qwen3-coder-30b-a3b,qwen/qwen3-coder-30b-a3b,qwen/qwen3-coder-30b-a3b
   argsHash,3f2a...,3f2a...,3f2a...
 ```
+
+`servedName`'s `live` column is the **first** `/v1/models` entry, which is
+the name responses report. It is not whichever entry matches git, because
+with aliases a server can list git's name as an alias only.
+`servedAliases`'s `live` column is the entries after the first that share
+its `root`. Entries with another root are LoRA adapters and are left out.
+Several aliases are space-separated, since a space can never be part of a
+name. `-` means there are none. An `applied.json` written before aliases
+existed has no `servedAliases` key and reads as `-`.
 
 A read that fails reports a sentinel rather than a clean result, so a
 partial failure never reads as "everything matches" — but the sentinels
 aren't uniform across columns. `unknown` appears only in the `applied`
 column (`ReadApplied` itself failing to read or parse
-`/etc/vllm/applied.json`), or in `servedName`'s `live` column in the rare
-case status runs with no models reader configured at all. A live-container
+`/etc/vllm/applied.json`), or in the `live` column of `servedName` and
+`servedAliases` in the rare case status runs with no models reader
+configured at all. A live-container
 read failure of any kind — SSH broken, `podman` broken, the container
 simply not running — collapses to `(not running)` instead (`ReadLive`
 treats every such failure as "not running," never as "unknown";
 `ReadLive` in `internal/vllm/remote.go`). `(none)` means nothing has ever been applied in the
-`applied` column; in `servedName`'s `live` column it instead means
-`/v1/models` answered with an empty list — reachable, but serving nothing
-(`converge.go`, `liveServedName`). `unreachable` is specific to
-`servedName`'s `live` column: the `/v1/models` query itself failed.
+`applied` column; in the `live` column of `servedName` and `servedAliases` it
+instead means `/v1/models` answered with an empty list — reachable, but
+serving nothing (`converge.go`, `liveServedNames`). `unreachable` is
+specific to those two `live` columns: the `/v1/models` query itself failed.
 `(no repo digest)` can appear in `imageDigest`'s `live` column when the
 container is running but reports no `RepoDigests` at all (`converge.go`).
 `modelRevision`'s `live` column is always `n/a` **by
@@ -289,10 +350,12 @@ it:
   it, and re-runs the health check against it (`phases` names this attempt
   `gate-rollback`). `serving: previous` in the report means that succeeded.
   The rollback check looks for the previous server's own identity — the
-  `servedName` and `model.repo` in the `applied.json` that was on the host
-  when the apply started — not the one in the `serving.yaml` being applied.
-  A change that renames the served model or swaps the model repo would
-  otherwise fail the restored server's check even though it is healthy.
+  `servedName`, `servedAliases` and `model.repo` in the `applied.json` that
+  was on the host when the apply started — not the one in the `serving.yaml`
+  being applied. A change that renames the served model, adds or drops an
+  alias, or swaps the model repo would otherwise fail the restored server's
+  check even though it is healthy. A record written before aliases existed
+  has none, which is correct for the server it describes.
   Only when there is no record does the rollback check use `serving.yaml`'s
   identity.
 
@@ -690,8 +753,9 @@ It does:
     week's own, or when the audit's account already commented this week.
 
 Each candidate carries trial steps: an args delta against `serving.yaml`,
-written as a starting point. `servedName` is never changed in them, because
-consumers request the model by that name. A candidate whose architecture is
+written as a starting point. `servedName` and `servedAliases` are never
+changed in them, because consumers request the model by those names; when
+there are aliases, the steps say to keep them. A candidate whose architecture is
 a multimodal `*ForConditionalGeneration` wrapper also gets
 `add --language-model-only`, unless `serving.yaml` already sets it. That
 flag skips building the vision tower and profiling its encoder at startup,
