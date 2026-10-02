@@ -108,3 +108,14 @@ func TestCurrentReadsLanguageModelOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, c.LanguageModelOnly)
 }
+
+func TestCurrentCarriesServedAliases(t *testing.T) {
+	s := spec(pinnedImage, "--max-model-len=32768", "--tool-call-parser=qwen3_xml")
+	s.ServedName = "local-chat"
+	s.ServedAliases = []string{"qwen/qwen3-coder-30b-a3b"}
+
+	c, err := CurrentFromSpec(s)
+	require.NoError(t, err)
+	assert.Equal(t, "local-chat", c.ServedName)
+	assert.Equal(t, []string{"qwen/qwen3-coder-30b-a3b"}, c.ServedAliases)
+}
