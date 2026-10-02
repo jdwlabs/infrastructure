@@ -276,3 +276,72 @@ func TestCommittedServingSpecIsValid(t *testing.T) {
 	_, err := Load("../../../inference/vllm/serving.yaml")
 	require.NoError(t, err)
 }
+
+func aliasSpecYAML(servedName, aliases string) []byte {
+	return []byte(`image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: ` + servedName + `
+servedAliases: ` + aliases + `
+`)
+}
+
+func TestParseAcceptsServedAliases(t *testing.T) {
+	s, err := Parse(aliasSpecYAML("local-chat", "[qwen/qwen3-coder-30b-a3b, 'old:name=v1,+@']"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"qwen/qwen3-coder-30b-a3b", "old:name=v1,+@"}, s.ServedAliases)
+}
+
+func TestParseServedAliasesIsOptional(t *testing.T) {
+	s, err := Parse(aliasSpecYAML("local-chat", "[]"))
+	require.NoError(t, err)
+	assert.Empty(t, s.ServedAliases)
+}
+
+func TestParseRejectsBadServedAliases(t *testing.T) {
+	cases := map[string]struct {
+		aliases string
+		wantMsg string
+	}{
+		"duplicate alias":           {"[qwen/a, qwen/a]", "duplicate"},
+		"alias equal to servedName": {"[local-chat]", "servedName"},
+		"empty alias":               {`[""]`, "servedAliases"},
+		"alias that is a flag":      {"['--trust-remote-code']", "'-'"},
+		"alias with space":          {"['qwen a']", "servedAliases"},
+		"alias with dollar":         {"['qwen$a']", "servedAliases"},
+		"alias with percent":        {"['qwen%a']", "servedAliases"},
+		"alias with double quote":   {`['qwen"a']`, "servedAliases"},
+		"alias with single quote":   {`['qwen''a']`, "servedAliases"},
+		"alias with backslash":      {`['qwen\a']`, "servedAliases"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse(aliasSpecYAML("local-chat", tc.aliases))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantMsg)
+		})
+	}
+}
+
+// --served-model-name is nargs="+" in vLLM, so a servedName that starts with
+// '-' would be read as the next option rather than as a name.
+func TestParseRejectsServedNameThatIsAFlag(t *testing.T) {
+	_, err := Parse(aliasSpecYAML("'--trust-remote-code'", "[]"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'-'")
+}
+
+// A second name is a legitimate need, so the refusal names the field that
+// meets it rather than only saying the flag is taken.
+func TestParseRejectsServedModelNameFlagPointingAtAliases(t *testing.T) {
+	for _, arg := range []string{"--served-model-name=y", "--served_model_name=y", "--served-model-name"} {
+		t.Run(arg, func(t *testing.T) {
+			_, err := Parse([]byte(`image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: local-chat
+args: ['` + arg + `']
+`))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "servedAliases")
+		})
+	}
+}
