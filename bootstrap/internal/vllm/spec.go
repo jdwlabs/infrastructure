@@ -178,11 +178,28 @@ func validate(s Spec) error {
 		// --served-model-name; look it up the way vLLM would, not the way
 		// it was spelled here.
 		canonical := strings.ReplaceAll(flagName, "_", "-")
-		if forbiddenFlags[canonical] {
-			if canonical == "--served-model-name" {
+
+		matched := canonical
+		if !forbiddenFlags[matched] && canonical != "--" && strings.HasPrefix(canonical, "--") {
+			// vllm/utils/argparse_utils.py:113-134 subclasses
+			// argparse.ArgumentParser without allow_abbrev=False, so
+			// argparse resolves any unambiguous prefix of a long option to
+			// the full option - an abbreviated managed flag would still
+			// override it. "--" alone is argparse's end-of-options marker,
+			// not an abbreviation, so it's excluded above.
+			for flag := range forbiddenFlags {
+				if len(canonical) < len(flag) && strings.HasPrefix(flag, canonical) {
+					matched = flag
+					break
+				}
+			}
+		}
+
+		if forbiddenFlags[matched] {
+			if matched == "--served-model-name" {
 				return fmt.Errorf("args must not contain %s: talops's rendered Exec= line sets it from servedName, so add a further name to servedAliases instead", flagName)
 			}
-			if flagName == "--model" {
+			if matched == "--model" {
 				return fmt.Errorf("args must not contain %s: model.repo is already passed positionally by talops's rendered Exec= line", flagName)
 			}
 			return fmt.Errorf("args must not contain %s: talops's rendered Exec= line already sets it", flagName)

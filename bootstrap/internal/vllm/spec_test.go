@@ -345,3 +345,41 @@ args: ['` + arg + `']
 		})
 	}
 }
+
+// vLLM's FlexibleArgumentParser (vllm/utils/argparse_utils.py:113-134)
+// subclasses argparse.ArgumentParser without allow_abbrev=False, so argparse
+// resolves any unambiguous prefix of a long option to the full option - an
+// abbreviated managed flag would still override --served-model-name, --model,
+// --revision, --port or --host.
+func TestParseRejectsAbbreviatedManagedFlags(t *testing.T) {
+	cases := map[string]string{
+		"served-model-name, abbreviated with =":       "[--served-model-nam=other]",
+		"served_model_name, abbreviated + underscore": "[--served_model_n, x]",
+		"revision, abbreviated":                       "[--revisio, x]",
+		"model, abbreviated":                          "[--mod, x]",
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			data := []byte(`image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: qwen/qwen3-coder-30b-a3b
+args: ` + args + `
+`)
+			_, err := Parse(data)
+			require.Error(t, err)
+		})
+	}
+}
+
+// --max-model-len is not a prefix of any forbidden flag, so the prefix check
+// must not reject it.
+func TestParseAcceptsFlagsThatAreNotAbbreviations(t *testing.T) {
+	s, err := Parse([]byte(`
+image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: qwen/qwen3-coder-30b-a3b
+args: [--max-model-len=32768]
+`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--max-model-len=32768"}, s.Args)
+}
