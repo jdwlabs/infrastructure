@@ -104,18 +104,25 @@ func (g HealthGate) Check(ctx context.Context, s Spec) error {
 		return err
 	}
 
-	var found *ModelEntry
-	for i := range entries {
-		if entries[i].ID == s.ServedName {
-			found = &entries[i]
-			break
+	// Each alias is what a consumer not yet moved to servedName requests,
+	// and vLLM lists every served name as its own entry rooted at the model,
+	// so each one is checked the same way. The probes below use servedName
+	// only: the aliases answer from the same loaded model.
+	names := append([]string{s.ServedName}, s.ServedAliases...)
+	for _, name := range names {
+		var found *ModelEntry
+		for i := range entries {
+			if entries[i].ID == name {
+				found = &entries[i]
+				break
+			}
 		}
-	}
-	if found == nil {
-		return fmt.Errorf("models check: no entry with id %q among %d model(s)", s.ServedName, len(entries))
-	}
-	if found.Root != s.Model.Repo {
-		return fmt.Errorf("models check: entry %q has root %q, want %q", s.ServedName, found.Root, s.Model.Repo)
+		if found == nil {
+			return fmt.Errorf("models check: no entry with id %q among %d model(s)", name, len(entries))
+		}
+		if found.Root != s.Model.Repo {
+			return fmt.Errorf("models check: entry %q has root %q, want %q", name, found.Root, s.Model.Repo)
+		}
 	}
 
 	if err := g.checkCompletion(ctx, s); err != nil {
