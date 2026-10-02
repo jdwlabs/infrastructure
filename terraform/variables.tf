@@ -211,12 +211,16 @@ variable "gpu_vm_snippet_datastore" {
 
 # HAPROXY LOAD BALANCER VM(S)
 # A LIST of objects, like the control-plane and worker variables. Empty by
-# default so a checkout without haproxy_vms in tfvars provisions nothing —
-# the load balancer currently fronting the cluster was built by hand and is
-# not represented in this state. A second element is all a keepalived VIP
-# pair needs later, which is why this is a list and not a flat set of scalars.
+# default so a checkout without haproxy_vms in tfvars provisions nothing.
+#
+# The list length selects the mode. One entry is a standalone load balancer
+# whose own address is the endpoint. Two or more are a keepalived VRRP group:
+# haproxy_ip becomes a virtual address that floats between them, and every
+# entry needs its own address and a vrrp_priority. The pair-only rules below
+# are all conditioned on length so a single-entry list validates and renders
+# exactly as it did before the pair existed.
 variable "haproxy_vms" {
-  description = "List of HAProxy load-balancer VM configs. Empty means provision nothing."
+  description = "List of HAProxy load-balancer VM configs. Empty provisions nothing; one entry is standalone; two or more form a keepalived VRRP group sharing haproxy_ip."
   type = list(object({
     node_name = string
     vm_name   = string
@@ -224,9 +228,15 @@ variable "haproxy_vms" {
     cpu_cores = number
     memory    = number
     disk_size = number
-    # Static address in CIDR form. Must not be a DHCP lease: this address is
-    # what DNS, every talosconfig endpoint, and kubeconfig resolve to.
+    # Static address in CIDR form, never a DHCP lease. Standalone, this is
+    # what DNS, every talosconfig endpoint, and kubeconfig resolve to. In a
+    # VRRP group it is the instance's own address — what VRRP adverts and the
+    # config push use — and must differ from haproxy_ip.
     ip = string
+    # Decides the election only when no instance holds the virtual address
+    # yet: the group runs without preemption, so a returning instance never
+    # takes the address back from a healthy holder whatever its priority.
+    vrrp_priority = optional(number)
   }))
   default = []
 
@@ -246,6 +256,78 @@ variable "haproxy_vms" {
     condition     = length(distinct([for vm in var.haproxy_vms : vm.ip])) == length(var.haproxy_vms)
     error_message = "haproxy_vms entries must have distinct ip values."
   }
+
+  validation {
+    condition     = length(distinct([for vm in var.haproxy_vms : vm.vm_name])) == length(var.haproxy_vms)
+    error_message = "haproxy_vms entries must have distinct vm_name values."
+  }
+
+  # keepalived removes the virtual address when an instance leaves MASTER. If
+  # that address were also an instance's own static address, a failover would
+  # strip the instance of its only address instead of handing one over.
+  validation {
+    condition = length(var.haproxy_vms) < 2 || (
+      var.haproxy_ip != null &&
+      !contains([for vm in var.haproxy_vms : split("/", vm.ip)[0]], coalesce(var.haproxy_ip, "unset"))
+    )
+    error_message = "With two or more haproxy_vms, haproxy_ip is the virtual address: it must be set, and no entry's ip may equal it."
+  }
+
+  validation {
+    condition = length(var.haproxy_vms) < 2 || (
+      alltrue([for vm in var.haproxy_vms : vm.vrrp_priority != null]) &&
+      alltrue([for vm in var.haproxy_vms : coalesce(vm.vrrp_priority, 0) >= 1 && coalesce(vm.vrrp_priority, 0) <= 254]) &&
+      alltrue([for vm in var.haproxy_vms : coalesce(vm.vrrp_priority, 0) == floor(coalesce(vm.vrrp_priority, 0))]) &&
+      length(distinct([for vm in var.haproxy_vms : vm.vrrp_priority])) == length(var.haproxy_vms)
+    )
+    error_message = "With two or more haproxy_vms, every entry needs a distinct whole-number vrrp_priority between 1 and 254."
+  }
+
+  validation {
+    condition = length(var.haproxy_vms) < 2 || (
+      length(distinct([for vm in var.haproxy_vms : split("/", vm.ip)[1]])) == 1
+    )
+    error_message = "With two or more haproxy_vms, every entry's ip must carry the same prefix length: the virtual address is added with it."
+  }
+
+  validation {
+    condition     = length(var.haproxy_vms) < 2 || var.haproxy_vrrp_auth_pass != null
+    error_message = "With two or more haproxy_vms, haproxy_vrrp_auth_pass must be set in the vaulted tfvars."
+  }
+}
+
+# Sent in clear text in every advert, so it is not a defence against anyone on
+# the segment. It stops a second VRRP group that reuses this router id from
+# being mistaken for a peer. Vaulted anyway: a value in git is a value every
+# fork inherits. keepalived truncates PASS secrets to eight characters, and
+# the charset keeps the value inert in both YAML and keepalived.conf.
+variable "haproxy_vrrp_auth_pass" {
+  description = "Shared VRRP authentication string for the HAProxy group. Exactly 8 letters or digits. Required with two or more haproxy_vms; unused otherwise."
+  type        = string
+  sensitive   = true
+  default     = null
+
+  validation {
+    condition     = var.haproxy_vrrp_auth_pass == null || can(regex("^[A-Za-z0-9]{8}$", var.haproxy_vrrp_auth_pass))
+    error_message = "haproxy_vrrp_auth_pass must be exactly 8 letters or digits."
+  }
+}
+
+variable "haproxy_vrrp_router_id" {
+  description = "VRRP virtual router id for the HAProxy group. Must be unique among VRRP groups on the LAN segment."
+  type        = number
+  default     = 51
+
+  validation {
+    condition     = var.haproxy_vrrp_router_id >= 1 && var.haproxy_vrrp_router_id <= 255 && var.haproxy_vrrp_router_id == floor(var.haproxy_vrrp_router_id)
+    error_message = "haproxy_vrrp_router_id must be a whole number between 1 and 255."
+  }
+}
+
+variable "haproxy_vrrp_interface" {
+  description = "Guest NIC that carries VRRP adverts and the virtual address. eth0 is what the Ubuntu cloud image names its single virtio NIC under Proxmox cloud-init."
+  type        = string
+  default     = "eth0"
 }
 
 variable "haproxy_gateway" {

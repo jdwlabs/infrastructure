@@ -25,3 +25,7 @@ jobs:
       - run: terraform fmt -check
       - run: terraform init -backend=false
       - run: terraform validate
+      # Offline: the provider is mocked, so this needs no Proxmox, no backend
+      # and no secrets. It is the only check here that evaluates variable
+      # validations and rendered cloud-init, which validate does not.
+      - run: terraform test

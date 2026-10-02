@@ -32,6 +32,12 @@ packages:
   # below, and docs/lan-name-resolution.md for why it lives on this VM rather
   # than in-cluster or on the gateway.
   - dnsmasq
+%{ if keepalived != null ~}
+  # Floats the endpoint address between the instances. Its config is written
+  # below, before packages install, so the service the package starts is
+  # already the configured one.
+  - keepalived
+%{ endif ~}
 
 # No haproxy.cfg content here on purpose. The distro's placeholder config is
 # enough for the service to exist and hold its ports; the real config is
@@ -77,3 +83,73 @@ write_files:
   - path: /etc/dnsmasq.conf
     content: |
       ${indent(6, dnsmasq_config)}
+%{ if keepalived != null ~}
+  # 0600: the VRRP authentication string is in here.
+  #
+  # Both instances start as BACKUP with nopreempt, so the address stays where
+  # it is when a failed instance returns. Preempting would cost every client a
+  # second connection reset to restore a placement nothing depends on.
+  #
+  # Unicast rather than multicast: the peers are known, and adverts then do not
+  # depend on how the bridge or switch treats multicast.
+  - path: /etc/keepalived/keepalived.conf
+    permissions: '0600'
+    content: |
+      global_defs {
+          router_id ${hostname}
+          script_user root
+          enable_script_security
+      }
+
+      vrrp_script haproxy_serving {
+          script "/usr/local/sbin/haproxy-vip-ready"
+          interval 2
+          fall 2
+          rise 2
+      }
+
+      vrrp_instance haproxy {
+          state BACKUP
+          nopreempt
+          interface ${keepalived.interface}
+          virtual_router_id ${keepalived.router_id}
+          priority ${keepalived.priority}
+          advert_int 1
+          unicast_src_ip ${keepalived.instance_ip}
+          unicast_peer {
+%{ for peer in keepalived.peer_ips ~}
+              ${peer}
+%{ endfor ~}
+          }
+          authentication {
+              auth_type PASS
+              auth_pass ${keepalived.auth_pass}
+          }
+          virtual_ipaddress {
+              ${keepalived.virtual_address} dev ${keepalived.interface}
+          }
+          track_script {
+              haproxy_serving
+          }
+      }
+  # An instance is eligible for the address only while HAProxy is listening on
+  # the Kubernetes API port. A process check is not enough: a freshly built
+  # instance runs the distro's placeholder config until the first config push,
+  # and with no peer advertising it would otherwise claim the address and
+  # answer for the whole cluster with a config that has no frontends.
+  - path: /usr/local/sbin/haproxy-vip-ready
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      ss -Hltn 'sport = :6443' | grep -q .
+  # keepalived only runs where the address its config was rendered for is
+  # actually configured. The user-data and the VM's network config are
+  # separate Terraform objects and can be applied apart; an instance that
+  # booted in between would still own the virtual address as its static one,
+  # and keepalived removes the virtual address whenever it leaves MASTER.
+  # A failed ExecCondition skips the unit rather than failing it.
+  - path: /etc/systemd/system/keepalived.service.d/10-instance-address.conf
+    content: |
+      [Service]
+      ExecCondition=/bin/sh -c 'ip -o -4 addr show dev ${keepalived.interface} | grep -qF "inet ${keepalived.instance_ip}/"'
+%{ endif ~}
