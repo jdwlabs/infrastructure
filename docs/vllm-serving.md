@@ -81,6 +81,12 @@ conflict or silently lose to argument order — a second `--revision` could
 load a revision other than the one `model.revision` pins and the applied
 record reports.
 
+A dotted option is judged by its root, the part before the first `.`:
+vLLM's parser rewrites `--root.key=value` into `--root` with a JSON value,
+so `--served-model-name.x=y` and `--mod.x=y` are rejected like the flags
+they would set. A dotted option whose root is not one of the five, or a
+shortened form of one, is allowed.
+
 `talops` chdirs to the repo root before every command, and a relative
 `--spec` is resolved **after** that chdir, so it's repo-root-relative.
 `--tfvars` is the opposite: when you pass it explicitly, `AnchorToRepoRoot`
