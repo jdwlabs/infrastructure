@@ -2,9 +2,14 @@
 # `talops vllm apply --confirm` in an announced window; merging this file
 # applies nothing on its own.
 image: docker.io/vllm/vllm-openai:v0.24.0@sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f
+# Trial candidate from the weekly model audit: Qwen3.8-27B in NVIDIA's NVFP4
+# build, which the RTX 5090 runs natively and which leaves 3.1 GiB of the
+# estimated budget free. The previous model was
+# QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ@c58857a7f41c0920f73d1b56678640f9c02017d7
+# with --quantization=awq_marlin; reverting this file restores it.
 model:
-  repo: QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
-  revision: c58857a7f41c0920f73d1b56678640f9c02017d7
+  repo: nvidia/Qwen3.8-27B-NVFP4
+  revision: 482ca0f3832238542f8f5295dde86b5f22711d80
 # A neutral name, so a model swap never needs a rename that every consumer
 # has to follow in lockstep.
 servedName: local-chat
@@ -17,9 +22,18 @@ servedAliases:
   - qwen/qwen3-coder-30b-a3b
 port: 8000
 args:
-  - --quantization=awq_marlin
+  # No --quantization: vLLM reads modelopt FP4 from the model's own
+  # quantization_config.
   - --max-model-len=32768
   - --enable-auto-tool-choice
   - --tool-call-parser=qwen3_xml
+  # A multimodal wrapper: skipping the vision tower keeps startup inside the
+  # memory the audit estimated, and every consumer sends text only.
+  - --language-model-only
+  # Qwen3.8 thinks before answering by default. @server answers in one
+  # 256-token chat line, so thinking is turned off server-wide; the chat
+  # template honours enable_thinking=false. vLLM rewrites the dotted option
+  # into the JSON its parser expects.
+  - --default-chat-template-kwargs.enable_thinking=false
 healthGate:
   timeout: 10m # model load on this card is minutes, not seconds
