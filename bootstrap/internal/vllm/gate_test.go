@@ -3,9 +3,11 @@ package vllm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -394,4 +396,78 @@ func TestModelsFailsOnUnreachableServer(t *testing.T) {
 	_, err := g.Models(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "models")
+}
+
+// aliasedModelsHandler answers /v1/models the way vLLM does for several
+// --served-model-name values: one entry per name, in order, all rooted at
+// the one model repo. Every chat request's model is recorded.
+func aliasedModelsHandler(entries []map[string]string, models *[]string, mu *sync.Mutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": entries})
+		case "/v1/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			*models = append(*models, fmt.Sprint(body["model"]))
+			mu.Unlock()
+			_, _ = w.Write([]byte(chatResponse("stop", sampleToolCall)))
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func aliasedTestSpec() Spec {
+	s := testSpec(time.Minute)
+	s.ServedName = "local-chat"
+	s.ServedAliases = []string{"qwen/qwen3-coder-30b-a3b"}
+	return s
+}
+
+func TestCheckPassesWhenEveryAliasIsServedAndProbesUnderServedName(t *testing.T) {
+	s := aliasedTestSpec()
+	var models []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(aliasedModelsHandler([]map[string]string{
+		{"id": "local-chat", "root": s.Model.Repo},
+		{"id": "qwen/qwen3-coder-30b-a3b", "root": s.Model.Repo},
+	}, &models, &mu))
+	defer srv.Close()
+
+	require.NoError(t, HealthGate{BaseURL: srv.URL}.Check(context.Background(), s))
+	require.NotEmpty(t, models)
+	for _, m := range models {
+		assert.Equal(t, "local-chat", m, "the completion and tool-call probes request servedName, the name every consumer is moving to")
+	}
+}
+
+// An alias is what keeps a not-yet-moved consumer working, so a server that
+// does not answer to one has broken that consumer, however healthy the
+// servedName probes look.
+func TestCheckFailsWhenAnAliasIsNotServed(t *testing.T) {
+	s := aliasedTestSpec()
+	var models []string
+	var mu sync.Mutex
+	cases := map[string][]map[string]string{
+		"alias absent": {
+			{"id": "local-chat", "root": s.Model.Repo},
+		},
+		"alias rooted at another model": {
+			{"id": "local-chat", "root": s.Model.Repo},
+			{"id": "qwen/qwen3-coder-30b-a3b", "root": "Some/OtherRepo"},
+		},
+	}
+	for name, entries := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(aliasedModelsHandler(entries, &models, &mu))
+			defer srv.Close()
+
+			err := HealthGate{BaseURL: srv.URL}.Check(context.Background(), s)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "models check")
+			assert.Contains(t, err.Error(), "qwen/qwen3-coder-30b-a3b")
+		})
+	}
 }

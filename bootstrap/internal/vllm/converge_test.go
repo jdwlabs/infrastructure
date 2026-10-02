@@ -2002,3 +2002,22 @@ func TestStatusFlagsAnEnabledButStoppedLegacyUnit(t *testing.T) {
 	assert.True(t, res.Legacy, "an enabled legacy unit starts at boot beside the new server")
 	assert.True(t, res.Drift)
 }
+
+// The restored server answers to the aliases its own apply rendered, not to
+// the ones the rejected change added or dropped.
+func TestPreviousIdentityCarriesTheRecordedAliases(t *testing.T) {
+	s := sampleSpec()
+	s.ServedName = "local-chat"
+	s.ServedAliases = []string{"qwen/qwen3-coder-30b-a3b"}
+
+	withAliases := NewApplied(s, "c0ffee", "x", time.Time{})
+	withAliases.ServedAliases = []string{"older-chat"}
+	assert.Equal(t, []string{"older-chat"}, previousIdentity(s, &withAliases).ServedAliases)
+
+	without := NewApplied(sampleSpec(), "c0ffee", "x", time.Time{})
+	got := previousIdentity(s, &without)
+	assert.Equal(t, "qwen/qwen3-coder-30b-a3b", got.ServedName)
+	assert.Empty(t, got.ServedAliases, "a server applied without aliases answers to none")
+
+	assert.Equal(t, s.ServedAliases, previousIdentity(s, nil).ServedAliases)
+}

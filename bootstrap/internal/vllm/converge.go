@@ -198,15 +198,16 @@ func pendingReasons(ctx context.Context, r hostconverge.Runner, s Spec) ([]strin
 }
 
 // previousIdentity is what the rollback gate must find serving: the server
-// the rollback restores answers under the name and model its own apply
+// the rollback restores answers under the names and model its own apply
 // recorded, and gating it as s would fail a healthy server whenever the
-// change being rolled back renamed or replaced the model. With no record
-// there is no better statement of the previous server than s.
+// change being rolled back renamed, aliased or replaced the model. With no
+// record there is no better statement of the previous server than s.
 func previousIdentity(s Spec, prior *Applied) Spec {
 	if prior == nil {
 		return s
 	}
 	s.ServedName = prior.ServedName
+	s.ServedAliases = prior.ServedAliases
 	s.Model.Repo = prior.ModelRepo
 	return s
 }
