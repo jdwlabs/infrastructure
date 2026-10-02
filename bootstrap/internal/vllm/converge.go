@@ -25,7 +25,7 @@ const (
 	CodeHostPrereq      = "host_prereq_failed"
 	CodeStage           = "stage_failed"
 	CodeCDIUnresolvable = "cdi_unresolvable"
-	CodePreflight       = "preflight_failed"
+	CodeGPUCheck        = "gpu_check_failed"
 	CodeConverge        = "converge_failed"
 	CodeGate            = "gate_failed"
 	CodeRecord          = "record_failed"
@@ -215,8 +215,8 @@ func recordMatches(a Applied, s Spec) bool {
 	return a.ArgsHash == ArgsHash(s) && a.ImageDigest == s.ImageDigest() && a.ModelRevision == s.Model.Revision
 }
 
-// Apply converges the host to s: host prerequisites, staging and a CDI
-// preflight while the previous server keeps serving, then the unit swap
+// Apply converges the host to s: host prerequisites, staging and the
+// pre-swap GPU check while the previous server keeps serving, then the unit swap
 // under hostconverge's backup/verify/rollback, gated on the health check,
 // and only then the applied record. It never returns an error; everything
 // the caller needs, including which server is answering afterwards, is in
@@ -293,10 +293,10 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 	}
 
 	start = t.now()
-	err = PreflightCDI(ctx, r, s)
-	phase("cdi-preflight", start)
+	err = CheckGPU(ctx, r, s)
+	phase("gpu-check", start)
 	if err != nil {
-		// A preflight killed by an interrupt says nothing about the CDI
+		// A check killed by an interrupt says nothing about the CDI
 		// spec, so it is reported as the interrupt.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return failApply(res, CodeStage, cancelledMsg(ctxErr))
@@ -304,7 +304,7 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 		if errors.Is(err, ErrCDIUnresolvable) {
 			return failApply(res, CodeCDIUnresolvable, err.Error())
 		}
-		return failApply(res, CodePreflight, err.Error())
+		return failApply(res, CodeGPUCheck, err.Error())
 	}
 	if err := ctx.Err(); err != nil {
 		return failApply(res, CodeStage, cancelledMsg(err))
@@ -569,7 +569,7 @@ func failApply(res ApplyResult, code, msg string) ApplyResult {
 			"see docs/vllm-serving.md#troubleshooting (unresolvable CDI devices)",
 			"talops vllm apply --confirm  # re-run once the cause is fixed",
 		}
-	case code == CodePreflight:
+	case code == CodeGPUCheck:
 		res.Help = []string{
 			"nothing changed on the running server: the GPU could not be verified for the new image, so the swap was never attempted",
 			"the failure message carries the underlying error; podman did not report a CDI problem",

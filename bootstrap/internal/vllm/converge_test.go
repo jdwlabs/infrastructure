@@ -679,7 +679,7 @@ func TestApplyInterruptedBeforeTheSwapTouchesNothing(t *testing.T) {
 	for name, sub := range map[string]string{
 		"during host prerequisites": "nvidia-smi",
 		"during staging":            "sudo podman pull",
-		"during the CDI preflight":  "--device nvidia.com/gpu=all",
+		"during the GPU check":      "--device nvidia.com/gpu=all",
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := install(newHost("inactive"), sampleSpec())
@@ -727,7 +727,7 @@ func TestApplyInterruptedBeforeTheSwapTouchesNothing(t *testing.T) {
 // first apply that found this, the swap stopped the legacy server, the new
 // one failed on "unresolvable CDI devices", and only the rollback brought
 // the old one back.
-func TestApplyCDIPreflightFailureTouchesNothing(t *testing.T) {
+func TestApplyUnresolvableCDITouchesNothing(t *testing.T) {
 	for _, legacy := range []string{"active", "inactive"} {
 		t.Run("legacy "+legacy, func(t *testing.T) {
 			pinBackupSuffix(t)
@@ -759,14 +759,14 @@ func TestApplyCDIPreflightFailureTouchesNothing(t *testing.T) {
 			assert.Zero(t, g.calls)
 			assert.Zero(t, countContaining(h.cmds, "sudo systemctl"), "nothing may be restarted")
 			assert.Zero(t, countContaining(h.cmds, "base64 -d"))
-			assert.Equal(t, wantCDIPreflightCmd(newerSpec().Image), h.cmds[len(h.cmds)-1], "nothing runs after a failed preflight")
+			assert.Equal(t, wantGPUCheckCmd(newerSpec().Image), h.cmds[len(h.cmds)-1], "nothing runs after a failed check")
 			after := map[string]string{}
 			for p, b := range h.files {
 				after[p] = string(b)
 			}
 			assert.Equal(t, before, after)
 			assert.Equal(t, wasActive, h.active)
-			assert.Equal(t, []string{"host", "stage", "cdi-preflight"}, phaseNames(res.Phases))
+			assert.Equal(t, []string{"host", "stage", "gpu-check"}, phaseNames(res.Phases))
 			help := strings.Join(res.Help, "\n")
 			assert.Contains(t, help, "nothing changed on the running server")
 			assert.Contains(t, help, "docs/vllm-serving.md#troubleshooting")
@@ -775,11 +775,11 @@ func TestApplyCDIPreflightFailureTouchesNothing(t *testing.T) {
 	}
 }
 
-// The preflight run can fail without podman saying anything about CDI — SSH
+// The GPU check's run can fail without podman saying anything about CDI — SSH
 // dropping, broken container storage, a runtime error. That still stops
 // before the swap, but under its own code, so the operator is not sent to
 // the CDI spec for a problem that is not one.
-func TestApplyPreflightFailureThatIsNotCDIHasItsOwnCode(t *testing.T) {
+func TestApplyGPUCheckFailureThatIsNotCDIHasItsOwnCode(t *testing.T) {
 	pinBackupSuffix(t)
 	h := install(newHost("inactive"), sampleSpec())
 	h.files["/var/lib/vllm/hf/.staged-"+newerSpec().Model.Revision] = nil
@@ -797,7 +797,7 @@ func TestApplyPreflightFailureThatIsNotCDIHasItsOwnCode(t *testing.T) {
 	res := Apply(context.Background(), target(h, g), newerSpec())
 
 	require.NotNil(t, res.Failure)
-	assert.Equal(t, CodePreflight, res.Failure.Code)
+	assert.Equal(t, CodeGPUCheck, res.Failure.Code)
 	assert.Contains(t, res.Failure.Msg, "could not verify")
 	assert.Contains(t, res.Failure.Msg, "fake failure", "the underlying error is shown")
 	assert.Equal(t, ServingPrevious, res.Serving)
@@ -806,14 +806,14 @@ func TestApplyPreflightFailureThatIsNotCDIHasItsOwnCode(t *testing.T) {
 	assert.Zero(t, g.calls)
 	assert.Zero(t, countContaining(h.cmds, "sudo systemctl"), "nothing may be restarted")
 	assert.Zero(t, countContaining(h.cmds, "base64 -d"))
-	assert.Equal(t, wantCDIPreflightCmd(newerSpec().Image), h.cmds[len(h.cmds)-1], "nothing runs after a failed preflight")
+	assert.Equal(t, wantGPUCheckCmd(newerSpec().Image), h.cmds[len(h.cmds)-1], "nothing runs after a failed check")
 	after := map[string]string{}
 	for p, b := range h.files {
 		after[p] = string(b)
 	}
 	assert.Equal(t, before, after)
 	assert.Equal(t, wasActive, h.active)
-	assert.Equal(t, []string{"host", "stage", "cdi-preflight"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "gpu-check"}, phaseNames(res.Phases))
 	help := strings.Join(res.Help, "\n")
 	assert.Contains(t, help, "nothing changed on the running server")
 	assert.Contains(t, help, "GPU could not be verified")
@@ -821,9 +821,29 @@ func TestApplyPreflightFailureThatIsNotCDIHasItsOwnCode(t *testing.T) {
 	assert.NotContains(t, help, "endpoint is down")
 }
 
-// A preflight that fails because the operator interrupted it says nothing
+// A package query that could not be run stops the apply as a host
+// prerequisite failure, before anything is installed or restarted.
+func TestApplyPackageQueryFailureInstallsNothing(t *testing.T) {
+	h := install(newHost("inactive"), sampleSpec())
+	h.prepend(&rule{sub: "dpkg-query", err: errFail})
+	g := &fakeGate{h: h}
+
+	res := Apply(context.Background(), target(h, g), newerSpec())
+
+	require.NotNil(t, res.Failure)
+	assert.Equal(t, CodeHostPrereq, res.Failure.Code)
+	assert.Contains(t, res.Failure.Msg, "read installed packages")
+	assert.Equal(t, ServingPrevious, res.Serving)
+	assert.False(t, res.RolledBack)
+	assert.Zero(t, g.calls)
+	assert.Zero(t, countContaining(h.cmds, "apt-get"), "nothing may be installed")
+	assert.Zero(t, countContaining(h.cmds, "apt-mark"))
+	assert.Zero(t, countContaining(h.cmds, "sudo systemctl"), "nothing may be restarted")
+}
+
+// A GPU check that fails because the operator interrupted it says nothing
 // about the CDI spec, so it is reported as the interrupt it was.
-func TestApplyInterruptedCDIPreflightIsACancelNotACDIFailure(t *testing.T) {
+func TestApplyInterruptedGPUCheckIsACancelNotACDIFailure(t *testing.T) {
 	h := install(newHost("inactive"), sampleSpec())
 	h.prepend(&rule{sub: "--device nvidia.com/gpu=all", err: context.Canceled})
 	g := &fakeGate{h: h}
@@ -891,8 +911,8 @@ func TestApplyHappyPathOrder(t *testing.T) {
 		wantPullCmd(s.Image),
 		wantDownloadCmd(s.Image, s.Model.Repo, s.Model.Revision),
 		wantTouchMarkerCmd(s.Model.Revision),
-		wantCDIPreflightCmd(s.Image), // before anything the swap touches
-		wantIsActiveCmd,              // legacy re-read after staging
+		wantGPUCheckCmd(s.Image), // before anything the swap touches
+		wantIsActiveCmd,          // legacy re-read after staging
 		wantIsEnabledCmd,
 	)
 	want = append(want, installCmds(unit, false)...)
@@ -907,7 +927,7 @@ func TestApplyHappyPathOrder(t *testing.T) {
 	assert.Equal(t, "abc123", rec.Commit)
 	assert.Equal(t, "dev@box", rec.AppliedBy)
 	assert.Equal(t, ArgsHash(s), rec.ArgsHash)
-	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate", "record"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "gpu-check", "converge", "gate", "record"}, phaseNames(res.Phases))
 	for _, p := range res.Phases {
 		assert.Positive(t, p.Took, p.Name)
 	}
@@ -948,7 +968,7 @@ func TestApplyGateFailureRollsBack(t *testing.T) {
 		activatePreviousCmd,
 		"<gate>",
 	}, h.cmds[gate:])
-	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate", "gate-rollback"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "gpu-check", "converge", "gate", "gate-rollback"}, phaseNames(res.Phases))
 	assert.Contains(t, res.Help, "the previous server is serving again and passed the health gate")
 	assert.Contains(t, strings.Join(res.Help, "\n"), "talops vllm status")
 }
@@ -1143,7 +1163,7 @@ func TestApplyActivateFailureRollsBackAsConvergeFailure(t *testing.T) {
 	assert.Equal(t, ServingPrevious, res.Serving)
 	assert.Equal(t, 1, g.calls, "only the restored server is gated")
 	assert.Equal(t, Quadlet(old), string(h.files[QuadletPath]))
-	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate-rollback"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "gpu-check", "converge", "gate-rollback"}, phaseNames(res.Phases))
 }
 
 // The only gate that runs here is the rollback's; its failure is the
@@ -1158,7 +1178,7 @@ func TestApplyActivateFailureWithUnhealthyRollbackIsNotAGateFailure(t *testing.T
 	require.NotNil(t, res.Failure)
 	assert.Equal(t, CodeConverge, res.Failure.Code)
 	assert.Equal(t, ServingNone, res.Serving)
-	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate-rollback"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "gpu-check", "converge", "gate-rollback"}, phaseNames(res.Phases))
 }
 
 // An install that fails part-way never reaches Activate: the running server
