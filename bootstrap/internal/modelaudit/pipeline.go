@@ -360,15 +360,20 @@ func enrichFailure(err error, c candidate) (CandidateRow, string, error) {
 // and a coding deployment sends only text.
 const languageModelOnlyStep = "add --language-model-only: skips the vision tower and its startup profiling, which the memory estimate does not price"
 
-// TrialSteps is the args delta against serving.yaml. servedName stays fixed:
-// consumers request the model by it, and the health gate checks the new name,
-// so renaming would pass the gate while every consumer broke.
+// TrialSteps is the args delta against serving.yaml. servedName and
+// servedAliases stay fixed: consumers request the model by them, and the
+// health gate checks the new names, so renaming would pass the gate while
+// the consumers broke. A rename is its own change, made by adding an alias
+// first, never folded into a model swap.
 func TrialSteps(cur Current, repo, sha, quant string, rule Rule, conf map[string]any) []string {
 	steps := []string{
 		fmt.Sprintf("set model.repo=%s and model.revision=%s", repo, sha),
 		fmt.Sprintf("keep servedName=%s: consumers request the model by it", cur.ServedName),
-		"set --tool-call-parser=" + rule.Parser,
 	}
+	if len(cur.ServedAliases) > 0 {
+		steps = append(steps, fmt.Sprintf("keep servedAliases=[%s]: consumers not yet moved to servedName request the model by them", strings.Join(cur.ServedAliases, ", ")))
+	}
+	steps = append(steps, "set --tool-call-parser="+rule.Parser)
 	switch {
 	case cur.Quantization == "":
 	case quant == "none":

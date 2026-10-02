@@ -423,3 +423,30 @@ func TestTrialStepsTurnOffTheVisionTowerOnlyForMultimodalWrappers(t *testing.T) 
 	assert.NotContains(t, TrialSteps(cur, "Org/M", shaA, "none", rule, wrapper), languageModelOnlyStep,
 		"serving.yaml already sets it")
 }
+
+// A trial swaps the model, not the names consumers request it by: an alias
+// dropped in the same change would break a consumer not yet moved to
+// servedName while the gate, which probes servedName, still passed.
+func TestTrialStepsKeepTheServedAliases(t *testing.T) {
+	cur := testCurrent(t)
+	cur.ServedName = "local-chat"
+	cur.ServedAliases = []string{"qwen/qwen3-coder-30b-a3b", "old-chat"}
+
+	steps := TrialSteps(cur, "Org/M", shaA, "none", Rule{Parser: "qwen3_xml"}, nil)
+
+	assert.Equal(t, "keep servedName=local-chat: consumers request the model by it", steps[1])
+	assert.Equal(t, "keep servedAliases=[qwen/qwen3-coder-30b-a3b, old-chat]: consumers not yet moved to servedName request the model by them", steps[2])
+	for _, s := range steps {
+		assert.NotContains(t, s, "set servedAliases")
+		assert.NotContains(t, s, "remove servedAliases")
+	}
+}
+
+func TestTrialStepsSayNothingAboutAliasesWhenThereAreNone(t *testing.T) {
+	cur := testCurrent(t)
+	cur.ServedAliases = nil
+
+	for _, s := range TrialSteps(cur, "Org/M", shaA, "none", Rule{Parser: "qwen3_xml"}, nil) {
+		assert.NotContains(t, s, "servedAliases")
+	}
+}

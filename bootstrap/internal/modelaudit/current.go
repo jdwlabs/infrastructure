@@ -15,6 +15,7 @@ type Current struct {
 	Repo                 string
 	Revision             string
 	ServedName           string
+	ServedAliases        []string
 	VLLMTag              string
 	ContextTokens        int
 	GPUMemoryUtilization float64
@@ -50,6 +51,7 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 		Repo:                 s.Model.Repo,
 		Revision:             s.Model.Revision,
 		ServedName:           s.ServedName,
+		ServedAliases:        s.ServedAliases,
 		VLLMTag:              tag,
 		GPUMemoryUtilization: 0.90,
 	}
