@@ -1,17 +1,14 @@
 # HAProxy VM Provisioning — Design
 
-Status: **Phase 1 applied, Phase 2 in the repo.** `terraform/haproxy-node.tf`
-was applied and the rebuild/cutover in `scenarios/haproxy-vm-rebuild.md`
-executed on 2026-08-09 (commit `568b368`) — the production load balancer is
-`haproxy-1`, Terraform-managed, not the hand-built `haproxy-0` this document
-originally described as still live. That commit updated the vaulted tfvars
-and bootstrap-state but not this document's own status line, which is the
-correction being made here now (found while re-verifying live state for
-JDWLABS-285, a separate, DNS-focused ticket — recorded here because this is
-where the stale claim lived, not because that ticket's work touches
-provisioning). `talops haproxy status` against `192.168.1.199` is the live
-source of truth if this drifts again. Phase 3 (keepalived) remains
-unscheduled — see §7.
+Status: **Phase 1 applied, Phase 2 in the repo, Phase 3 in the repo and not
+yet applied.** `terraform/haproxy-node.tf` was applied and the rebuild/cutover
+in `scenarios/haproxy-vm-rebuild.md` executed on 2026-08-09 (commit
+`568b368`) — the production load balancer is `haproxy-1`, Terraform-managed,
+standalone at `192.168.1.199`. `talops haproxy status` is the live source of
+truth if this drifts. Phase 3 (the keepalived pair, §5.5) is implemented and
+waits on a human running `scenarios/haproxy-keepalived-cutover.md`; until then
+the single-entry `haproxy_vms` in the vault keeps everything below behaving as
+a standalone load balancer.
 
 Automating the provisioning of the HAProxy load-balancer VM that fronts the
 Kubernetes API, Talos API, and cluster ingress. When this design was written,
@@ -318,24 +315,79 @@ failure). Idempotent: no drift → no-op with explicit `changed: false`.
 This gives operators/agents a config-only lever without running a full
 reconcile.
 
-### 5.5 High availability (phased, not in scope for first implementation)
+### 5.5 High availability — keepalived VRRP group
 
-Single-VM remains a SPOF for API + ingress. Two candidate end-states:
+A single VM is a SPOF for the API and all ingress, and a fast rebuild only
+shortens the outage. On 2026-10-01 pve1 was down for 2h08m and took the only
+load balancer with it; the cluster behind it stayed healthy and unreachable.
+That is the measured window §7 question 1 was waiting for.
 
-1. **Single VM, fast rebuild (phase 1 result)**: outage window = human apply
-   (`infra deploy`) + first reconcile — minutes, from nothing. Cheapest;
-   accepts brief ingress downtime on VM loss.
-2. **keepalived VRRP pair (phase 3 option)**: two VMs on different Proxmox
-   hosts, `haproxy_ip` becomes the VIP, instances get their own IPs.
-   Changes required: cloud-init adds keepalived + VRRP config (priority,
-   password from tfvars); `haproxy.cfg` binds must move from the VIP address
-   to `*` or use `net.ipv4.ip_nonlocal_bind`; talops pushes config to **all**
-   instances (loop over per-instance IPs) instead of one host.
+**Shape.** Two or more `haproxy_vms` entries are a VRRP group. `haproxy_ip`
+keeps its value and its meaning to everything outside — DNS, kubeconfig,
+`talosconfig`, LAN clients — and becomes a virtual address. Each instance gets
+its own static address, which is what VRRP adverts and the config push use. One
+entry is a standalone load balancer and renders, validates and behaves exactly
+as before; the list length is the only switch.
 
-The tfvars list shape, the `bind` strategy, and the multi-host push loop are
-the only three touchpoints — all are called out above so phase 1 does not
-paint us into a corner. Whether the pair is worth ~1 GiB RAM and two more
-managed hosts on this cluster is an open question (below).
+**Placement.** `haproxy-1` stays on pve1; the peer goes on pve5. Control planes
+occupy pve2, pve3 and pve4 and have no memory to spare, and a load balancer
+sharing a host with a control plane loses both to one failure.
+
+**The three touchpoints phase 1 left open:**
+
+| Touchpoint | Decision |
+|---|---|
+| tfvars list shape | Second element, plus a per-entry `vrrp_priority`. Pair-only validation: no entry on the virtual address, distinct priorities, one prefix length, secret present. |
+| `bind` strategy | Every instance binds the **virtual address**, relying on the `net.ipv4.ip_nonlocal_bind` cloud-init already sets. Rejected: binding `*`, which would expose the stats page and API frontends on the instance address and every Tailscale interface; and per-instance binds, which would give each instance a different config and make "are they converged" unanswerable by hash. One config, byte-identical on every instance, and a backup accepts connections the instant the address arrives. |
+| Multi-host push | `talops haproxy plan\|apply\|status` and `reconcile` address every instance at its own address. Never the virtual one: that reaches only the current holder and leaves the other stale. |
+
+**keepalived configuration** (rendered per instance by cloud-init):
+
+- `state BACKUP` + `nopreempt` on every instance. The address stays put when a
+  failed instance returns. Preempting would cost every client a second round
+  of connection resets to restore a placement nothing depends on, and would
+  flap the endpoint in step with an unstable host. `vrrp_priority` therefore
+  only decides an election in which nobody holds the address.
+- Unicast peers, so adverts do not depend on how a bridge or switch treats
+  multicast.
+- `advert_int 1`, health check every 2 s. Rehearsed with the rendered configs
+  in two containers: the address moved 2.2 s after the holder was killed and
+  3.9 s after its HAProxy stopped listening. The exit criterion is under 5 s
+  on the real pair.
+- **Eligibility is "HAProxy is listening on :6443", not "HAProxy is running".**
+  A new instance runs the distro placeholder config until its first push. With
+  a process check and no peer advertising, it would claim the address and
+  answer for the cluster with no frontends.
+- **keepalived is skipped unless the instance's own address is configured**
+  (a systemd `ExecCondition`). User-data and network config are separate
+  Terraform objects. An instance that boots with the group's user-data while
+  still statically holding the virtual address would have keepalived delete
+  that address — it removes a configured virtual address as a leftover.
+- VRRP `PASS` authentication with a vaulted 8-character secret. It travels in
+  clear in every advert: it prevents a misconfigured neighbour being mistaken
+  for a peer, nothing more.
+
+**What follows the virtual address:**
+
+| Service on the VM | Decision | Why |
+|---|---|---|
+| HAProxy frontends | Follows | The point |
+| LAN resolver (`dnsmasq`) | Follows, unchanged config | Baked by the same cloud-init on both instances; `bind-dynamic` opens `.199:53` when the address arrives and closes it when it leaves (rehearsed) |
+| UDP DNAT (`table ip minecraft`) | Follows for LAN clients, by copying the rules to the peer by hand. **Internet clients stay on `haproxy-1`** | The rules match on port, so they are inert on a backup. The gateway's port forward is attached to a MAC, not to `.199`, so it cannot follow. No automation in this change: the rules were placed by hand on `haproxy-1` and still are |
+| Tailscale subnet router | **Stays on `haproxy-1`** | Independent of the virtual address either way. A second router is a join, which mints a credential — a human step, not provisioning |
+
+Consequences of the two "stays" rows, while pve1 is down: Bedrock is
+unreachable from the internet and tailnet clients lose the LAN route. Both are
+what happens today. Closing them means a VRRP virtual MAC for the gateway
+forward and a second subnet router; both are tracked separately and neither is
+designed here.
+
+**Not changed, deliberately.** `terraform/files/dnsmasq-jdwlabs-lan.conf` still
+says a second instance "would need its own listen-address". It would not — see
+the table — but that file is rendered verbatim into the snippet, and editing a
+comment in it replaces the standalone snippet and re-runs cloud-init on the
+live VM at its next boot. Correct it in the same apply as the cutover, when the
+snippet is being replaced anyway.
 
 ### 5.6 Migration of the existing VM
 
@@ -361,23 +413,18 @@ and ARP settle), schedulable in a quiet window.
 |---|---|---|
 | 1 | `haproxy-node.tf` + cloud-init snippet + tfvars schema (+ vault update); snippets datastore enabled | `terraform plan` clean on a fresh VM definition; blue-green rebuild executed; old VM deleted; `talops reconcile` green against the new VM |
 | 2 | `talops haproxy status\|plan\|apply` (AXI), stats-socket parsing, config-hash drift in bootstrap-state | Commands pass AXI review (TOON, exit codes, help[], no prompts); reconcile refactored to call the shared apply path; unit tests follow existing `client_test.go` mock-runner pattern |
-| 3 (optional) | keepalived pair per 5.5 | VIP failover test: kill active VM, API+ingress recover < 5 s, `talops haproxy status` shows both instances |
+| 3 | keepalived pair per 5.5 (code landed; `scenarios/haproxy-keepalived-cutover.md` not yet run) | VIP failover test: kill active VM, API+ingress recover < 5 s, `talops haproxy status` shows both instances |
 | Docs | ARCHITECTURE.md HAProxy section updated; `scenarios/haproxy-vm-rebuild.md` runbook | Runbook is a thin driver of the automated path |
 
 ## 7. Open questions — resolved or deferred
 
-1. **HA pair now or later? — DEFERRED, owner: repo maintainer.** Not decided
-   here. The rebuild below **has** now been executed (2026-08-09), so the
-   input this deferral was waiting on — a measured outage window rather than
-   an estimated one — exists if someone captures it from that cutover's
-   timestamps; it was not captured at the time, so the window is still
-   effectively unmeasured. Revisit by pulling the stop/start timestamps from
-   that day rather than re-running a cutover just to measure it. Nothing in
-   phases 1–2 forecloses the pair — the
-   tfvars list takes a second element, `net.ipv4.ip_nonlocal_bind` is already
-   set by cloud-init so a VIP bind needs no rebuild, and `--host` already
-   targets an instance by address rather than assuming one. Revisit once the
-   rebuild has run once and the real window is known.
+1. **HA pair now or later? — RESOLVED: now.** The deferral was waiting on a
+   measured outage window, and 2026-10-01 supplied one: 2h08m with pve1 down.
+   The pair is implemented per §5.5 and the design is accepted as built. What
+   remains is the cutover. The two instance addresses are chosen by the
+   operator on the day, behind the free-address gate in the runbook, and the
+   cutover has to observe how the gateway's MAC-attached UDP forward behaves
+   once `haproxy-1` carries two addresses.
 
 2. **Snippets datastore — RESOLVED, no work needed.** Every node's `local`
    directory storage already advertises the `snippets` content type
@@ -413,3 +460,20 @@ and ARP settle), schedulable in a quiet window.
    The scope of the eventual fix is known: the reconcile preflight must
    tolerate the ~60 s cloud-init window when the VM was created in the same
    apply.
+
+7. **Fail back when a failed instance returns? — RESOLVED: no.** Every
+   instance runs `nopreempt`, so the virtual address stays where the failover
+   left it and can sit on either host indefinitely. Moving it is a deliberate
+   act (stop keepalived on the holder), never a side effect of a host coming
+   back.
+
+8. **Is a pair running on one instance a healthy report? — RESOLVED: no.**
+   `talops haproxy status` exits 1 for it even though the endpoint is serving.
+   What it reports on is whether the pair would survive the next host loss,
+   and with one instance gone it would not.
+
+9. **Does a partial config push stop `reconcile`? — RESOLVED: no.** It pushes
+   to every instance it can reach, carries on with the rest of its plan, and
+   exits non-zero at the end naming the instance left behind. Stopping at the
+   push would make the cluster unmanageable during the outage the pair exists
+   to absorb; exiting zero would hide instances serving different configs.
