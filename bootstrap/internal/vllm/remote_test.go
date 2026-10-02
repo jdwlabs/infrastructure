@@ -110,6 +110,9 @@ func wantDownloadCmd(image, repo, rev string) string {
 		image, repo, rev,
 	)
 }
+func wantCDIPreflightCmd(image string) string {
+	return "sudo podman run --rm --entrypoint true --device nvidia.com/gpu=all '" + image + "'"
+}
 func wantRepoDigestsCmd(imageID string) string {
 	return "sudo podman image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' " + imageID + " 2>/dev/null"
 }
@@ -665,6 +668,27 @@ func TestStageMarkerTouchFailurePropagates(t *testing.T) {
 }
 
 // ---- ReadLive ----
+
+// ---- PreflightCDI ----
+
+// The preflight asks podman to resolve the GPU through CDI exactly as the
+// Quadlet will, but runs true instead of the server, so it never loads a
+// model or holds GPU memory beside the server still serving.
+func TestPreflightCDIResolvesTheGPUWithoutStartingTheServer(t *testing.T) {
+	s := stageSpec()
+	r := &fakeRunner{}
+	require.NoError(t, PreflightCDI(context.Background(), r, s))
+	assert.Equal(t, []string{wantCDIPreflightCmd(s.Image)}, r.cmds)
+}
+
+func TestPreflightCDIFailureNamesTheCause(t *testing.T) {
+	s := stageSpec()
+	r := &fakeRunner{fail: map[string]error{"--device nvidia.com/gpu=all": errFail}}
+	err := PreflightCDI(context.Background(), r, s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nvidia.com/gpu=all")
+	assert.Contains(t, err.Error(), "fake failure")
+}
 
 func TestReadLiveNotRunningOnInspectFailure(t *testing.T) {
 	r := &fakeRunner{fail: map[string]error{"{{.State.Running}}": errFail}}
