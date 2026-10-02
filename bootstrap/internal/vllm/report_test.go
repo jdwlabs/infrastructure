@@ -86,9 +86,10 @@ diff: |
   @@ -1,1 +1,1 @@
   -Image=a
   +Image=b
-consumers[2]:
-  @server answers (jdw-deployments minecraft-fwb agent.llm)
+consumers[3]:
+  @server answers (jdw-deployments minecraft-fwb llm.model)
   LiteLLM sre-investigator-local (platform litellm)
+  LiteLLM pr-reviewer (platform litellm)
 help[1]:
   talops vllm apply --confirm  # restarts the server
 `, ReportPlan(res))
@@ -110,9 +111,10 @@ func TestReportPlanGoldenChangedWithoutUnitDiff(t *testing.T) {
 reasons[1]:
   legacy vllm.service is active and is replaced by the Quadlet unit
 diff: 0 lines — the unit already matches; apply acts for the reasons above
-consumers[2]:
-  @server answers (jdw-deployments minecraft-fwb agent.llm)
+consumers[3]:
+  @server answers (jdw-deployments minecraft-fwb llm.model)
   LiteLLM sre-investigator-local (platform litellm)
+  LiteLLM pr-reviewer (platform litellm)
 `, ReportPlan(res))
 }
 
