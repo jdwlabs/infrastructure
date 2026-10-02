@@ -365,4 +365,71 @@ func TestDriftCheckScriptReasons(t *testing.T) {
 		assert.Contains(t, prom, `served_name="`+spec.ServedName+`"`)
 		assert.Contains(t, prom, `image_digest="`+spec.ImageDigest()+`"`)
 	})
+
+	// The record's servedAliases is a JSON array spread over several lines;
+	// the script's line-wise sed must still read servedName and argsHash
+	// past it, and label the metric with the name responses report.
+	t.Run("none, with aliases", func(t *testing.T) {
+		aliased := aliasedSpec()
+		rec := NewApplied(aliased, "deadbeefcafef00d", "jdwillmsen", at)
+		require.Contains(t, string(rec.JSON()), "servedAliases")
+		binDir, textfileDir, recDir := t.TempDir(), t.TempDir(), t.TempDir()
+		writeFakePodman(t, binDir, fakePodman{running: true, imageID: fakeImageID, repoDigests: []string{matchingRepoDigest}, execArgs: ExecArgs(aliased)})
+		appliedPath := filepath.Join(recDir, "applied.json")
+		require.NoError(t, os.WriteFile(appliedPath, rec.JSON(), 0o644))
+		prom := run(t, binDir, appliedPath, textfileDir)
+		assertReason(t, prom, "none")
+		assert.Contains(t, prom, `served_name="local-chat"`)
+	})
+}
+
+func aliasedSpec() Spec {
+	s := sampleSpec()
+	s.ServedName = "local-chat"
+	s.ServedAliases = []string{"qwen/qwen3-coder-30b-a3b", "old-chat"}
+	return s
+}
+
+// vLLM reports the first --served-model-name value in every response, so
+// servedName has to lead and the aliases follow it under the one flag.
+func TestExecArgsRendersAliasesAfterServedName(t *testing.T) {
+	s := aliasedSpec()
+	assert.Equal(t, []string{
+		s.Model.Repo,
+		"--revision", s.Model.Revision,
+		"--served-model-name", "local-chat", "qwen/qwen3-coder-30b-a3b", "old-chat",
+		"--host", "0.0.0.0",
+		"--port", "8000",
+		"--quantization=awq_marlin",
+		"--max-model-len=32768",
+	}, ExecArgs(s))
+	assert.Contains(t, Quadlet(s), "--served-model-name local-chat qwen/qwen3-coder-30b-a3b old-chat --host 0.0.0.0")
+}
+
+func TestArgsHashChangesWithAliases(t *testing.T) {
+	plain := sampleSpec()
+	plain.ServedName = "local-chat"
+	aliased := aliasedSpec()
+	reordered := aliasedSpec()
+	reordered.ServedAliases = []string{"old-chat", "qwen/qwen3-coder-30b-a3b"}
+
+	assert.NotEqual(t, ArgsHash(plain), ArgsHash(aliased), "adding an alias changes what runs")
+	assert.NotEqual(t, ArgsHash(aliased), ArgsHash(reordered), "the hash is of the argv as rendered")
+}
+
+func TestNewAppliedRecordsAliases(t *testing.T) {
+	s := aliasedSpec()
+	a := NewApplied(s, "c0ffee", "jdwillmsen", time.Time{})
+	assert.Equal(t, s.ServedAliases, a.ServedAliases)
+
+	var got Applied
+	require.NoError(t, json.Unmarshal(a.JSON(), &got))
+	assert.Equal(t, s.ServedAliases, got.ServedAliases)
+}
+
+// A record written before aliases existed has no servedAliases key; an
+// unaliased spec must write that same shape, so its record still matches.
+func TestNewAppliedOmitsAliasesWhenThereAreNone(t *testing.T) {
+	a := NewApplied(sampleSpec(), "c0ffee", "jdwillmsen", time.Time{})
+	assert.NotContains(t, string(a.JSON()), "servedAliases")
 }

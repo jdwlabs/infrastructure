@@ -54,14 +54,29 @@ func Quadlet(s Spec) string {
 // ExecArgs is the full `vllm serve` argv after the image: the model repo is
 // the vllm-openai entrypoint's first positional, followed by the flags the
 // spec forbids overriding directly, then the spec's own args.
+//
+// servedName leads the --served-model-name values because position is what
+// vLLM v0.24.0 gives meaning to. The flag is a list (nargs="+",
+// engine/arg_utils.py:223), and init_app_state makes one BaseModelPath per
+// value, all rooted at the model repo (entrypoints/openai/api_server.py:328-340).
+// A request naming any of them is accepted (is_base_model,
+// entrypoints/openai/models/serving.py:50-51, via _check_model,
+// entrypoints/serve/engine/serving.py:44,68-73); /v1/models lists every one
+// in this order, each with that same root (models/serving.py:64-76); and a
+// response's "model" field is always the first, whichever name was asked
+// for (model_name, models/serving.py:144-147, used at
+// chat_completion/serving.py:283 and completion/serving.py:219).
 func ExecArgs(s Spec) []string {
 	args := []string{
 		s.Model.Repo,
 		"--revision", s.Model.Revision,
 		"--served-model-name", s.ServedName,
+	}
+	args = append(args, s.ServedAliases...)
+	args = append(args,
 		"--host", "0.0.0.0",
 		"--port", strconv.Itoa(s.Port),
-	}
+	)
 	return append(args, s.Args...)
 }
 
@@ -78,12 +93,15 @@ func ArgsHash(s Spec) string {
 // back from disk with no access to serving.yaml or ArgsHash's inputs, so
 // every value it needs to compare against is recorded here, already computed.
 type Applied struct {
-	Commit        string    `json:"commit"`
-	Image         string    `json:"image"`
-	ImageDigest   string    `json:"imageDigest"`
-	ModelRepo     string    `json:"modelRepo"`
-	ModelRevision string    `json:"modelRevision"`
-	ServedName    string    `json:"servedName"`
+	Commit        string `json:"commit"`
+	Image         string `json:"image"`
+	ImageDigest   string `json:"imageDigest"`
+	ModelRepo     string `json:"modelRepo"`
+	ModelRevision string `json:"modelRevision"`
+	ServedName    string `json:"servedName"`
+	// omitempty keeps an unaliased record byte-for-byte the shape written
+	// before aliases existed.
+	ServedAliases []string  `json:"servedAliases,omitempty"`
 	ArgsHash      string    `json:"argsHash"`
 	AppliedAt     time.Time `json:"appliedAt"`
 	AppliedBy     string    `json:"appliedBy"`
@@ -99,6 +117,7 @@ func NewApplied(s Spec, commit, by string, at time.Time) Applied {
 		ModelRepo:     s.Model.Repo,
 		ModelRevision: s.Model.Revision,
 		ServedName:    s.ServedName,
+		ServedAliases: s.ServedAliases,
 		ArgsHash:      ArgsHash(s),
 		AppliedAt:     at,
 		AppliedBy:     by,
