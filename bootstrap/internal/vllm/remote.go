@@ -322,6 +322,19 @@ func Stage(ctx context.Context, r hostconverge.Runner, s Spec) error {
 	return nil
 }
 
+// PreflightCDI asks podman to give the staged image the GPU through CDI,
+// the same way the Quadlet's AddDevice does, while the previous server keeps
+// serving. A CDI spec podman cannot parse otherwise shows up only once the
+// swap has already stopped the previous server. The entrypoint is true, so
+// the container exits as soon as its devices are set up: it never loads a
+// model or takes GPU memory from the server still running.
+func PreflightCDI(ctx context.Context, r hostconverge.Runner, s Spec) error {
+	if _, err := r.Run(ctx, "sudo podman run --rm --entrypoint true --device nvidia.com/gpu=all '"+s.Image+"'"); err != nil {
+		return fmt.Errorf("podman could not give the image the GPU through CDI (--device nvidia.com/gpu=all): %w", err)
+	}
+	return nil
+}
+
 // Live is the state of the running vllm container, read the same way and
 // under the same rules as the embedded drift-check script: RepoDigests
 // carries the full-image reference list `podman pull` populates from the

@@ -22,14 +22,15 @@ const (
 
 // Stable failure codes: the CLI maps them to exit codes and the docs name them.
 const (
-	CodeHostPrereq    = "host_prereq_failed"
-	CodeStage         = "stage_failed"
-	CodeConverge      = "converge_failed"
-	CodeGate          = "gate_failed"
-	CodeRecord        = "record_failed"
-	CodeLegacyUnknown = "legacy_state_unknown"
-	CodeRead          = "read_failed"
-	CodeConfigInvalid = "config_invalid"
+	CodeHostPrereq      = "host_prereq_failed"
+	CodeStage           = "stage_failed"
+	CodeCDIUnresolvable = "cdi_unresolvable"
+	CodeConverge        = "converge_failed"
+	CodeGate            = "gate_failed"
+	CodeRecord          = "record_failed"
+	CodeLegacyUnknown   = "legacy_state_unknown"
+	CodeRead            = "read_failed"
+	CodeConfigInvalid   = "config_invalid"
 )
 
 // Serving values on an ApplyResult: which server is answering after apply.
@@ -213,11 +214,12 @@ func recordMatches(a Applied, s Spec) bool {
 	return a.ArgsHash == ArgsHash(s) && a.ImageDigest == s.ImageDigest() && a.ModelRevision == s.Model.Revision
 }
 
-// Apply converges the host to s: host prerequisites, staging while the
-// previous server keeps serving, then the unit swap under hostconverge's
-// backup/verify/rollback, gated on the health check, and only then the
-// applied record. It never returns an error; everything the caller needs,
-// including which server is answering afterwards, is in the result.
+// Apply converges the host to s: host prerequisites, staging and a CDI
+// preflight while the previous server keeps serving, then the unit swap
+// under hostconverge's backup/verify/rollback, gated on the health check,
+// and only then the applied record. It never returns an error; everything
+// the caller needs, including which server is answering afterwards, is in
+// the result.
 func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 	res := ApplyResult{Host: t.Host, Serving: ServingPrevious}
 	r := t.Runner
@@ -285,6 +287,21 @@ func Apply(ctx context.Context, t Target, s Spec) ApplyResult {
 	// A runner that ignores ctx, or a step that finished just as the
 	// operator interrupted, still returns success; the swap is the one step
 	// that interrupts consumers, so an interrupt must never reach it.
+	if err := ctx.Err(); err != nil {
+		return failApply(res, CodeStage, cancelledMsg(err))
+	}
+
+	start = t.now()
+	err = PreflightCDI(ctx, r, s)
+	phase("cdi-preflight", start)
+	if err != nil {
+		// A preflight killed by an interrupt says nothing about the CDI
+		// spec, so it is reported as the interrupt.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return failApply(res, CodeStage, cancelledMsg(ctxErr))
+		}
+		return failApply(res, CodeCDIUnresolvable, err.Error())
+	}
 	if err := ctx.Err(); err != nil {
 		return failApply(res, CodeStage, cancelledMsg(err))
 	}
@@ -541,6 +558,12 @@ func failApply(res ApplyResult, code, msg string) ApplyResult {
 		res.Help = []string{
 			"the previous server is serving again and passed the health gate",
 			"talops vllm status  # compare what serves against serving.yaml",
+		}
+	case code == CodeCDIUnresolvable:
+		res.Help = []string{
+			"nothing changed on the running server: podman could not give the new image the GPU, so the swap was never attempted",
+			"see docs/vllm-serving.md#troubleshooting (unresolvable CDI devices)",
+			"talops vllm apply --confirm  # re-run once the cause is fixed",
 		}
 	default:
 		res.Help = []string{

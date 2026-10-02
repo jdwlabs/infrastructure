@@ -679,6 +679,7 @@ func TestApplyInterruptedBeforeTheSwapTouchesNothing(t *testing.T) {
 	for name, sub := range map[string]string{
 		"during host prerequisites": "nvidia-smi",
 		"during staging":            "sudo podman pull",
+		"during the CDI preflight":  "--device nvidia.com/gpu=all",
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := install(newHost("inactive"), sampleSpec())
@@ -719,6 +720,79 @@ func TestApplyInterruptedBeforeTheSwapTouchesNothing(t *testing.T) {
 			assert.Contains(t, res.Help, "nothing changed on the running server")
 		})
 	}
+}
+
+// The swap is the one step that interrupts consumers, so a host whose CDI
+// spec cannot give the new image the GPU must be caught before it: on the
+// first apply that found this, the swap stopped the legacy server, the new
+// one failed on "unresolvable CDI devices", and only the rollback brought
+// the old one back.
+func TestApplyCDIPreflightFailureTouchesNothing(t *testing.T) {
+	for _, legacy := range []string{"active", "inactive"} {
+		t.Run("legacy "+legacy, func(t *testing.T) {
+			pinBackupSuffix(t)
+			h := newHost(legacy)
+			if legacy == "inactive" {
+				install(h, sampleSpec())
+			}
+			// Staged up front, so the only writes left to catch are the swap's.
+			h.files["/var/lib/vllm/hf/.staged-"+newerSpec().Model.Revision] = nil
+			before := map[string]string{}
+			for p, b := range h.files {
+				before[p] = string(b)
+			}
+			wasActive := map[string]bool{}
+			for u, a := range h.active {
+				wasActive[u] = a
+			}
+			h.prepend(&rule{sub: "--device nvidia.com/gpu=all", out: "Error: setting up CDI devices: unresolvable CDI devices nvidia.com/gpu=all\n", err: errFail})
+			g := &fakeGate{h: h}
+
+			res := Apply(context.Background(), target(h, g), newerSpec())
+
+			require.NotNil(t, res.Failure)
+			assert.Equal(t, CodeCDIUnresolvable, res.Failure.Code)
+			assert.Contains(t, res.Failure.Msg, "CDI")
+			assert.Equal(t, ServingPrevious, res.Serving)
+			assert.True(t, res.Changed)
+			assert.False(t, res.RolledBack)
+			assert.Zero(t, g.calls)
+			assert.Zero(t, countContaining(h.cmds, "sudo systemctl"), "nothing may be restarted")
+			assert.Zero(t, countContaining(h.cmds, "base64 -d"))
+			assert.Equal(t, wantCDIPreflightCmd(newerSpec().Image), h.cmds[len(h.cmds)-1], "nothing runs after a failed preflight")
+			after := map[string]string{}
+			for p, b := range h.files {
+				after[p] = string(b)
+			}
+			assert.Equal(t, before, after)
+			assert.Equal(t, wasActive, h.active)
+			assert.Equal(t, []string{"host", "stage", "cdi-preflight"}, phaseNames(res.Phases))
+			help := strings.Join(res.Help, "\n")
+			assert.Contains(t, help, "nothing changed on the running server")
+			assert.Contains(t, help, "docs/vllm-serving.md#troubleshooting")
+			assert.NotContains(t, help, "endpoint is down")
+		})
+	}
+}
+
+// A preflight that fails because the operator interrupted it says nothing
+// about the CDI spec, so it is reported as the interrupt it was.
+func TestApplyInterruptedCDIPreflightIsACancelNotACDIFailure(t *testing.T) {
+	h := install(newHost("inactive"), sampleSpec())
+	h.prepend(&rule{sub: "--device nvidia.com/gpu=all", err: context.Canceled})
+	g := &fakeGate{h: h}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := target(h, g)
+	tg.Runner = cancelOn{fakeHost: h, sub: "--device nvidia.com/gpu=all", cancel: cancel}
+
+	res := Apply(ctx, tg, newerSpec())
+
+	require.NotNil(t, res.Failure)
+	assert.Equal(t, CodeStage, res.Failure.Code)
+	assert.Contains(t, res.Failure.Msg, "cancelled before the swap")
+	assert.Equal(t, ServingPrevious, res.Serving)
+	assert.Zero(t, countContaining(h.cmds, "sudo systemctl"))
 }
 
 func TestApplyDownloadFailureTouchesNothing(t *testing.T) {
@@ -771,7 +845,8 @@ func TestApplyHappyPathOrder(t *testing.T) {
 		wantPullCmd(s.Image),
 		wantDownloadCmd(s.Image, s.Model.Repo, s.Model.Revision),
 		wantTouchMarkerCmd(s.Model.Revision),
-		wantIsActiveCmd, // legacy re-read after staging
+		wantCDIPreflightCmd(s.Image), // before anything the swap touches
+		wantIsActiveCmd,              // legacy re-read after staging
 		wantIsEnabledCmd,
 	)
 	want = append(want, installCmds(unit, false)...)
@@ -786,7 +861,7 @@ func TestApplyHappyPathOrder(t *testing.T) {
 	assert.Equal(t, "abc123", rec.Commit)
 	assert.Equal(t, "dev@box", rec.AppliedBy)
 	assert.Equal(t, ArgsHash(s), rec.ArgsHash)
-	assert.Equal(t, []string{"host", "stage", "converge", "gate", "record"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate", "record"}, phaseNames(res.Phases))
 	for _, p := range res.Phases {
 		assert.Positive(t, p.Took, p.Name)
 	}
@@ -827,7 +902,7 @@ func TestApplyGateFailureRollsBack(t *testing.T) {
 		activatePreviousCmd,
 		"<gate>",
 	}, h.cmds[gate:])
-	assert.Equal(t, []string{"host", "stage", "converge", "gate", "gate-rollback"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate", "gate-rollback"}, phaseNames(res.Phases))
 	assert.Contains(t, res.Help, "the previous server is serving again and passed the health gate")
 	assert.Contains(t, strings.Join(res.Help, "\n"), "talops vllm status")
 }
@@ -1022,7 +1097,7 @@ func TestApplyActivateFailureRollsBackAsConvergeFailure(t *testing.T) {
 	assert.Equal(t, ServingPrevious, res.Serving)
 	assert.Equal(t, 1, g.calls, "only the restored server is gated")
 	assert.Equal(t, Quadlet(old), string(h.files[QuadletPath]))
-	assert.Equal(t, []string{"host", "stage", "converge", "gate-rollback"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate-rollback"}, phaseNames(res.Phases))
 }
 
 // The only gate that runs here is the rollback's; its failure is the
@@ -1037,7 +1112,7 @@ func TestApplyActivateFailureWithUnhealthyRollbackIsNotAGateFailure(t *testing.T
 	require.NotNil(t, res.Failure)
 	assert.Equal(t, CodeConverge, res.Failure.Code)
 	assert.Equal(t, ServingNone, res.Serving)
-	assert.Equal(t, []string{"host", "stage", "converge", "gate-rollback"}, phaseNames(res.Phases))
+	assert.Equal(t, []string{"host", "stage", "cdi-preflight", "converge", "gate-rollback"}, phaseNames(res.Phases))
 }
 
 // An install that fails part-way never reaches Activate: the running server
