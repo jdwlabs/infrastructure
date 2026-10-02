@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -76,20 +77,8 @@ func (app *App) RunReconcile(ctx context.Context) error {
 
 	// Preflight: verify SSH connectivity to HAProxy before doing any work
 	if !cfg.SkipPreflight && !cfg.DryRun && cfg.HAProxyIP != nil {
-		haproxyPreflight := app.createHAProxyClient(cfg)
-		if haproxyPreflight != nil {
-			app.Logger.Info("preflight: checking HAProxy SSH connectivity",
-				zap.String("host", cfg.HAProxyIP.String()),
-				zap.String("user", cfg.HAProxyLoginUser))
-			if err := haproxyPreflight.CheckConnectivity(); err != nil {
-				app.Logger.Error("preflight: HAProxy SSH connectivity check failed",
-					zap.String("host", cfg.HAProxyIP.String()),
-					zap.String("user", cfg.HAProxyLoginUser),
-					zap.Error(err))
-				return fmt.Errorf("HAProxy SSH preflight failed (fix SSH auth to %s@%s or use --skip-preflight): %w",
-					cfg.HAProxyLoginUser, cfg.HAProxyIP, err)
-			}
-			app.Logger.Info("preflight: HAProxy SSH connectivity OK")
+		if err := app.preflightHAProxy(cfg); err != nil {
+			return err
 		}
 	}
 
@@ -598,8 +587,20 @@ func (app *App) executePlan(
 	scanner *discovery.Scanner,
 	talosClient *talos.Client,
 	k8sClient *kubectl.Client,
-) error {
+) (err error) {
 	cfg := app.Cfg
+
+	// A load-balancer push that reached only some instances does not stop the
+	// plan: the instances that took it are serving the new backends, and
+	// stopping here would strand a half-built cluster behind an outage the
+	// group has already absorbed. It still fails the run, once everything else
+	// is done, so the divergence is never the thing nobody noticed.
+	var lbDivergence error
+	defer func() {
+		if err == nil {
+			err = lbDivergence
+		}
+	}()
 
 	// Populate session counters early so SUMMARY.txt has data even on error
 	app.updateSessionCounters(plan, deployed)
@@ -799,7 +800,10 @@ func (app *App) executePlan(
 	// Always update when CPs exist - CP IPs may change during reboots (DHCP)
 	// even when no CP membership change occurred.
 	if err := app.updateHAProxy(ctx, cfg, deployed, stateMgr); err != nil {
-		return err
+		if !isHAProxyDivergence(err) {
+			return err
+		}
+		lbDivergence = err
 	}
 
 	// Phase 5: Fetch kubeconfig after bootstrap
@@ -946,27 +950,18 @@ func (app *App) executePlan(
 	// Phase 4 runs before workers are deployed so IngressNodes only has CPs.
 	// Now that workers are deployed and ready, re-generate to include them.
 	if len(plan.AddWorkers) > 0 && !cfg.DryRun && len(deployed.ControlPlanes) > 0 {
-		haproxyConfig := haproxy.ConfigFromClusterState(cfg, deployed)
-		configStr, err := haproxyConfig.Generate()
-		if err != nil {
-			app.Logger.Error("failed to generate HAProxy config with workers", zap.Error(err))
-			return fmt.Errorf("generate HAProxy config (post-worker): %w", err)
-		}
-
-		haproxyClient := app.createHAProxyClient(cfg)
-		if haproxyClient == nil {
-			app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
-			return fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
-		}
-
-		if err := haproxyClient.Update(ctx, configStr); err != nil {
-			app.Logger.Error("HAProxy update with workers failed",
-				zap.String("host", cfg.HAProxyIP.String()),
-				zap.String("user", cfg.HAProxyLoginUser),
-				zap.Error(err))
+		err := app.updateHAProxy(ctx, cfg, deployed, stateMgr)
+		switch {
+		case err == nil:
+			// This push carries everything Phase 4's did and more, so landing
+			// it on every instance settles a divergence left there.
+			lbDivergence = nil
+			app.Logger.Info("HAProxy updated with worker ingress nodes", zap.Int("ingressNodes", len(deployed.Workers)))
+		case isHAProxyDivergence(err):
+			lbDivergence = err
+		default:
 			return fmt.Errorf("HAProxy update (post-worker) failed: %w", err)
 		}
-		app.Logger.Info("HAProxy updated with worker ingress nodes", zap.Int("ingressNodes", len(haproxyConfig.IngressNodes)))
 	}
 
 	// Phase 7: Update configs
@@ -1111,8 +1106,9 @@ func (app *App) updateHAProxy(
 }
 
 // pushHAProxyConfig renders and installs the config through the validated,
-// auto-rollback path. Both reconcile and `talops haproxy apply` go through
-// this, so a fix to one is a fix to both.
+// auto-rollback path, on every declared instance. Both reconcile and
+// `talops haproxy apply` go through the same install path, so a fix to one is
+// a fix to both.
 func (app *App) pushHAProxyConfig(
 	ctx context.Context,
 	cfg *types.Config,
@@ -1125,27 +1121,92 @@ func (app *App) pushHAProxyConfig(
 		return "", fmt.Errorf("generate HAProxy config: %w", err)
 	}
 
-	haproxyClient := app.createHAProxyClient(cfg)
-	if haproxyClient == nil {
-		app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
-		return "", fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
+	group, err := haproxy.ResolveGroup(cfg, "")
+	if err != nil {
+		return "", fmt.Errorf("resolve HAProxy instances: %w", err)
 	}
 
-	if err := haproxyClient.Update(ctx, configStr); err != nil {
-		app.Logger.Error("HAProxy update failed",
-			zap.String("host", cfg.HAProxyIP.String()),
-			zap.String("user", cfg.HAProxyLoginUser),
-			zap.Error(err))
+	outcomes := haproxy.PushToAll(ctx, group.Instances, func(inst haproxy.Instance) (haproxy.Pusher, error) {
+		client := app.createHAProxyClientFor(cfg, inst.Host)
+		if client == nil {
+			app.Logger.Error("HAProxy SSH auth not configured (no key file and no SSH agent)")
+			return nil, fmt.Errorf("HAProxy SSH auth not configured: set --ssh-key, --haproxy-ssh-key, or ensure SSH_AUTH_SOCK is available")
+		}
+		return client, nil
+	}, configStr)
+
+	for _, o := range outcomes {
+		if o.Err != nil {
+			app.Logger.Error("HAProxy update failed",
+				zap.String("host", o.Instance.Host),
+				zap.String("user", cfg.HAProxyLoginUser),
+				zap.Error(o.Err))
+		}
+	}
+
+	if err := haproxy.PushError(outcomes); err != nil {
+		if isHAProxyDivergence(err) {
+			return "", err
+		}
 		return "", fmt.Errorf("HAProxy update failed: %w", err)
 	}
 	return configStr, nil
 }
 
-// createHAProxyClient builds an HAProxy SSH client with the best available auth method.
+func isHAProxyDivergence(err error) bool {
+	var divergent *haproxy.DivergenceError
+	return errors.As(err, &divergent)
+}
+
+// preflightHAProxy checks SSH to the load balancer before any work starts.
+// With several instances it fails only when none answers: one being down is
+// what the group is for, and refusing to reconcile then would make the cluster
+// unmanageable during exactly the outage it is meant to ride out.
+func (app *App) preflightHAProxy(cfg *types.Config) error {
+	group, err := haproxy.ResolveGroup(cfg, "")
+	if err != nil {
+		return fmt.Errorf("HAProxy preflight: %w", err)
+	}
+
+	reachable := 0
+	var lastErr error
+	for _, inst := range group.Instances {
+		client := app.createHAProxyClientFor(cfg, inst.Host)
+		if client == nil {
+			return nil
+		}
+		app.Logger.Info("preflight: checking HAProxy SSH connectivity",
+			zap.String("host", inst.Host),
+			zap.String("user", cfg.HAProxyLoginUser))
+		if err := client.CheckConnectivity(); err != nil {
+			app.Logger.Error("preflight: HAProxy SSH connectivity check failed",
+				zap.String("host", inst.Host),
+				zap.String("user", cfg.HAProxyLoginUser),
+				zap.Error(err))
+			lastErr = fmt.Errorf("HAProxy SSH preflight failed (fix SSH auth to %s@%s or use --skip-preflight): %w",
+				cfg.HAProxyLoginUser, inst.Host, err)
+			continue
+		}
+		reachable++
+	}
+
+	if reachable == 0 && lastErr != nil {
+		return lastErr
+	}
+	if lastErr != nil {
+		app.Logger.Warn("preflight: continuing with an HAProxy instance unreachable; the push will report it",
+			zap.Int("reachable", reachable), zap.Int("instances", len(group.Instances)))
+		return nil
+	}
+	app.Logger.Info("preflight: HAProxy SSH connectivity OK")
+	return nil
+}
+
+// createHAProxyClientFor builds an HAProxy SSH client with the best available auth method.
 // Tries, in order: explicit haproxy key, proxmox key (with agent fallback), agent-only.
 // Returns nil if no auth method is available.
-func (app *App) createHAProxyClient(cfg *types.Config) *haproxy.Client {
-	client := haproxy.NewClient(cfg.HAProxyLoginUser, cfg.HAProxyIP.String(), app.Logger, cfg.InsecureSSH)
+func (app *App) createHAProxyClientFor(cfg *types.Config, host string) *haproxy.Client {
+	client := haproxy.NewClient(cfg.HAProxyLoginUser, host, app.Logger, cfg.InsecureSSH)
 
 	haproxyKeyPath := cfg.HAProxySSHKeyPath
 	if haproxyKeyPath == "" {
@@ -1160,7 +1221,7 @@ func (app *App) createHAProxyClient(cfg *types.Config) *haproxy.Client {
 			if !client.SetSSHAgent() {
 				app.Logger.Error("no SSH auth available for HAProxy",
 					zap.String("key_path", haproxyKeyPath),
-					zap.String("host", cfg.HAProxyIP.String()))
+					zap.String("host", host))
 				return nil
 			}
 		}

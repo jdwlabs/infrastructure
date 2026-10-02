@@ -3,6 +3,7 @@ package haproxy
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 
@@ -92,4 +93,53 @@ func TestDeployedConfigSurfacesAPermissionFailure(t *testing.T) {
 	_, err := createTestClient(t, server).DeployedConfig(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), ConfigPath)
+}
+
+func TestKeepalivedStateReadsTheUnitState(t *testing.T) {
+	server := newMockSSHServer(t)
+	defer server.Close()
+	server.SetResponse("systemctl is-active keepalived", "inactive\n", 3)
+
+	state, err := createTestClient(t, server).KeepalivedState(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "inactive", state)
+}
+
+const addrsHoldingVIP = `1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: eth0    inet 192.168.1.11/24 brd 192.168.1.255 scope global eth0\       valid_lft forever preferred_lft forever
+2: eth0    inet 192.168.1.199/24 scope global secondary eth0\       valid_lft forever preferred_lft forever
+`
+
+func TestHoldsAddressFindsAVirtualAddressConfiguredOnTheHost(t *testing.T) {
+	server := newMockSSHServer(t)
+	defer server.Close()
+	server.SetResponse("ip -o -4 addr show", addrsHoldingVIP, 0)
+
+	holds, err := createTestClient(t, server).HoldsAddress(context.Background(), net.ParseIP("192.168.1.199"))
+	require.NoError(t, err)
+	assert.True(t, holds)
+}
+
+// 192.168.1.19 is a prefix of 192.168.1.199. A substring match without the
+// prefix-length boundary would name this host the holder of an address it
+// does not have.
+func TestHoldsAddressDoesNotMatchAnAddressThatIsOnlyAPrefix(t *testing.T) {
+	server := newMockSSHServer(t)
+	defer server.Close()
+	server.SetResponse("ip -o -4 addr show", addrsHoldingVIP, 0)
+
+	holds, err := createTestClient(t, server).HoldsAddress(context.Background(), net.ParseIP("192.168.1.19"))
+	require.NoError(t, err)
+	assert.False(t, holds)
+}
+
+// "Not the holder" and "could not ask" must stay different answers: reporting
+// an unreadable instance as a backup hides a possible second holder.
+func TestHoldsAddressFailsRatherThanReportingNotHeld(t *testing.T) {
+	server := newMockSSHServer(t)
+	defer server.Close()
+	server.SetResponse("ip -o -4 addr show", "sh: 1: ip: not found\n", 127)
+
+	_, err := createTestClient(t, server).HoldsAddress(context.Background(), net.ParseIP("192.168.1.199"))
+	require.Error(t, err)
 }
