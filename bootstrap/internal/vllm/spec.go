@@ -15,12 +15,15 @@ import (
 )
 
 type Spec struct {
-	Image      string   `yaml:"image"`
-	Model      Model    `yaml:"model"`
-	ServedName string   `yaml:"servedName"`
-	Port       int      `yaml:"port"`
-	Args       []string `yaml:"args"`
-	HealthGate Gate     `yaml:"healthGate"`
+	Image      string `yaml:"image"`
+	Model      Model  `yaml:"model"`
+	ServedName string `yaml:"servedName"`
+	// ServedAliases are further names the server answers to, so a consumer
+	// still requesting an old name keeps working while it moves to ServedName.
+	ServedAliases []string `yaml:"servedAliases"`
+	Port          int      `yaml:"port"`
+	Args          []string `yaml:"args"`
+	HealthGate    Gate     `yaml:"healthGate"`
 }
 
 type Model struct {
@@ -116,6 +119,28 @@ func validate(s Spec) error {
 	if !safeTokenRegex.MatchString(s.ServedName) {
 		return fmt.Errorf("servedName must match %s, got %q: Exec= is a systemd command line that splits on whitespace and quotes and expands %% and $", safeTokenRegex.String(), s.ServedName)
 	}
+	// --served-model-name takes one or more values, so a name starting with
+	// '-' would end the list and be parsed as the next option instead.
+	if strings.HasPrefix(s.ServedName, "-") {
+		return fmt.Errorf("servedName must not start with '-', got %q: --served-model-name would read it as the next option, not a name", s.ServedName)
+	}
+
+	seen := map[string]bool{s.ServedName: true}
+	for _, alias := range s.ServedAliases {
+		if !safeTokenRegex.MatchString(alias) {
+			return fmt.Errorf("servedAliases must each match %s, got %q: Exec= is a systemd command line that splits on whitespace and quotes and expands %% and $", safeTokenRegex.String(), alias)
+		}
+		if strings.HasPrefix(alias, "-") {
+			return fmt.Errorf("servedAliases must not start with '-', got %q: --served-model-name would read it as the next option, not a name", alias)
+		}
+		if alias == s.ServedName {
+			return fmt.Errorf("servedAliases must not repeat servedName %q: it is already the name the server answers to and reports", alias)
+		}
+		if seen[alias] {
+			return fmt.Errorf("servedAliases has a duplicate %q: each name is served once, so a repeat is a typo for another name", alias)
+		}
+		seen[alias] = true
+	}
 
 	if s.Port < 1 || s.Port > 65535 {
 		return fmt.Errorf("port must be 1–65535, got %d: the spec defines what runs on the host", s.Port)
@@ -152,7 +177,11 @@ func validate(s Spec) error {
 		// names, so --served_model_name is the same flag to vLLM as
 		// --served-model-name; look it up the way vLLM would, not the way
 		// it was spelled here.
-		if forbiddenFlags[strings.ReplaceAll(flagName, "_", "-")] {
+		canonical := strings.ReplaceAll(flagName, "_", "-")
+		if forbiddenFlags[canonical] {
+			if canonical == "--served-model-name" {
+				return fmt.Errorf("args must not contain %s: talops's rendered Exec= line sets it from servedName, so add a further name to servedAliases instead", flagName)
+			}
 			if flagName == "--model" {
 				return fmt.Errorf("args must not contain %s: model.repo is already passed positionally by talops's rendered Exec= line", flagName)
 			}
