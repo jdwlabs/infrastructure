@@ -99,11 +99,17 @@ resource "proxmox_virtual_environment_vm" "dev_vm" {
     # mount arriving mid-operation, failing the guest's autostart. See the
     # variable's description for the evidence and the migration cost.
     datastore_id = var.dev_vm_cloudinit_datastore
-    # Pinned for the move off NFS. The provider has no default here; state
-    # carries the qcow2 it computed from the old drive's .qcow2 file and replays
-    # it on the move. LVM-thin stores only raw volumes, so Proxmox rejects the
-    # create ("unsupported format 'qcow2'") after the provider has already
-    # removed the old drive, leaving the VM stopped and without one.
+    # One-time pin, only so the move off NFS succeeds. The provider has no
+    # default here; state carries the qcow2 it computed from the old drive's
+    # .qcow2 file and replays it on the move. LVM-thin stores only raw volumes,
+    # so Proxmox rejects the create ("unsupported format 'qcow2'") after the
+    # provider has already removed the old drive, leaving the VM stopped and
+    # without one.
+    #
+    # Remove this line straight after the apply that moves the drive. The
+    # provider reads no format back from a local-lvm volume, so a pin left in
+    # place shows a diff on every plan and powers the VM off to recreate the
+    # drive on every apply. With it gone, a targeted plan must show no changes.
     file_format = "raw"
 
     # Static, never a DHCP lease — same rule as every other VM here, and this
