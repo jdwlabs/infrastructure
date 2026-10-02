@@ -327,14 +327,52 @@ Cloud-init deliberately ships **no** `haproxy.cfg`. The distro placeholder is
 enough for the service to hold its ports; the real config arrives through the
 push path below, so there is only ever one config-rendering path.
 
-The list-of-objects shape is what a keepalived VIP pair would need, so HA
-remains an added element rather than a redesign.
+**High availability (keepalived VRRP group)**:
+
+Two or more `haproxy_vms` entries make the load balancer a VRRP group, on
+different Proxmox hosts and never a control-plane host. `haproxy_ip` becomes a
+virtual address that keepalived moves to a surviving instance; each instance
+has its own static address underneath it. One entry is a standalone load
+balancer and behaves exactly as it did before the group existed.
+
+```
+        cluster.jdwlabs.com / kubeconfig / talosconfig
+                           │
+                 192.168.1.199 (virtual)
+                 ┌─────────┴─────────┐
+        haproxy-1 (pve1)      haproxy-2 (pve5)
+        own address <A>  VRRP  own address <B>
+                 └─────────┬─────────┘
+                    control planes
+```
+
+- **Every instance binds the virtual address**, held or not
+  (`net.ipv4.ip_nonlocal_bind`). The generated config is therefore identical
+  on every instance, and a backup serves the moment the address arrives.
+- **No preemption.** The address stays where it is when a failed instance
+  returns, so a recovery costs clients nothing.
+- **An instance is eligible only while HAProxy listens on `:6443`.** A freshly
+  built one, still on the distro placeholder config, cannot claim the address.
+- **`talops` addresses instances, never the virtual address.** Pushing to the
+  virtual address would update only the holder.
+
+What does and does not follow the address — DNS, the UDP rules, the Tailscale
+subnet router — and why: [haproxy-vm-provisioning.md](haproxy-vm-provisioning.md)
+§5.5. Bringing the pair up: `scenarios/haproxy-keepalived-cutover.md`.
 
 **Dynamic Reconfiguration**:
-- `talops` SSHs to HAProxy host
+- `talops` SSHs to each HAProxy instance
 - Generates new backend configuration using VMIDs as server names
 - Reloads HAProxy gracefully
 - Health checks ensure traffic only routes to ready nodes
+
+In a group the push goes to every instance and does not stop at a failure: an
+unreachable instance is the case the group exists for, and the one still
+serving is the one that needs the new backends. A push that reaches only some
+instances is a `DivergenceError`. `reconcile` finishes the rest of its plan
+and then exits non-zero naming the instance left behind; a push that fails on
+every instance stops it, as a standalone failure always has. The preflight
+likewise fails only when no instance answers.
 
 **Inspecting and Converging the Load Balancer**:
 
@@ -359,6 +397,23 @@ Three properties are load-bearing:
   rebuild in `scenarios/haproxy-vm-rebuild.md` has actually happened.
 - **`--host` targets an address other than `haproxy_ip`.** A replacement is
   verified on a temporary address before DNS, tfvars, or anything else moves.
+
+For a VRRP group the same three commands work per instance:
+
+- `status` prints one row per instance — VM, SSH, `haproxy`, `keepalived`,
+  whether it holds the virtual address, config drift, backends up — plus the
+  holder and the holder's backend table. It exits 1 unless exactly one
+  instance holds the address and every instance is reachable with keepalived
+  active: `virtual_address_split`, `virtual_address_unheld`,
+  `instance_unreachable`, `keepalived_inactive`. A pair running on one leg is
+  serving, and it is still a failing report.
+- `plan` diffs each instance separately, so one lagging the other is visible.
+- `apply` pushes to each instance that drifts and skips the ones already
+  current, which makes a retry after a partial failure safe. If some instances
+  took the config and others did not it fails with `group_divergent` and does
+  not record the pushed hash.
+- `--host <instance-address>` narrows any of them to one instance, still
+  rendered against the virtual address.
 
 `apply` shares its install path with `reconcile`, so a fix to one is a fix to
 both, and it records the pushed config's hash in cluster state. That record is
