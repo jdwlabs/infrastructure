@@ -371,6 +371,39 @@ args: ` + args + `
 	}
 }
 
+// FlexibleArgumentParser rewrites --root.key=value into --root '{"key": ...}'
+// before argparse sees it, so a dotted form of a managed flag still sets it.
+func TestParseRejectsDottedManagedFlags(t *testing.T) {
+	cases := map[string]string{
+		"served-model-name, dotted":     "[--served-model-name.foo=x]",
+		"model, dotted, separate value": "[--model.foo, x]",
+		"revision, dotted":              "[--revision.foo=x]",
+		"abbreviated and dotted":        "[--served-model-nam.foo=x]",
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			data := []byte(`image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: qwen/qwen3-coder-30b-a3b
+args: ` + args + `
+`)
+			_, err := Parse(data)
+			require.Error(t, err)
+		})
+	}
+}
+
+// A dotted option whose root is not managed is ordinary vLLM configuration.
+func TestParseAcceptsDottedUnmanagedFlags(t *testing.T) {
+	_, err := Parse([]byte(`
+image: docker.io/vllm/vllm-openai:v0.24.0@sha256:` + strings.Repeat("a", 64) + `
+model: {repo: Org/M, revision: ` + strings.Repeat("b", 40) + `}
+servedName: qwen/qwen3-coder-30b-a3b
+args: [--compilation-config.level=3]
+`))
+	require.NoError(t, err)
+}
+
 // --max-model-len is not a prefix of any forbidden flag, so the prefix check
 // must not reject it.
 func TestParseAcceptsFlagsThatAreNotAbbreviations(t *testing.T) {
