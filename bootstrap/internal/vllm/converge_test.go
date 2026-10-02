@@ -1178,7 +1178,7 @@ func TestApplyHostPrereqFailure(t *testing.T) {
 
 func TestApplyReportsHostWarningsAsNotes(t *testing.T) {
 	s := sampleSpec()
-	h := install(newHost("inactive"), s).prepend(&rule{sub: "/etc/default/prometheus-node-exporter", out: "ARGS=\"\"\n"})
+	h := install(newHost("inactive"), s).prepend(&rule{sub: "/etc/default/prometheus-node-exporter", out: "ARGS=\"--collector.textfile.directory=/srv/textfiles\"\n"})
 
 	res := Apply(context.Background(), target(h, &fakeGate{h: h}), s)
 

@@ -498,7 +498,7 @@ func TestEnsureHostNvidiaCtkGenerateFailurePropagates(t *testing.T) {
 
 func TestEnsureHostReportsNodeExporterTextfileMismatch(t *testing.T) {
 	r := allInstalledOK()
-	r.out["/etc/default/prometheus-node-exporter"] = "ARGS=\"--collector.textfile.directory=/some/other/dir\"\n"
+	r.out["/etc/default/prometheus-node-exporter"] = "ARGS=\"--collector.textfile.directory=/srv/textfiles\"\n"
 
 	changed, err := EnsureHost(context.Background(), r)
 	require.NoError(t, err)
@@ -512,6 +512,51 @@ func TestEnsureHostReportsNodeExporterTextfileMismatch(t *testing.T) {
 	require.Len(t, changed, 1)
 	assert.Contains(t, changed[0], "warning: ")
 	assert.Contains(t, changed[0], "/etc/default/prometheus-node-exporter")
+}
+
+// Ubuntu's node-exporter already defaults --collector.textfile.directory to
+// the directory the drift check writes, and ships ARGS="" — so only an ARGS
+// that names some other directory is worth a warning. Warning on every
+// ARGS that merely omits the flag fired on every stock host.
+func TestEnsureHostNodeExporterTextfileDirectory(t *testing.T) {
+	cases := []struct {
+		name string
+		args string
+		err  error
+		warn string // the directory the warning must name; "" for no warning
+	}{
+		{name: "stock empty ARGS", args: "ARGS=\"\"\n"},
+		{name: "no ARGS line", err: errFail},
+		{name: "other flags only", args: "ARGS=\"--collector.systemd --web.listen-address=:9100\"\n"},
+		{name: "explicit default", args: "ARGS=\"--collector.textfile.directory=/var/lib/prometheus/node-exporter\"\n"},
+		{name: "explicit default, trailing slash", args: "ARGS=\"--collector.textfile.directory=/var/lib/prometheus/node-exporter/\"\n"},
+		{name: "explicit default, quoted value", args: "ARGS='--collector.textfile.directory=\"/var/lib/prometheus/node-exporter\"'\n"},
+		{name: "explicit default, space separated", args: "ARGS=\"--collector.textfile.directory /var/lib/prometheus/node-exporter\"\n"},
+		{name: "other directory", args: "ARGS=\"--collector.textfile.directory=/srv/textfiles\"\n", warn: "/srv/textfiles"},
+		{name: "other directory, space separated", args: "ARGS=\"--collector.textfile.directory /srv/textfiles\"\n", warn: "/srv/textfiles"},
+		{name: "default named in a longer path", args: "ARGS=\"--collector.textfile.directory=/var/lib/prometheus/node-exporter-old\"\n", warn: "/var/lib/prometheus/node-exporter-old"},
+		{name: "later ARGS line wins", args: "ARGS=\"--collector.textfile.directory=/srv/textfiles\"\nARGS=\"\"\n"},
+		{name: "later ARGS line overrides the default", args: "ARGS=\"\"\nARGS=\"--collector.textfile.directory=/srv/textfiles\"\n", warn: "/srv/textfiles"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := allInstalledOK()
+			r.out["/etc/default/prometheus-node-exporter"] = tc.args
+			if tc.err != nil {
+				r.fail = map[string]error{"/etc/default/prometheus-node-exporter": tc.err}
+			}
+
+			changed, err := EnsureHost(context.Background(), r)
+			require.NoError(t, err)
+			if tc.warn == "" {
+				assert.Empty(t, changed)
+				return
+			}
+			require.Len(t, changed, 1)
+			assert.Contains(t, changed[0], "warning: ")
+			assert.Contains(t, changed[0], "directory to "+tc.warn+",")
+		})
+	}
 }
 
 // ---- Stage ----
