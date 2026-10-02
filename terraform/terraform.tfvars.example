@@ -78,10 +78,10 @@ talos_worker_configuration = [
 gpu_vm_ssh_public_key = "ssh-ed25519 AAAA... you@host"
 
 # HAProxy load balancer VM(s)
-# Leave this list empty to provision nothing — a hand-built load balancer is
-# not represented in Terraform state, and an empty list keeps it that way.
+# Leave this list empty to provision nothing.
 #
-# To provision a replacement, add an entry and review the plan before applying:
+# One entry is a standalone load balancer: its own ip is the endpoint, and it
+# equals haproxy_ip above.
 # - Place it on a Proxmox host that runs no control-plane VM, so a single host
 #   failure cannot take a control-plane node and the load balancer together.
 # - Pick a vmid and an ip that are both free. Verify against the live cluster
@@ -98,9 +98,53 @@ haproxy_vms = []
 #     cpu_cores = 2
 #     memory    = 1024
 #     disk_size = 10
-#     ip        = "192.168.1.198/24"
+#     ip        = "192.168.1.199/24"
 #   },
 # ]
+
+# Two or more entries are a keepalived VRRP group. haproxy_ip stays what DNS,
+# kubeconfig and talosconfig point at and becomes a virtual address that moves
+# to a surviving instance when one is lost; nothing that points at it changes.
+# - Each entry sits on a different Proxmox host, none of them a control-plane
+#   host, and gets its OWN ip — never haproxy_ip, which validation rejects.
+# - The addresses below are placeholders, not allocations. Prove each one free
+#   on the day (scenarios/haproxy-keepalived-cutover.md, "Choose the instance
+#   addresses") before it goes anywhere near an apply.
+# - vrrp_priority only settles who takes the address when nobody holds it.
+#   The group does not preempt, so a returning instance stays a backup.
+# - Going from one entry to two changes the running instance's address and
+#   cloud-init. Follow the cutover runbook; do not apply this edit unscoped.
+#
+# haproxy_vms = [
+#   {
+#     node_name     = "pve1"
+#     vm_name       = "haproxy-1"
+#     vmid          = 110
+#     cpu_cores     = 2
+#     memory        = 1024
+#     disk_size     = 10
+#     ip            = "192.168.1.<free-a>/24"
+#     vrrp_priority = 150
+#   },
+#   {
+#     node_name     = "pve5"
+#     vm_name       = "haproxy-2"
+#     vmid          = 113
+#     cpu_cores     = 2
+#     memory        = 1024
+#     disk_size     = 10
+#     ip            = "192.168.1.<free-b>/24"
+#     vrrp_priority = 100
+#   },
+# ]
+#
+# Required with two or more entries. Exactly 8 letters or digits; generate it
+# in the vault edit itself (talops secrets edit), never in a shell whose
+# history or transcript would keep it:
+# haproxy_vrrp_auth_pass = "<8 letters or digits>"
+#
+# Only if another VRRP group on the LAN already uses router id 51:
+# haproxy_vrrp_router_id = 51
 
 haproxy_gateway        = "192.168.1.254"
 haproxy_ssh_public_key = "ssh-ed25519 AAAA... you@host"
