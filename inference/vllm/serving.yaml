@@ -26,6 +26,12 @@ args:
   # FP8 layers, quant_algo MIXED_PRECISION), and vLLM picks modelopt_mixed
   # from its quantization_config.
   - --max-model-len=32768
+  # vLLM's default of 256 concurrent sequences also sets CUDA-graph capture
+  # up to batch 512, and that profiling ran this hybrid model out of GPU
+  # memory at startup (30 GiB in use, a further 1.5 GiB requested) after its
+  # 19 GiB of weights loaded. The consumers send a few requests a minute, so
+  # 8 sequences cover them, and capture stops at batch 16.
+  - --max-num-seqs=8
   - --enable-auto-tool-choice
   - --tool-call-parser=qwen3_xml
   # A multimodal wrapper: skipping the vision tower keeps startup inside the
