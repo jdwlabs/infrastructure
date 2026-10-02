@@ -46,8 +46,12 @@ auth=()
 if [ -n "${API_KEY:-}" ]; then
   # A bearer key over plain HTTP crosses the network readable. Loopback is
   # the exception: that is a kubectl port-forward, whose tunnel is encrypted.
+  # An "@" is refused first: curl reads what precedes it as credentials, so
+  # http://localhost:x@host looks like loopback here and connects to host.
   case "$BASE_URL" in
-    https://* | http://localhost[:/]* | http://127.0.0.1[:/]*) ;;
+    https://*) ;;
+    *@*) fail "refusing to send API_KEY over plain HTTP to ${BASE_URL}: an \"@\" in the URL can hide the real host; use https:// or a localhost port-forward" ;;
+    http://localhost[:/]* | http://127.0.0.1[:/]*) ;;
     *) fail "refusing to send API_KEY over plain HTTP to ${BASE_URL}; use https:// or a localhost port-forward" ;;
   esac
   auth=(-H "Authorization: Bearer ${API_KEY}")
