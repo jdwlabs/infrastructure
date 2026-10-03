@@ -4,6 +4,10 @@ How to recover a pve1-5 or TrueNAS host that has gone unreachable without
 physical access, what this procedure does and does not cover, and how the
 unreachable-host alert works.
 
+When a host has already gone dark, start at `scenarios/proxmox-host-dark.md`
+— it orders the steps (confirm scope, Wake-on-LAN, physical power cycle,
+rebuild) and sends you here for the first two.
+
 ## Why this exists
 
 2026-08-11: TrueNAS (192.168.1.205) was found powered off with no warning and
@@ -273,6 +277,13 @@ confirmation only — the alert firing on a real outage has not been
 independently drilled (see "Testing" below, which covers WoL recovery, not
 the alert path itself).
 
+**It has since fired on a real outage, late.** pve1 stopped at about 23:45 UTC
+on 2026-10-01 and `HardwareHostUnreachable` fired at 23:59. The exporter pod
+was running on pve1's own worker and went down with the host; probing resumed
+from a replacement pod on pve5 at 23:53 and the five-minute window started
+then. The alert works, and its delay depends on whether the dead host was
+carrying the prober. Detail in `scenarios/proxmox-host-dark.md`.
+
 ## Off-LAN access (JDWLABS-284 relationship)
 
 This procedure is LAN-only end to end: waking a host needs a magic packet
@@ -389,6 +400,16 @@ Only pve2 tested so far. pve1, pve3, pve4 configured identically and expected
 to behave the same; pve5 deliberately not tested (hosts the operator's own
 active session) — treat as configured-but-unverified until tested
 separately, off-hours.
+
+Not a test, but the first real attempt, on pve1, 2026-10-01: the host stopped
+abruptly and two rounds of magic packets did not wake it. A manual power cycle
+did. `Wake-on: g` was confirmed on `nic1` after it returned, so the setting
+was in place. The power LED was on when the host was reached, so this was not
+the lost-power case above but a third one: a host hung with power still on.
+WoL wakes a soft-off machine, not a running one that has stopped responding,
+and no setting changes that. So this says nothing either way about whether
+WoL works on pve1 — do not read it as "tested and working" on the strength of
+pve2's result, nor as broken.
 
 Tested live on TrueNAS, 2026-08-25:
 
