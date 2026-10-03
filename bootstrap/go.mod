@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/hashicorp/hcl/v2 v2.25.0
-	github.com/siderolabs/talos/pkg/machinery v1.14.1
+	github.com/siderolabs/talos/pkg/machinery v1.14.2
 	github.com/skeema/knownhosts v1.3.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
