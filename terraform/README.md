@@ -147,6 +147,26 @@ applying it arms a dnsmasq rollout on the production load balancer that will
 fire whenever that VM next restarts. It belongs with that work
 (`scenarios/lan-dns-resolver-deploy.md`), not with a memory resize.
 
+### `-target` on one instance still replaces the other instances' snippets
+
+`-target` follows dependencies between resources, not between instances. A
+plan targeted at `proxmox_virtual_environment_vm.haproxy["haproxy-2"]` depends
+on the whole of `proxmox_virtual_environment_file.haproxy_cloud_init`, so it
+also carries a pending replacement of `haproxy-1`'s snippet — and with it the
+cloud-init re-run that fires at `haproxy-1`'s next boot. Targeting narrows the
+VMs an apply touches; it does not narrow the snippets.
+
+For the HAProxy group this is designed for rather than avoided. The snippet
+and the VM's `ip_config` are separate objects and cannot be made to change
+atomically, so the cloud-init carries its own guard: keepalived is skipped
+unless the instance address its config was rendered for is configured on the
+host. An instance that boots between the two applies comes back as the
+standalone load balancer it was. `scenarios/haproxy-keepalived-cutover.md`
+sequences the two applies around that window, and
+`tests/haproxy.tftest.hcl` pins the standalone snippet's digest so a change
+that would replace it on a live standalone load balancer fails CI instead of
+arriving as a surprise in a plan.
+
 ## Clearing the devbox snippet's line-ending drift
 
 devbox's snippet differs from the rendered template in line endings only. The

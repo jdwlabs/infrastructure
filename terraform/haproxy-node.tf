@@ -55,6 +55,19 @@ resource "proxmox_virtual_environment_file" "haproxy_cloud_init" {
       # Single source of truth for the LAN split-horizon override — see the
       # file itself for why its values are hardcoded rather than templated.
       dnsmasq_config = trimspace(file("${path.module}/files/dnsmasq-jdwlabs-lan.conf"))
+      # null for a standalone load balancer, which makes the template render
+      # byte-for-byte what it rendered before the VRRP group existed. That is
+      # load-bearing, not tidiness: any byte of difference replaces the
+      # snippet and re-runs cloud-init on the live VM at its next boot.
+      keepalived = length(var.haproxy_vms) < 2 ? null : {
+        virtual_address = "${var.haproxy_ip}/${split("/", each.value.ip)[1]}"
+        instance_ip     = split("/", each.value.ip)[0]
+        peer_ips        = [for vm in var.haproxy_vms : split("/", vm.ip)[0] if vm.vm_name != each.value.vm_name]
+        priority        = each.value.vrrp_priority
+        router_id       = var.haproxy_vrrp_router_id
+        interface       = var.haproxy_vrrp_interface
+        auth_pass       = var.haproxy_vrrp_auth_pass
+      }
     })
   }
 }

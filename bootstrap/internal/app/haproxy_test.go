@@ -18,8 +18,9 @@ func haproxyTestContext() *haproxyContext {
 	cfg.IngressTLSNodePort = 30443
 
 	return &haproxyContext{
-		cfg:  cfg,
-		host: "192.168.1.199",
+		cfg:   cfg,
+		host:  "192.168.1.199",
+		group: haproxy.Group{BindAddress: cfg.HAProxyIP, Instances: []haproxy.Instance{{Host: "192.168.1.199"}}},
 		deployed: &types.ClusterState{
 			ControlPlanes: []types.NodeState{
 				{VMID: 201, IP: net.ParseIP("192.168.1.21")},
@@ -47,6 +48,9 @@ func TestRenderConfigCountsEveryBackend(t *testing.T) {
 func TestRenderConfigBindsTheOverriddenHost(t *testing.T) {
 	hc := haproxyTestContext()
 	hc.host = "192.168.1.198"
+	group, err := haproxy.ResolveGroup(hc.cfg, hc.host)
+	require.NoError(t, err)
+	hc.group = group
 
 	rendered, _, failure := hc.renderConfig()
 
