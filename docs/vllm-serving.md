@@ -30,9 +30,9 @@ of an `apply`'s restart and health check:
 - LiteLLM's `pr-reviewer` route (the same `platform` file)
 
 Each names the model in every request, and the server refuses a name it does
-not serve with a 404. The server's name is `local-chat`. All three consumers
-still request the previous name, `qwen/qwen3-coder-30b-a3b`, which stays in
-`servedAliases` until all three have moved to `local-chat`. See
+not serve with a 404. All three request `local-chat`, the server's only
+name, so a model change in `serving.yaml` needs no edit in either consumer
+repo. Renaming it again follows
 [Renaming the served model](#renaming-the-served-model).
 
 `talops vllm plan` names these same three consumers whenever it reports a
@@ -323,7 +323,7 @@ fields[5]{name,git,applied,live}:
   imageDigest,sha256:251eba...,sha256:251eba...,sha256:251eba...
   modelRevision,c58857a...,c58857a...,n/a
   servedName,local-chat,local-chat,local-chat
-  servedAliases,qwen/qwen3-coder-30b-a3b,qwen/qwen3-coder-30b-a3b,qwen/qwen3-coder-30b-a3b
+  servedAliases,-,-,-
   argsHash,3f2a...,3f2a...,3f2a...
 ```
 
