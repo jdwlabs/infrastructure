@@ -60,8 +60,12 @@ box.
 
 ## 4. Storage & mobility — decision
 
-**Put this VM's disk on `truenas-vmdisks`, the TrueNAS-backed NFS storage
-that already exists cluster-wide.** With the disk on shared storage reachable
+**Current: the root disk is on pve5's `local-lvm` NVMe** — see the 2026-10-05
+revision below; a host move copies the disk (`scenarios/dev-vm-migrate.md`).
+
+**Original decision (2026-08-09, superseded): put this VM's disk on
+`truenas-vmdisks`, the TrueNAS-backed NFS storage that already exists
+cluster-wide.** With the disk on shared storage reachable
 from every pve host, moving the VM is `qm migrate <vmid> <target-node>
 --online` (or the Proxmox UI) — only VM RAM state transfers, since the disk
 doesn't move. Seconds of downtime.
@@ -149,7 +153,7 @@ Resources, following the `gpu-node.tf` pattern:
   `content_type = "import"`, same API-import path (avoids needing an
   ssh-agent reachable from the Windows workstation).
 - `proxmox_virtual_environment_vm` — disk on `var.dev_vm_storage_pool`
-  (the new NFS datastore, not `local`/`local-lvm`), virtio NIC on `vmbr0`,
+  (pve5's `local-lvm` NVMe; a host move copies the disk), virtio NIC on `vmbr0`,
   `agent { enabled = true }`, `on_boot = true`, cloud-init `initialization`
   block (static IP, user, SSH key), tags `["dev", "workstation"]`.
 

@@ -13,8 +13,8 @@
 
 # content_type "import": API-based import_from instead of the provider's
 # node-SSH importdisk path, which cannot reach an ssh-agent from this
-# workstation. Staged on "local" — the disk itself lands on the NFS
-# datastore via the disk block's datastore_id below.
+# workstation. Staged on "local" — the disk itself lands on
+# var.dev_vm_storage_pool via the disk block's datastore_id below.
 resource "proxmox_virtual_environment_download_file" "dev_vm_cloud_image" {
   content_type       = "import"
   datastore_id       = var.dev_vm_image_datastore
@@ -92,10 +92,10 @@ resource "proxmox_virtual_environment_vm" "dev_vm" {
   }
 
   initialization {
-    # Local, not the NFS pool the root disk uses: this drive is deleted and
-    # recreated on every start, and against NFS that recreate collides with the
-    # mount arriving mid-operation, failing the guest's autostart. See the
-    # variable's description for the evidence and the migration cost.
+    # Local, never NFS: this drive is deleted and recreated on every start,
+    # and against NFS that recreate collides with the mount arriving
+    # mid-operation, failing the guest's autostart. See the variable's
+    # description for the evidence.
     datastore_id = var.dev_vm_cloudinit_datastore
     # One-time pin, only so the move off NFS succeeds. The provider has no
     # default here; state carries the qcow2 it computed from the old drive's
