@@ -401,8 +401,9 @@ Tested live on TrueNAS, 2026-08-25:
    packet involved and proved nothing; only a genuine full power-off tests
    WoL. Confirm the UI action was Shutdown, not Restart, before trusting a
    fast recovery as evidence.
-3. Devbox itself is a Proxmox VM whose disk lives on `truenas-vmdisks` (NFS,
-   see `terraform/variables.tf`) — the operating session's own devbox
+3. Devbox itself is a Proxmox VM whose disk lived on `truenas-vmdisks` (NFS)
+   at the time; it has been on pve5's local NVMe since 2026-10-05, so this
+   stall applies only to guests still on NFS — the operating session's own devbox
    correctly stalled for the duration of the outage, the same D-state
    failure mode the original 2026-08-11 incident hit. Expect this if
    testing from a machine whose storage depends on the host being woken;
