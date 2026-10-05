@@ -383,7 +383,7 @@ variable "dev_vm_snippet_datastore" {
 }
 
 variable "dev_vm_cloudinit_datastore" {
-  description = "Datastore for the generated cloud-init drive. Local on purpose, unlike dev_vm_storage_pool: Proxmox deletes and recreates this drive on every VM start, and on the NFS datastore that recreate races the mount coming up at boot, failing the guest's autostart with `disk image ... already exists` (observed on both pve5 boots on 2026-09-23). The root disk on NFS is unaffected because it is only ever opened, never created. Local LVM is available before any network storage, so there is nothing to race. Cost: an online migration now has one 4 MB local volume and needs --with-local-disks."
+  description = "Datastore for the generated cloud-init drive. Local on purpose: Proxmox deletes and recreates this drive on every VM start, and on the NFS datastore that recreate races the mount coming up at boot, failing the guest's autostart with `disk image ... already exists` (observed on both pve5 boots on 2026-09-23). Local LVM is available before any network storage, so there is nothing to race."
   type        = string
   default     = "local-lvm"
 }
