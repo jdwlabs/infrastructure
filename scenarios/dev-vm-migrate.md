@@ -6,12 +6,15 @@ records the procedure so it's ready to execute (and prove) the moment a
 second qualifying host exists; see `docs/dev-vm-provisioning.md` §8/§9 for
 the capacity gap driving the block.
 
-## Why this should be cheap
+## What a move costs
 
-devbox's disk lives on `truenas-vmdisks`, NFS storage shared across every
-Proxmox node (`docs/dev-vm-provisioning.md` §4). Because the disk doesn't
-need to move, `qm migrate --online` only has to transfer VM RAM state over
-the network — seconds of blip, not a restore-from-backup exercise.
+devbox's root disk is on pve5's local NVMe (`local-lvm`) since 2026-10-05; it
+was on the shared `truenas-vmdisks` NFS store before that
+(`docs/dev-vm-provisioning.md` §4 revision). A move therefore copies the disk
+as well as RAM: `qm migrate --online --with-local-disks` mirrors the used
+blocks (~70 GB at the time of the switch) to the target's local storage while
+the guest keeps running. Expect minutes of copying and extra disk load, then
+the same seconds-long switch-over.
 
 ## Why it's blocked today
 
@@ -55,12 +58,11 @@ ceiling, not a process gap.
    ```bash
    pvesh get /nodes/<target>/status --output-format json | jq '.memory'
    ```
-2. Confirm `truenas-vmdisks` is active on the target (it should be
-   cluster-wide already — §4 correction in the provisioning doc — but verify
-   rather than assume):
+2. Confirm the target's `local-lvm` has room for the disk's used blocks
+   plus headroom:
    ```bash
    pvesh get /nodes/<target>/storage --output-format json \
-     | jq -r '.[] | select(.storage=="truenas-vmdisks")'
+     | jq -r '.[] | select(.storage=="local-lvm") | .avail'
    ```
 3. Confirm the target isn't a control-plane host (pve2/pve3/pve4) — req #4
    in the provisioning doc applies to any node devbox actually runs on, not
@@ -90,7 +92,7 @@ ceiling, not a process gap.
 ## Migrate out
 
 ```bash
-qm migrate 111 <target> --online
+qm migrate 111 <target> --online --with-local-disks --targetstorage local-lvm
 ```
 
 1. Watch the task log in the Proxmox UI (Datacenter → Tasks) or:
@@ -122,7 +124,7 @@ theoretical until this runs once.
 Repeat the same command in reverse once the outbound leg is verified:
 
 ```bash
-qm migrate 111 pve5 --online
+qm migrate 111 pve5 --online --with-local-disks --targetstorage local-lvm
 ```
 
 Re-run the same post-checks. Only after both legs succeed is the "movable
@@ -135,7 +137,7 @@ not just designed for.
   (32GB until the pending `dev_vm_memory` resize lands, 16GB after) with
   headroom for the target's existing workloads — this is the current,
   standing blocker either way.
-- `truenas-vmdisks` isn't active on the target.
+- The target's `local-lvm` can't hold the disk's used blocks.
 - `qm agent 111 ping` fails to answer within a minute of the task log
   reporting completion.
 

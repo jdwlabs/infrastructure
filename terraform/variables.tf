@@ -323,7 +323,7 @@ variable "dev_vm_memory" {
 }
 
 variable "dev_vm_disk_size" {
-  description = "Root disk size (GiB), on the NFS-backed datastore so the VM can live-migrate."
+  description = "Root disk size (GiB)."
   type        = number
   default     = 300
 }
@@ -353,9 +353,9 @@ variable "dev_vm_ssh_public_key" {
 }
 
 variable "dev_vm_storage_pool" {
-  description = "Datastore for the dev VM's root disk. `truenas-vmdisks` (NFS, cluster-wide, backed by TrueNAS storage/proxmox) already exists — verified live via the Proxmox API on 2026-08-09, active on every node, currently empty. Not local/local-lvm — that's what makes online migration between Proxmox hosts possible."
+  description = "Datastore for the dev VM's root disk. pve5's local-lvm (NVMe), not the truenas-vmdisks NFS share it started on: NFS sync writes held the guest at ~100 ms per write and stalled its builds and agent servers for seconds at a time, while the live-migration NFS was chosen for never became possible (no other node can hold the VM). Moving hosts now needs `--with-local-disks`."
   type        = string
-  default     = "truenas-vmdisks"
+  default     = "local-lvm"
 }
 
 variable "dev_vm_cloud_image_url" {

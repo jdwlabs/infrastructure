@@ -77,6 +77,21 @@ NFS", separate from the `truenas-nfs` k8s PVC tier (`storage/k8s/vols`) and
 thing to use it. Nothing left to provision here — §8 Phase 0's storage item
 is done, not outstanding.
 
+**Revision (2026-10-05): the root disk moved to pve5's `local-lvm`.** The
+shared disk cost more than its mobility was worth. Measured inside the guest,
+writes averaged ~95–135 ms with the disk 70–85% busy and tasks stalled on I/O
+roughly half the time: every guest flush became a synchronous NFS write to
+TrueNAS. The T3 Code server, which writes SQLite synchronously, froze for up to
+16 s at a time, dropping every client connection. Meanwhile the benefit never
+materialised — no node besides pve5 has had the memory to receive this VM
+(`scenarios/dev-vm-migrate.md`). pve5's local-lvm sits on a Samsung 9100 PRO
+NVMe, and the move was done live (`qm disk move 111 scsi0 local-lvm --delete
+1`). What it gives up: the disk is now a single drive rather than TrueNAS
+storage, covered by §6's nightly `vzdump` (7 kept), so a drive failure loses up
+to a day; and a host move copies the disk (`qm migrate --online
+--with-local-disks`). A side benefit: the guest no longer hangs when TrueNAS
+does.
+
 ### Alternatives considered
 
 - **ZFS storage replication** (disk stays local-per-node, Proxmox replicates
@@ -102,12 +117,12 @@ dev_vm_name             = "devbox"
 dev_vm_id               = 111
 dev_vm_cores            = 8
 dev_vm_memory           = 32768   # 32GB
-dev_vm_disk_size        = 300     # 300GB, on the new NFS datastore
+dev_vm_disk_size        = 300     # 300GB
 dev_vm_ip               = "192.168.1.56/24"
 dev_vm_gateway          = "192.168.1.254"
 dev_vm_user             = "dev-admin"
 dev_vm_ssh_public_key   = "ssh-ed25519 AAAA..."   # same key already used for the GPU VM
-dev_vm_storage_pool     = "truenas-vmdisks"       # existing cluster-wide NFS storage, see §4
+dev_vm_storage_pool     = "local-lvm"             # pve5 NVMe; NFS until 2026-10-05, see §4
 ```
 
 Placement: **pve5**, not pve1 as originally planned. Phase 0's pre-flight
