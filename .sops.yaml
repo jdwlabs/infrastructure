@@ -1,7 +1,12 @@
 creation_rules:
     - path_regex: \.enc\.ya?ml$
-      # Two recipients: the workstation device key (~/.config/sops/age/keys.txt)
-      # and an offline recovery key held outside any repo device (break-glass,
-      # per docs/secrets.md). Vault re-keyed after the original single device
-      # key was lost — single-recipient vaults have no recovery path.
-      age: age1mnzxgvn0zq7t0fqc59uc9f3a24g5wmye9f6gqaa080w240s4q3gs40q9ch,age1ucm8z6jwu0cxk757whhjxvqnv9nf6egfaeltjc8ulxf9f8clpcnqggjv55
+      # Recipients: the workstation device key (~/.config/sops/age/keys.txt),
+      # an offline recovery key held outside any repo device (break-glass, per
+      # docs/secrets.md), and devbox2's own key so the lifeboat can plan and
+      # apply while devbox is down. Vault re-keyed after the original single
+      # device key was lost — single-recipient vaults have no recovery path.
+      #
+      # devbox2 is deliberately absent from backend-tls.enc.yaml (CA private
+      # key) and vault-unseal.enc.yaml (Vault root token): it needs neither, so
+      # do not `sops updatekeys` those two from this rule.
+      age: age1mnzxgvn0zq7t0fqc59uc9f3a24g5wmye9f6gqaa080w240s4q3gs40q9ch,age1ucm8z6jwu0cxk757whhjxvqnv9nf6egfaeltjc8ulxf9f8clpcnqggjv55,age1gdgt2z5rczspfmfzksx2jang2kmgh80wawzgh32c2uw4hywj8fpsw728vs
