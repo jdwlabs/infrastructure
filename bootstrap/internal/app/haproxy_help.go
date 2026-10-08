@@ -53,6 +53,35 @@ func helpForFailure(f *haproxy.Failure) []string {
 			"The install path validates and rolls back, so the previous config is still serving",
 			"Review what would change before retrying: talops haproxy plan --full",
 		}
+	case "haproxy_group_invalid":
+		return []string{
+			"With two or more haproxy_vms, haproxy_ip is the virtual address and every entry needs its own ip",
+			"Target one instance while tfvars is mid-change: talops haproxy status --host <instance-ip>",
+		}
+	case "virtual_address_split":
+		return []string{
+			"The instances cannot hear each other's VRRP adverts: on each, journalctl -u keepalived -n 50",
+			"Check the peers and the shared secret match: sudo grep -A3 unicast_peer /etc/keepalived/keepalived.conf",
+		}
+	case "virtual_address_unheld":
+		return []string{
+			"An instance takes the address only while HAProxy listens on :6443: talops haproxy apply",
+			"Then on each instance: systemctl status keepalived",
+		}
+	case "instance_unreachable", "instance_unread":
+		return []string{
+			"One instance on its own: talops haproxy status --host <instance-ip>",
+			"Once it is back, converge it: talops haproxy apply  # instances already current are skipped",
+		}
+	case "keepalived_inactive":
+		return []string{
+			"On that instance: systemctl status keepalived  # a skipped condition means its own address is not configured on it",
+		}
+	case "group_divergent":
+		return []string{
+			"Retry once the failed instance is reachable: talops haproxy apply  # instances already current are skipped",
+			"See which instance is behind: talops haproxy plan",
+		}
 	case "unknown_field":
 		return []string{"Drop --fields for the default schema, or use --full for every column"}
 	}

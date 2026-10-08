@@ -30,7 +30,11 @@ func haproxyCmd(a *app.App) *cobra.Command {
 This group never mutates Proxmox: the VM is Terraform-managed and human-applied,
 so provisioning it stays behind ` + "`talops infra plan`" + ` and an operator's apply.
 ` + "`status`" + ` and ` + "`plan`" + ` read only. ` + "`apply`" + ` writes exactly one file — the generated
-haproxy.cfg — through the same validated, auto-rollback path reconcile uses.`,
+haproxy.cfg — through the same validated, auto-rollback path reconcile uses.
+
+With two or more haproxy_vms declared the load balancer is a keepalived VRRP
+group: haproxy_ip is a virtual address, and every command here works on each
+instance at its own address. ` + "`--host`" + ` narrows that to one instance.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -50,7 +54,7 @@ haproxy.cfg — through the same validated, auto-rollback path reconcile uses.`,
 	}
 
 	cmd.PersistentFlags().StringVar(&opts.Host, "host", "",
-		"Load-balancer address to target (default: haproxy_ip from tfvars)")
+		"Load-balancer address to target (default: haproxy_ip, or every haproxy_vms instance when two or more are declared)")
 	cmd.PersistentFlags().StringSliceVar(&opts.Fields, "fields", nil,
 		"Backend columns to print (default: name,addr,status,check)")
 	cmd.PersistentFlags().BoolVar(&opts.Full, "full", false,
@@ -87,7 +91,12 @@ Terraform-managed VM, SSH reachability, the haproxy service, whether the
 deployed config still matches current cluster state, and each backend's health
 as HAProxy itself reports it.
 
-A layer that could not be read reports "unknown" rather than a clean result.`,
+A layer that could not be read reports "unknown" rather than a clean result.
+
+For a VRRP group this prints one row per instance and names the holder of the
+virtual address. It fails unless exactly one instance holds the address and
+every instance is reachable with keepalived active — anything less is a group
+that would not survive losing a host.`,
 		Example: `  # Default schema: name, addr, status, check
   talops haproxy status
 
@@ -96,7 +105,10 @@ A layer that could not be read reports "unknown" rather than a clean result.`,
 
   # Extra columns, or every column the running HAProxy emits
   talops haproxy status --fields name,addr,status,check,weight,downtime
-  talops haproxy status --full`,
+  talops haproxy status --full
+
+  # One instance of a VRRP group, at its own address
+  talops haproxy status --host 192.168.1.12`,
 		Args: cobra.NoArgs,
 		// Usage dumps and a second, differently-worded copy of the error on
 		// stderr both compete with the structured report already on stdout.
@@ -119,7 +131,8 @@ func haproxyPlanCmd(a *app.App, opts *app.HAProxyOptions) *cobra.Command {
 installed on the load balancer. Nothing is written.
 
 Drift is the answer, not a failure: this exits successfully either way, and
-` + "`drift: true|false`" + ` is the signal to branch on.`,
+` + "`drift: true|false`" + ` is the signal to branch on. A VRRP group is diffed
+per instance, so one member lagging the other shows up as drift on that row.`,
 		Example: `  talops haproxy plan
   talops haproxy plan --full          # untruncated diff
   talops haproxy plan --host 192.168.1.198`,
@@ -147,7 +160,11 @@ back automatically if validation fails.
 
 Idempotent — no drift means no push and ` + "`changed: false`" + `. This is a
 config-only lever: it never provisions, destroys, or reconfigures the VM.
-Combine with the global --dry-run to stop short of the push.`,
+Combine with the global --dry-run to stop short of the push.
+
+A VRRP group is pushed instance by instance, and a failure on one does not
+stop the rest. If only some took the config the command fails with
+` + "`group_divergent`" + `; re-running it skips the instances already current.`,
 		Example: `  talops haproxy apply
   talops haproxy apply --dry-run      # report drift, push nothing
   talops haproxy apply --host 192.168.1.198`,
