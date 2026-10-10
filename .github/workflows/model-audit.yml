@@ -64,7 +64,7 @@ jobs:
             jq -r '.rejected[] | [.repo, .reason] | @tsv' audit-out/report.json > audit-out/rejected.tsv
           fi
 
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: model-audit-${{ github.run_id }}
