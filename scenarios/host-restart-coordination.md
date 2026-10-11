@@ -1,17 +1,17 @@
 # Runbook: Coordinating a Proxmox host restart
 
-Status: **devbox2 does not exist yet.** This runbook describes the
-steady-state procedure for once it is provisioned
-(`docs/devbox2-provisioning.md`, `terraform/devbox2-node.tf`, VMID 112,
-192.168.1.57 on pve1) — that apply is a later, human-gated step, not
-something this document performs or assumes has happened. The pve5 memory
-reclaim it depends on for headroom (`dev_vm_memory` 32768 → 16384) is
-committed in the same design but likewise not yet applied. **Until both
-land, a pve5 restart has no lifeboat**: if devbox is down, there is nowhere
-else in this fleet to work from, and this procedure's pve5 section cannot be
-followed as written. Live guest and quorum state below was checked
-2026-09-01/02; re-verify before acting if reading this more than a few weeks
-later.
+Status: **devbox2 exists; the pve5 memory reclaim does not.** devbox2 (VMID
+112, 192.168.1.57 on pve1, `docs/devbox2-provisioning.md`) was running on
+2026-10-02, so a pve5 restart has its lifeboat. The reclaim that was designed
+alongside it (`dev_vm_memory` 32768 → 16384) is still unapplied — VM 111's
+config read `memory: 32768` the same day. Live guest and quorum state below was
+checked 2026-09-01/02 unless a later date is given; re-verify before acting if
+reading this more than a few weeks later.
+
+**This is the planned procedure.** For a host that went down without being
+asked — no pre-flight, no drain — start at `scenarios/proxmox-host-dark.md`.
+Its post-recovery checklist is this runbook's post-flight plus the checks an
+undrained stop needs.
 
 ## Why this exists
 
@@ -225,7 +225,7 @@ depends on devbox being up, same as before devbox2 existed.
 4. Reboot pve1.
 5. Post-flight:
    ```
-   ssh root@pve1 'qm list'                 # 110, 112, 300 running again
+   ssh root@pve1 'qm list'                 # 110 and 300 running; 112 will NOT be
    kubectl uncordon talos-4h8-zy6
    kubectl get nodes                       # 8 Ready
    kubectl -n longhorn-system get volumes.longhorn.io   # back to healthy
@@ -239,6 +239,16 @@ depends on devbox being up, same as before devbox2 existed.
    hangs or times out here is HAProxy, not the cluster. Remember uncordon
    only re-enables scheduling on `talos-4h8-zy6`; it does not move anything
    back that the drain relocated elsewhere.
+
+   **devbox2 (112) does not autostart**, for the same reason devbox does not
+   on pve5 (below): its cloud-init drive is on the NFS datastore. Seen on the
+   2026-10-02 boot of pve1 — `pve-guests` logged `disk image
+   '/mnt/pve/truenas-vmdisks/images/112/vm-112-cloudinit.qcow2' already exists`
+   and moved on. Start it by hand:
+   ```
+   ssh root@pve1 'qm start 112'
+   ```
+   The fix is merged in Terraform and not yet applied.
 
 ## pve2
 
