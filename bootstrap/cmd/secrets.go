@@ -193,6 +193,7 @@ func secretsAddDeviceCmd(a *app.App) *cobra.Command {
 }
 
 func printAddDevicePlan(cmd *cobra.Command, a *app.App, pubKey string) error {
+	a.Vault.ResolveClusterNameFromVault(cmd.Context())
 	plan, err := a.Vault.PlanAddRecipient(pubKey)
 	if err != nil {
 		return err
