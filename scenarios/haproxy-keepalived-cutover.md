@@ -38,7 +38,7 @@ What rides along, and what does not:
 |---|---|---|
 | Kubernetes API, Talos API, HTTP(S) ingress | Follows the virtual address | None beyond the failover itself (a few seconds, open connections reset) |
 | LAN DNS (`dnsmasq`, `.199:53`) | Follows it. Both instances run the same config; `bind-dynamic` opens the socket when the address arrives | None |
-| Bedrock UDP from the LAN (`.199:19132`) | Follows it once the nftables rules are copied to `haproxy-2` (step 8) | None. Existing sessions drop — NAT state is not shared |
+| Bedrock UDP from the LAN (`.199:19132`) | Follows it once `haproxy-2` carries the UDP rules (step 8) | None. Existing sessions drop — NAT state is not shared |
 | Bedrock UDP from the internet | **Stays on `haproxy-1`.** The gateway's forward is attached to `haproxy-1`'s MAC, not to `.199` | External Bedrock is down until pve1 returns. No worse than today |
 | Tailscale subnet router | **Stays on `haproxy-1`.** | Tailnet clients lose the `192.168.1.0/24` route until pve1 returns. Hosts that are tailnet nodes themselves stay reachable |
 
@@ -82,9 +82,13 @@ starts it at the moment `haproxy-1` lets go.
 2. `talops haproxy status` is clean against today's standalone load balancer
    (`ssh: ok`, `service: active`, `configDrift: false`, `backendsUp: N/N`).
 3. **Choose the instance addresses.** `<A>` and `<B>` are not allocated by this
-   repo. Pick two in the statically-addressed range (`docs/host-addressing.md`), then prove each free from
-   a LAN host — nothing answers, nothing holds a neighbour entry, and a
-   duplicate-address probe gets no reply:
+   repo. Both must be below `192.168.1.64`: the gateway's DHCP pool is
+   observed to span roughly `.64`-`.253` (`docs/host-addressing.md`), so only
+   an address under that floor cannot be leased to something else later. Both
+   must also be unused, and several addresses down there are not — `.50`,
+   `.56` and `.57` at least. Prove each candidate free from a LAN host —
+   nothing answers, nothing holds a neighbour entry, and a duplicate-address
+   probe gets no reply:
    ```bash
    for ip in <A> <B>; do
      ping -c2 -W1 "$ip"                       # expect: 100% packet loss
@@ -132,6 +136,28 @@ starts it at the moment `haproxy-1` lets go.
 11. A quiet window. Expect two interruptions of a few seconds each (steps 9-10
     and the failover test), and every open connection through the load
     balancer reset both times.
+12. **You are on a LAN host**, with an address in `192.168.1.0/24` of its own
+    — not a tailnet client reaching the LAN through the subnet route. Step 9
+    shuts down `haproxy-1`, which is the subnet router, and the route stays
+    down until step 12; a session that depends on it is cut off with the
+    endpoint dark and no way to run step 10.
+13. A running ssh-agent holding a key that `root@pve1` and `root@pve5` both
+    accept. The provider uploads snippets and imports disks over node SSH and
+    reads keys only from an agent (`terraform/providers.tf`), so without one
+    the apply in step 5 fails partway:
+    ```bash
+    ssh-add -l || { eval "$(ssh-agent -s)" && ssh-add ~/.ssh/<key>; }
+    ssh root@pve1 true && ssh root@pve5 true
+    ```
+14. `<A>` and `<B>` have no `known_hosts` entries, stale or otherwise:
+    ```bash
+    for ip in <A> <B>; do ssh-keygen -F "$ip"; done    # expect: no output
+    ```
+    The entries themselves cannot be made yet — neither address answers until
+    its instance boots. Steps 6 and 12 add them, with
+    `ssh-keyscan -t rsa,ecdsa,ed25519`: `talops` may negotiate any of the three
+    key types, and an entry covering only some of them fails as a key mismatch
+    (`docs/host-addressing.md`, "SSH host keys are part of this").
 
 ## Stage — nothing here touches production traffic
 
@@ -161,21 +187,41 @@ starts it at the moment `haproxy-1` lets go.
    terraform plan -target='proxmox_virtual_environment_vm.haproxy["haproxy-2"]' -out=tfplan-lb2
    terraform show tfplan-lb2 | less
    ```
-3. **Read it. Expect exactly:**
+3. **Read it. Expect `4 to add, 1 to change, 1 to destroy`, and exactly:**
    - create `proxmox_virtual_environment_download_file.haproxy_cloud_image["pve5"]`
    - create `proxmox_virtual_environment_file.haproxy_cloud_init["haproxy-2"]`
    - create `proxmox_virtual_environment_vm.haproxy["haproxy-2"]`
    - **replace** `proxmox_virtual_environment_file.haproxy_cloud_init["haproxy-1"]`
      — trap 1. The snippet content prints as `(sensitive value)` because it
      now carries the VRRP secret.
+   - **update in place**
+     `proxmox_virtual_environment_download_file.haproxy_cloud_image["pve1"]`
+     — the target pulls in every instance of the image resource, the same way
+     it does the snippet. A plan with this target was run on 2026-10-01 and
+     carried this line (`scenarios/haproxy-vm-rebuild.md`, "What breaks, and
+     why"). That record does not name the attribute; the dev VM's image had
+     the same kind of pending diff, `overwrite` `true` → `false`
+     (`terraform/README.md`). Whatever it is, it must read as an update — a
+     replacement of this image is not this line.
 4. **Abort** on anything else — in particular any line for
    `proxmox_virtual_environment_vm.haproxy["haproxy-1"]`, any `talos-*` VM,
    `dev_vm`, `devbox2` or `vllm-inference`, and anything in the destroy column
    other than the one snippet replacement.
 5. Human applies: `terraform apply tfplan-lb2`. **The window from trap 1 opens
    here.**
-6. Wait for first boot, then confirm the guard and the health check landed and
-   that the instance is *not* in the election:
+6. Wait for first boot, then trust the new instance's host keys. Read the
+   fingerprints through the hypervisor's guest agent and check the scanned
+   ones against them before appending — the guest agent is installed by
+   cloud-init, so the first command fails until that has got far enough;
+   retry it:
+   ```bash
+   ssh root@pve5 "qm guest exec 113 -- sh -c 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf \$f; done'"
+   ssh-keyscan -t rsa,ecdsa,ed25519 <B> > "$XDG_RUNTIME_DIR/haproxy-2.keys"
+   ssh-keygen -lf "$XDG_RUNTIME_DIR/haproxy-2.keys"      # every line must match one above
+   cat "$XDG_RUNTIME_DIR/haproxy-2.keys" >> ~/.ssh/known_hosts
+   ```
+   Then confirm the guard and the health check landed and that the instance is
+   *not* in the election:
    ```bash
    ssh haproxy-admin@<B> '
      cloud-init status --wait
@@ -229,21 +275,36 @@ starts it at the moment `haproxy-1` lets go.
    Each `tcpdump` must print one packet. `0 packets captured` in either
    direction is a hard stop: find what filters protocol 112 between pve1 and
    pve5 before going any further.
-8. **Copy the UDP rules** so LAN Bedrock clients follow the address. The rules
-   match on port, not on destination address, so they are inert on an instance
-   that is not receiving the traffic:
+8. **Place the UDP rules on `haproxy-2`** so LAN Bedrock clients follow the
+   address. A new VM gets the `udpnat` table and its own loader unit
+   (`scenarios/haproxy-vm-rebuild.md`, "Verify the UDP ingress rules") — not a
+   copy of the hand-applied `minecraft` table and `minecraft-udp-nat.service`
+   that `haproxy-1` still carries, which would only make a second host to
+   migrate off them.
+
+   Read what `haproxy-1` forwards today; `haproxy-2` must publish the same
+   servers:
    ```bash
-   ssh haproxy-admin@192.168.1.199 'sudo cat /etc/minecraft-udp-nat.nft' \
-     | ssh haproxy-admin@<B> 'sudo tee /etc/minecraft-udp-nat.nft >/dev/null'
-   ssh haproxy-admin@192.168.1.199 'systemctl cat minecraft-udp-nat.service | sed 1d' \
-     | ssh haproxy-admin@<B> 'sudo tee /etc/systemd/system/minecraft-udp-nat.service >/dev/null
-         && sudo systemctl daemon-reload && sudo systemctl enable --now minecraft-udp-nat.service
-         && sudo nft list table ip minecraft'
+   ssh haproxy-admin@192.168.1.199 'sudo nft list table ip minecraft'
    ```
-   File and unit names are what `haproxy-1` carries today; confirm with
-   `systemctl cat` rather than assuming, as
-   `scenarios/bedrock-external-access.md` says. From now on a change to those
-   rules is made on both instances.
+   Then follow `scenarios/bedrock-external-access.md`, "Placing the nftables
+   rules on the HAProxy VM", steps 1-4, on `<B>`: one `dnat` and one
+   `masquerade` line per rule in that output, written to
+   `/etc/nftables.d/udpnat.nft` and loaded by `udpnat-rules.service`. Confirm:
+   ```bash
+   ssh haproxy-admin@<B> 'sudo nft list table ip udpnat; systemctl is-enabled udpnat-rules nftables; sysctl net.ipv4.ip_forward'
+   ```
+   Expect the same `dnat` lines as `haproxy-1`, then `enabled`, `disabled`
+   (`nftables.service` flushes the whole ruleset and stays off on these VMs)
+   and `net.ipv4.ip_forward = 1`.
+
+   The rules match on port, not on destination address, so they are inert on
+   an instance that is not receiving the traffic. Until `haproxy-1` is
+   migrated the two instances hold the same rules under different table names,
+   and a change to them is made on both. Never load both tables on one
+   instance: which one wins is undefined
+   (`scenarios/bedrock-external-access.md`, "Migrating off the `minecraft`
+   table").
 
 ## Cut over — the endpoint is dark from step 9 until step 10 completes
 
@@ -256,8 +317,13 @@ starts it at the moment `haproxy-1` lets go.
     ```bash
     ssh haproxy-admin@<B> 'sudo systemctl enable --now keepalived; sleep 6; ip -4 -o addr show eth0'
     ```
-    Expect `192.168.1.199/24 ... secondary` within about five seconds. Then
-    prove the endpoint from the LAN, not from the instance:
+    The `sleep` is there because the address does not arrive at once:
+    keepalived first needs the health check to pass (it runs every 2 s), then
+    waits out the master-down interval — three missed adverts of 1 s, plus
+    skew — before deciding no peer holds the address. A look any sooner shows
+    `<B>` alone and reads as a failure. Expect `192.168.1.199/24 ... secondary`;
+    if it is not there yet, run the `ip` command again before concluding
+    anything. Then prove the endpoint from the LAN, not from the instance:
     ```bash
     kubectl get --raw /version
     talosctl -e 192.168.1.199 -n <cp-ip> version
@@ -277,9 +343,13 @@ starts it at the moment `haproxy-1` lets go.
     ```
     Expect **0 to add, 1 to change, 0 to destroy**: `haproxy-1`'s
     `initialization.ip_config.ipv4.address` `192.168.1.199/24` → `<A>/24`, and
-    possibly `started` `false` → `true`. Abort on any replacement, or any other
-    resource. Human applies: `terraform apply tfplan-lb1`. **The window from
-    trap 1 closes here.**
+    possibly `started` `false` → `true`. `2 to change` is also acceptable if the
+    second is the in-place update of
+    `proxmox_virtual_environment_download_file.haproxy_cloud_image["pve1"]`
+    from step 3: the target pulls that resource in again, and whether step 5's
+    apply cleared its diff has not been observed. Abort on any replacement, or
+    any other resource. Human applies: `terraform apply tfplan-lb1`. **The
+    window from trap 1 closes here.**
 
     The provider regenerates the cloud-init drive and restarts a VM whose
     `initialization` changed (`reboot_after_update` defaults to true; read in
@@ -291,9 +361,14 @@ starts it at the moment `haproxy-1` lets go.
     ```
 12. **`haproxy-1` returns as a backup.** It re-runs cloud-init on this boot:
     new address, keepalived installed, and — because cloud-init treats it as a
-    new instance — new SSH host keys.
+    new instance — new SSH host keys. Trust them the way step 6 did, checked
+    against the guest agent's reading:
     ```bash
     ssh-keygen -R 192.168.1.199        # the virtual address answers as whichever instance holds it
+    ssh root@pve1 "qm guest exec 110 -- sh -c 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf \$f; done'"
+    ssh-keyscan -t rsa,ecdsa,ed25519 <A> > "$XDG_RUNTIME_DIR/haproxy-1.keys"
+    ssh-keygen -lf "$XDG_RUNTIME_DIR/haproxy-1.keys"      # every line must match one above
+    cat "$XDG_RUNTIME_DIR/haproxy-1.keys" >> ~/.ssh/known_hosts
     ssh haproxy-admin@<A> '
       cloud-init status --wait
       ip -4 -o addr show eth0          # expect <A> only
@@ -360,6 +435,55 @@ starts it at the moment `haproxy-1` lets go.
 16. Record on the ticket: `<A>`, `<B>`, the two dark intervals as measured, and
     the status output from step 13.
 
+## Close out
+
+17. **Commit the re-sealed tfvars.** Step 1 re-sealed
+    `terraform/terraform.tfvars.enc.yaml`, and so far that change exists only
+    in this checkout. Every other checkout still hydrates the standalone
+    definition from `main`, and a plan made from one proposes destroying
+    `haproxy-2` and moving `haproxy-1` back to `.199`. Land it through a pull
+    request, never a direct push to `main`:
+    ```bash
+    git status --short terraform/        # expect terraform.tfvars.enc.yaml, modified
+    git switch -c <branch>
+    git add terraform/terraform.tfvars.enc.yaml
+    git commit -m "chore(secrets): declare the HAProxy keepalived pair"
+    git push -u origin HEAD
+    ```
+    Not earlier than this: merged before the cutover, `main` would describe a
+    pair that does not exist, and `talops haproxy` from any checkout would
+    target an `<A>` nothing answers on.
+18. **Update the runbooks this cutover makes wrong.** Each of these describes
+    one load balancer on pve1 at `192.168.1.199`. Until they are corrected, the
+    next person to open one during an outage is following instructions for a
+    system that is gone. One pull request, with step 17's or after it:
+    - [ ] `scenarios/haproxy-vm-rebuild.md`, "Emergency rebuild: the original
+      host is offline" — losing pve1 no longer darkens the endpoint, so the
+      section's premise and urgency go. `haproxy-2` and VMID 113 are taken. A
+      replacement is a group member at its own address, not a VM on `.199`,
+      so step 4's tfvars entry, step 8's host-key and SSH commands against
+      `.199`, and the `onboot` disarm in step 2 (written for an old VM
+      returning on the production address) all change. The status header and
+      the single-point-of-failure follow-up go with them, and VM 113 needs
+      the backup decision VM 110 got.
+    - [ ] `scenarios/proxmox-host-dark.md` — pve1 down is no longer "no API
+      endpoint": the `--server` workaround, check 1 (disarm VM 110) and the
+      load-balancer entry under "Rebuild what the host carried" apply only
+      when both instances are gone. What pve1 still takes with it is external
+      UDP and the Tailscale route; what pve5 now takes is the pair's
+      redundancy. The post-recovery checks SSH to `.199`, expect
+      `source: terraform` from a standalone report and look for the
+      `minecraft` table — they become per-instance, at `<A>` and `<B>`, and
+      the returned instance is expected back as a backup, not as the holder.
+    - [ ] `scenarios/bedrock-external-access.md` — the path diagram, the Step 1
+      and device tables and Step 3 give the HAProxy VM as `192.168.1.199`;
+      `haproxy-1` is now `<A>` with the same MAC, and step 15's result says
+      what the gateway did with that. "Placing the nftables rules" and every
+      `ssh haproxy-admin@192.168.1.199` become both instances by their own
+      addresses. The `minecraft` migration is `haproxy-1` only. The
+      single-point-of-failure gap narrows to external play, which still stops
+      with pve1.
+
 ## Operating the pair afterwards
 
 - **Never SSH or push to `192.168.1.199`.** It reaches whichever instance
@@ -389,11 +513,9 @@ the gateway forward.
 2. `ssh root@pve5 'qm shutdown 113'`.
 3. Vaulted tfvars: remove the `haproxy-2` entry, set `haproxy-1`'s `ip` back to
    `192.168.1.199/24`, drop `vrrp_priority`. Leave `haproxy_vrrp_auth_pass`.
-4. On `haproxy-1`, before its address changes underneath keepalived:
-   `sudo systemctl disable --now keepalived` — this drops `.199` and the
-   endpoint goes dark until step 5 completes.
-5. Plan scoped to the three load-balancer resources, so nothing else pending
-   rides along:
+4. Plan scoped to the three load-balancer resources, so nothing else pending
+   rides along, and read it. Planning changes nothing, so it is done while the
+   endpoint is still up:
    ```bash
    terraform plan -out=tfplan-standalone \
      -target=proxmox_virtual_environment_vm.haproxy \
@@ -401,6 +523,12 @@ the gateway forward.
      -target=proxmox_virtual_environment_download_file.haproxy_cloud_image
    ```
    Expect `haproxy-2`'s VM, snippet and pve5 image destroyed, `haproxy-1`'s
-   snippet replaced, and `haproxy-1`'s address changed in place. Human applies;
-   confirm `haproxy-1` restarts at `.199`.
-6. `talops haproxy status` — the standalone report, `host: 192.168.1.199`.
+   snippet replaced, and `haproxy-1`'s address changed in place.
+5. On `haproxy-1`, only once the plan is accepted, and before the apply
+   changes its address underneath keepalived:
+   `sudo systemctl disable --now keepalived` — this drops `.199` and the
+   endpoint goes dark until step 6 completes.
+6. Human applies `tfplan-standalone`; confirm `haproxy-1` restarts at `.199`.
+7. `talops haproxy status` — the standalone report, `host: 192.168.1.199`.
+8. Commit the re-sealed tfvars through a pull request, as in step 17 of the
+   cutover, and revert whatever step 18 changed.

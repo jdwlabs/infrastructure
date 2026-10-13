@@ -5,11 +5,13 @@
 # IPs change.
 #
 # Defaults to an empty list, so a checkout with no haproxy_vms in tfvars plans
-# zero changes. The load balancer that currently fronts the control plane was
-# built by hand and is deliberately NOT represented here — adopting it would
-# put the live API endpoint one plan away from a cloud-init/EFI reconciliation
-# it cannot satisfy in place. A replacement is provisioned alongside it and
-# cut over, so the rebuild path is exercised rather than assumed.
+# zero changes. One entry is a standalone load balancer; two or more form a
+# keepalived VRRP group that shares var.haproxy_ip as a virtual address.
+#
+# Nothing here was imported. The hand-built load balancer these VMs replaced
+# could not satisfy a cloud-init/EFI reconciliation in place, so a replacement
+# was provisioned alongside it and cut over, which exercised the rebuild path
+# rather than assuming it.
 
 # Per-node, because a download_file is scoped to one node's datastore. A
 # distinct file_name keeps this from colliding with the GPU VM's identical
