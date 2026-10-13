@@ -204,3 +204,28 @@ func TestKeyAvailable(t *testing.T) {
 	require.Error(t, v.KeyAvailable())
 	_ = keyFile
 }
+
+func TestDecryptTFVarsHonorsCancellation(t *testing.T) {
+	v, _ := setupVault(t)
+	seedPlaintext(t, v)
+	_, err := v.Seal(context.Background())
+	require.NoError(t, err)
+
+	data, ok, err := v.DecryptTFVars(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Contains(t, string(data), "cluster_name")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, ok, err = v.DecryptTFVars(ctx)
+	require.Error(t, err)
+	require.False(t, ok)
+}
+
+func TestDecryptTFVarsMissingFileIsNotAnError(t *testing.T) {
+	v, _ := setupVault(t)
+	_, ok, err := v.DecryptTFVars(context.Background())
+	require.NoError(t, err)
+	require.False(t, ok)
+}

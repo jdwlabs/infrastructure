@@ -84,9 +84,9 @@ func TestSecretsAddDeviceDryRunWritesNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(beforeCfg), string(afterCfg), ".sops.yaml must not change")
 	assert.Equal(t, string(beforeEnc), string(afterEnc), "vault file must not be re-keyed")
-	assert.NoFileExists(t, filepath.Join(repo, "terraform/terraform.tfvars"), "no plaintext hydration")
+	assert.NoFileExists(t, filepath.Join(repo, "terraform", "terraform.tfvars"), "no plaintext hydration")
 	assert.Contains(t, out, newPub)
-	assert.Contains(t, out, "terraform/terraform.tfvars.enc.yaml")
+	assert.Contains(t, out, filepath.Join("terraform", "terraform.tfvars.enc.yaml"))
 	assert.NotContains(t, out, "device added")
 }
 
@@ -126,7 +126,7 @@ func TestSecretsAddDeviceDryRunListsClusterVaultFiles(t *testing.T) {
 	afterCluster, err := os.ReadFile(clusterEnc)
 	require.NoError(t, err)
 	assert.Equal(t, string(beforeCluster), string(afterCluster))
-	assert.NoFileExists(t, filepath.Join(repo, "terraform/terraform.tfvars"))
+	assert.NoFileExists(t, filepath.Join(repo, "terraform", "terraform.tfvars"))
 	assert.NoDirExists(t, filepath.Join(repo, "clusters/lab/secrets"))
 }
 
