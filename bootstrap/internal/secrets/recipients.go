@@ -129,6 +129,52 @@ func (v *Vault) AddRecipient(ctx context.Context, pubKey string) error {
 	return nil
 }
 
+// RecipientPlan describes what AddRecipient would do without doing it.
+type RecipientPlan struct {
+	// Config is the .sops.yaml that would be edited.
+	Config string
+	// Present is true when every creation rule already lists the key, so
+	// AddRecipient would be a no-op.
+	Present bool
+	// Rekey lists the existing vault files that would be re-encrypted.
+	Rekey []string
+}
+
+// PlanAddRecipient reports the effect of AddRecipient(pubKey) while leaving
+// .sops.yaml and the vault untouched.
+func (v *Vault) PlanAddRecipient(pubKey string) (RecipientPlan, error) {
+	pubKey = strings.TrimSpace(pubKey)
+	if !strings.HasPrefix(pubKey, "age1") {
+		return RecipientPlan{}, fmt.Errorf("not a valid age public key (expected age1...): %q", pubKey)
+	}
+	plan := RecipientPlan{Config: SopsConfigPath(), Present: true}
+	var cfg sopsConfig
+	if data, err := os.ReadFile(plan.Config); err == nil {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return RecipientPlan{}, fmt.Errorf("parse %s: %w", plan.Config, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return RecipientPlan{}, fmt.Errorf("read %s: %w", plan.Config, err)
+	}
+	if len(cfg.CreationRules) == 0 {
+		plan.Present = false
+	}
+	for _, r := range cfg.CreationRules {
+		if !containsStr(splitRecipients(r.Age), pubKey) {
+			plan.Present = false
+		}
+	}
+	if plan.Present {
+		return plan, nil
+	}
+	for _, e := range v.Entries() {
+		if _, err := os.Stat(e.Enc); err == nil {
+			plan.Rekey = append(plan.Rekey, e.Enc)
+		}
+	}
+	return plan, nil
+}
+
 func splitRecipients(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {

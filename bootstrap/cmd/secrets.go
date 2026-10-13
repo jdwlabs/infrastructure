@@ -180,6 +180,9 @@ func secretsAddDeviceCmd(a *app.App) *cobra.Command {
 			if err := a.Vault.KeyAvailable(); err != nil {
 				return err
 			}
+			if a.Cfg.DryRun {
+				return printAddDevicePlan(cmd, a, strings.TrimSpace(args[0]))
+			}
 			if err := a.Vault.AddRecipient(ctx, strings.TrimSpace(args[0])); err != nil {
 				return err
 			}
@@ -187,4 +190,23 @@ func secretsAddDeviceCmd(a *app.App) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func printAddDevicePlan(cmd *cobra.Command, a *app.App, pubKey string) error {
+	plan, err := a.Vault.PlanAddRecipient(pubKey)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	if plan.Present {
+		fmt.Fprintf(&b, "dry run: %s already lists %s, nothing to do\n", plan.Config, pubKey)
+	} else {
+		fmt.Fprintf(&b, "dry run: would add %s to %s\n", pubKey, plan.Config)
+		for _, enc := range plan.Rekey {
+			fmt.Fprintf(&b, "dry run: would re-key %s\n", enc)
+		}
+		b.WriteString("dry run: nothing written\n")
+	}
+	_, err = fmt.Fprint(cmd.OutOrStdout(), b.String())
+	return err
 }
