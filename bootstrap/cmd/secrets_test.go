@@ -25,8 +25,7 @@ func newAgeKey(t *testing.T, dir, name string) (keyFile, pub string) {
 	return "", ""
 }
 
-// vaultRepo builds a throwaway checkout whose tfvars vault file is really
-// encrypted to one fresh age key, then runs from inside it.
+// sealFixture encrypts content to encPath the way the vault does.
 func sealFixture(t *testing.T, sopsYAML, encPath, content string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(encPath), 0o755))
@@ -38,6 +37,8 @@ func sealFixture(t *testing.T, sopsYAML, encPath, content string) {
 	require.NoError(t, os.Remove(plain))
 }
 
+// vaultRepo builds a throwaway checkout whose tfvars vault file is really
+// encrypted to one fresh age key, then runs from inside it.
 func vaultRepo(t *testing.T) (repo, sopsYAML, encPath string) {
 	t.Helper()
 	for _, bin := range []string{"sops", "age-keygen"} {
@@ -144,4 +145,30 @@ func TestSecretsAddDeviceRealRunRekeysTheSameFiles(t *testing.T) {
 	after, err := os.ReadFile(clusterEnc)
 	require.NoError(t, err)
 	assert.NotEqual(t, string(before), string(after))
+}
+
+func TestSecretsAddDeviceDryRunIgnoresCommentedClusterName(t *testing.T) {
+	repo, sopsYAML, tfvarsEnc := vaultRepo(t)
+	sealFixture(t, sopsYAML, tfvarsEnc, "# cluster_name = \"old\"\ncluster_name = \"lab\"\n")
+	sealFixture(t, sopsYAML, filepath.Join(repo, "clusters/lab/vault/secrets.enc.yaml"), "bundle: fixture\n")
+	sealFixture(t, sopsYAML, filepath.Join(repo, "clusters/old/vault/secrets.enc.yaml"), "bundle: fixture\n")
+	_, newPub := newAgeKey(t, t.TempDir(), "new.txt")
+
+	out, err := runRoot(t, "secrets", "add-device", "--dry-run", newPub)
+
+	require.NoError(t, err, out)
+	assert.Contains(t, out, filepath.Join("clusters", "lab", "vault", "secrets.enc.yaml"))
+	assert.NotContains(t, out, filepath.Join("clusters", "old"))
+}
+
+func TestSecretsAddDeviceDryRunFailsWhenTFVarsCannotBeDecrypted(t *testing.T) {
+	_, _, tfvarsEnc := vaultRepo(t)
+	require.NoError(t, os.WriteFile(tfvarsEnc, []byte("not: a sops file\n"), 0o644))
+	_, newPub := newAgeKey(t, t.TempDir(), "new.txt")
+
+	out, err := runRoot(t, "secrets", "add-device", "--dry-run", newPub)
+
+	require.Error(t, err)
+	assert.Contains(t, out, "decrypt")
+	assert.NotContains(t, out, "dry run: nothing written")
 }

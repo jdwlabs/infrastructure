@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
-	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -142,29 +140,22 @@ type RecipientPlan struct {
 	Rekey []string
 }
 
-var clusterNameRe = regexp.MustCompile(`(?m)^\s*cluster_name\s*=\s*"([^"]*)"`)
-
-// ResolveClusterNameFromVault sets the cluster name from the encrypted tfvars
-// when it is still the placeholder, decrypting in memory only. A normal run
-// learns the name from the plaintext it hydrates; a preview hydrates nothing
-// but must still address the same cluster-scoped vault files.
-func (v *Vault) ResolveClusterNameFromVault(ctx context.Context) {
-	if v.cfg.ClusterName != types.DefaultClusterName {
-		return
-	}
+// DecryptTFVars returns the plaintext of the encrypted tfvars without writing
+// it anywhere. ok is false when there is no encrypted tfvars to read; an
+// existing file that cannot be decrypted is an error, never a silent skip.
+func (v *Vault) DecryptTFVars(ctx context.Context) (data []byte, ok bool, err error) {
 	enc := v.TFVarsEntry().Enc
-	if _, err := os.Stat(enc); err != nil {
-		return
+	if _, statErr := os.Stat(enc); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("stat %s: %w", enc, statErr)
 	}
-	plain, err := v.decrypt(ctx, enc)
+	data, err = v.decrypt(ctx, enc)
 	if err != nil {
-		v.logger.Debug("could not read cluster name from encrypted tfvars", zap.Error(err))
-		return
+		return nil, false, fmt.Errorf("decrypt %s: %w", enc, err)
 	}
-	if m := clusterNameRe.FindSubmatch(plain); m != nil && len(m[1]) > 0 {
-		v.cfg.ClusterName = string(m[1])
-		v.cfg.SecretsDir = filepath.Join("clusters", v.cfg.ClusterName, "secrets")
-	}
+	return data, true, nil
 }
 
 // PlanAddRecipient reports the effect of AddRecipient(pubKey) while leaving

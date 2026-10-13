@@ -11,6 +11,8 @@ import (
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/app"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/secrets"
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/state"
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -193,7 +195,19 @@ func secretsAddDeviceCmd(a *app.App) *cobra.Command {
 }
 
 func printAddDevicePlan(cmd *cobra.Command, a *app.App, pubKey string) error {
-	a.Vault.ResolveClusterNameFromVault(cmd.Context())
+	// Hydration is skipped under --dry-run, so learn the cluster name from the
+	// encrypted tfvars with the parser a normal run applies to the plaintext.
+	if a.Cfg.ClusterName == types.DefaultClusterName {
+		data, ok, err := a.Vault.DecryptTFVars(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := state.NewManager(a.Cfg, a.Logger).ApplyTerraformExtras(data); err != nil {
+				return err
+			}
+		}
+	}
 	plan, err := a.Vault.PlanAddRecipient(pubKey)
 	if err != nil {
 		return err

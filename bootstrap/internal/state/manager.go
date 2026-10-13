@@ -716,7 +716,12 @@ func (m *Manager) LoadTerraformExtras(_ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read terraform.tfvars: %w", err)
 	}
+	return m.ApplyTerraformExtras(data)
+}
 
+// ApplyTerraformExtras is LoadTerraformExtras for tfvars content already in
+// memory, so a decrypted vault file is parsed exactly as the plaintext is.
+func (m *Manager) ApplyTerraformExtras(data []byte) error {
 	// Normalize Windows line endings and strip UTF-8 BOM
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
