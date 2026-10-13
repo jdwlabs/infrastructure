@@ -27,6 +27,17 @@ func newAgeKey(t *testing.T, dir, name string) (keyFile, pub string) {
 
 // vaultRepo builds a throwaway checkout whose tfvars vault file is really
 // encrypted to one fresh age key, then runs from inside it.
+func sealFixture(t *testing.T, sopsYAML, encPath, content string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(encPath), 0o755))
+	plain := encPath + ".plain.tmp"
+	require.NoError(t, os.WriteFile(plain, []byte(content), 0o600))
+	out, err := exec.Command("sops", "--config", sopsYAML, "encrypt", "--input-type", "binary", "--output-type", "yaml",
+		"--filename-override", encPath, "--output", encPath, plain).CombinedOutput()
+	require.NoError(t, err, "sops encrypt: %s", out)
+	require.NoError(t, os.Remove(plain))
+}
+
 func vaultRepo(t *testing.T) (repo, sopsYAML, encPath string) {
 	t.Helper()
 	for _, bin := range []string{"sops", "age-keygen"} {
@@ -43,13 +54,8 @@ func vaultRepo(t *testing.T) (repo, sopsYAML, encPath string) {
 	require.NoError(t, os.WriteFile(sopsYAML,
 		[]byte("creation_rules:\n  - path_regex: \\.enc\\.ya?ml$\n    age: "+pub+"\n"), 0o644))
 
-	plain := filepath.Join(repo, "terraform/plain.tmp")
-	require.NoError(t, os.WriteFile(plain, []byte("token = \"fixture-value\"\n"), 0o600))
 	encPath = filepath.Join(repo, "terraform/terraform.tfvars.enc.yaml")
-	out, err := exec.Command("sops", "--config", sopsYAML, "encrypt", "--input-type", "binary", "--output-type", "yaml",
-		"--filename-override", encPath, "--output", encPath, plain).CombinedOutput()
-	require.NoError(t, err, "sops encrypt: %s", out)
-	require.NoError(t, os.Remove(plain))
+	sealFixture(t, sopsYAML, encPath, "token = \"fixture-value\"\n")
 
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SOPS_AGE_KEY_FILE", keyFile)
@@ -98,4 +104,44 @@ func TestSecretsAddDeviceWithoutDryRunRekeys(t *testing.T) {
 	afterEnc, err := os.ReadFile(encPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, string(beforeEnc), string(afterEnc))
+}
+
+// Hydration is skipped under --dry-run, so the cluster name must come from the
+// encrypted tfvars or the preview would miss the cluster-scoped vault files.
+func TestSecretsAddDeviceDryRunListsClusterVaultFiles(t *testing.T) {
+	repo, sopsYAML, tfvarsEnc := vaultRepo(t)
+	sealFixture(t, sopsYAML, tfvarsEnc, "cluster_name = \"lab\"\n")
+	clusterEnc := filepath.Join(repo, "clusters/lab/vault/secrets.enc.yaml")
+	sealFixture(t, sopsYAML, clusterEnc, "bundle: fixture\n")
+	_, newPub := newAgeKey(t, t.TempDir(), "new.txt")
+	beforeCluster, err := os.ReadFile(clusterEnc)
+	require.NoError(t, err)
+
+	out, err := runRoot(t, "secrets", "add-device", "--dry-run", newPub)
+
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "would re-key "+filepath.Join("clusters", "lab", "vault", "secrets.enc.yaml"))
+	assert.Contains(t, out, "would re-key "+filepath.Join("terraform", "terraform.tfvars.enc.yaml"))
+	afterCluster, err := os.ReadFile(clusterEnc)
+	require.NoError(t, err)
+	assert.Equal(t, string(beforeCluster), string(afterCluster))
+	assert.NoFileExists(t, filepath.Join(repo, "terraform/terraform.tfvars"))
+	assert.NoDirExists(t, filepath.Join(repo, "clusters/lab/secrets"))
+}
+
+func TestSecretsAddDeviceRealRunRekeysTheSameFiles(t *testing.T) {
+	repo, sopsYAML, tfvarsEnc := vaultRepo(t)
+	sealFixture(t, sopsYAML, tfvarsEnc, "cluster_name = \"lab\"\n")
+	clusterEnc := filepath.Join(repo, "clusters/lab/vault/secrets.enc.yaml")
+	sealFixture(t, sopsYAML, clusterEnc, "bundle: fixture\n")
+	_, newPub := newAgeKey(t, t.TempDir(), "new.txt")
+	before, err := os.ReadFile(clusterEnc)
+	require.NoError(t, err)
+
+	out, err := runRoot(t, "secrets", "add-device", newPub)
+
+	require.NoError(t, err, out)
+	after, err := os.ReadFile(clusterEnc)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(before), string(after))
 }

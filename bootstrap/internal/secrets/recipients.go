@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -138,6 +140,31 @@ type RecipientPlan struct {
 	Present bool
 	// Rekey lists the existing vault files that would be re-encrypted.
 	Rekey []string
+}
+
+var clusterNameRe = regexp.MustCompile(`(?m)^\s*cluster_name\s*=\s*"([^"]*)"`)
+
+// ResolveClusterNameFromVault sets the cluster name from the encrypted tfvars
+// when it is still the placeholder, decrypting in memory only. A normal run
+// learns the name from the plaintext it hydrates; a preview hydrates nothing
+// but must still address the same cluster-scoped vault files.
+func (v *Vault) ResolveClusterNameFromVault(ctx context.Context) {
+	if v.cfg.ClusterName != types.DefaultClusterName {
+		return
+	}
+	enc := v.TFVarsEntry().Enc
+	if _, err := os.Stat(enc); err != nil {
+		return
+	}
+	plain, err := v.decrypt(ctx, enc)
+	if err != nil {
+		v.logger.Debug("could not read cluster name from encrypted tfvars", zap.Error(err))
+		return
+	}
+	if m := clusterNameRe.FindSubmatch(plain); m != nil && len(m[1]) > 0 {
+		v.cfg.ClusterName = string(m[1])
+		v.cfg.SecretsDir = filepath.Join("clusters", v.cfg.ClusterName, "secrets")
+	}
 }
 
 // PlanAddRecipient reports the effect of AddRecipient(pubKey) while leaving
