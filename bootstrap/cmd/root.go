@@ -65,8 +65,12 @@ balancer (` + "`haproxy`" + `) and the vLLM GPU host (` + "`vllm`" + `).`,
 			// Decrypt the committed vault into the plaintext working files
 			// before anything reads them (tfvars first, so path resolution
 			// below can find a freshly hydrated terraform.tfvars).
-			if err := a.HydrateSecrets(); err != nil {
-				return err
+			// A previewed add-device re-keys nothing, so it has no use for
+			// plaintext copies and must not leave them on disk.
+			if !isDryRunAddDevice(cmd, a.Cfg.DryRun) {
+				if err := a.HydrateSecrets(); err != nil {
+					return err
+				}
 			}
 			a.MarkReadOnly(cmd)
 			if err := a.CheckVaultGit(allowStaleVault, fetchVault); err != nil {
@@ -127,6 +131,10 @@ balancer (` + "`haproxy`" + `) and the vLLM GPU host (` + "`vllm`" + `).`,
 	)
 
 	return rootCmd
+}
+
+func isDryRunAddDevice(cmd *cobra.Command, dryRun bool) bool {
+	return dryRun && cmd.Name() == "add-device" && cmd.Parent() != nil && cmd.Parent().Name() == "secrets"
 }
 
 func bootstrapCmd(a *app.App) *cobra.Command {
