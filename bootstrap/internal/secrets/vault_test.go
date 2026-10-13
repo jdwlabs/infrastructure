@@ -229,3 +229,116 @@ func TestDecryptTFVarsMissingFileIsNotAnError(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 }
+
+const commentedSopsYAML = `# Header explaining the file.
+creation_rules:
+    # First match wins: keep the CA key off the shared device.
+    - path_regex: (^|/)backend-tls\.enc\.ya?ml$
+      age: %[1]s
+    - path_regex: \.enc\.ya?ml$
+      # Recipients: the workstation key and an offline recovery key.
+      # Re-keyed after the original key was lost.
+      age: %[1]s # trailing note
+      kms: arn:aws:kms:us-east-1:000000000000:key/fixture
+`
+
+func TestAddRecipientPreservesCommentsAndOrder(t *testing.T) {
+	v, _ := setupVault(t)
+	ctx := context.Background()
+	_, pub1 := genAgeKey(t, t.TempDir(), "k1.txt")
+	_, pub2 := genAgeKey(t, t.TempDir(), "k2.txt")
+	before := strings.ReplaceAll(commentedSopsYAML, "%[1]s", pub1)
+	require.NoError(t, os.WriteFile(SopsConfigPath(), []byte(before), 0644))
+
+	require.NoError(t, v.AddRecipient(ctx, pub2))
+
+	got, err := os.ReadFile(SopsConfigPath())
+	require.NoError(t, err)
+	want := strings.ReplaceAll(before, "age: "+pub1, "age: "+pub1+","+pub2)
+	require.Equal(t, want, string(got), "only the age values may change")
+}
+
+func TestAddRecipientKeepsTwoSpaceIndent(t *testing.T) {
+	v, _ := setupVault(t)
+	_, pub := genAgeKey(t, t.TempDir(), "k.txt")
+	before := "# note\ncreation_rules:\n  - path_regex: x\n    age: age1old\n"
+	require.NoError(t, os.WriteFile(SopsConfigPath(), []byte(before), 0644))
+
+	require.NoError(t, v.AddRecipient(context.Background(), pub))
+
+	got, err := os.ReadFile(SopsConfigPath())
+	require.NoError(t, err)
+	require.Equal(t, "# note\ncreation_rules:\n  - path_regex: x\n    age: age1old,"+pub+"\n", string(got))
+}
+
+func TestAddRecipientRejectsNonScalarAge(t *testing.T) {
+	for name, age := range map[string]string{
+		"list":    "age:\n      - age1old\n",
+		"mapping": "age:\n        key: age1old\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			v, _ := setupVault(t)
+			_, pub := genAgeKey(t, t.TempDir(), "k.txt")
+			before := "creation_rules:\n    - path_regex: x\n      " + age
+			require.NoError(t, os.WriteFile(SopsConfigPath(), []byte(before), 0644))
+
+			err := v.AddRecipient(context.Background(), pub)
+
+			require.ErrorContains(t, err, "age must be a comma-separated string")
+			got, readErr := os.ReadFile(SopsConfigPath())
+			require.NoError(t, readErr)
+			require.Equal(t, before, string(got), "a rejected edit must leave the file alone")
+		})
+	}
+}
+
+func TestAddRecipientFillsEmptyAge(t *testing.T) {
+	for name, age := range map[string]string{"null": "age:\n", "tilde": "age: ~\n", "empty string": "age: \"\"\n"} {
+		t.Run(name, func(t *testing.T) {
+			v, _ := setupVault(t)
+			_, pub := genAgeKey(t, t.TempDir(), "k.txt")
+			before := "creation_rules:\n    - path_regex: x\n      " + age
+			require.NoError(t, os.WriteFile(SopsConfigPath(), []byte(before), 0644))
+
+			require.NoError(t, v.AddRecipient(context.Background(), pub))
+
+			got, err := os.ReadFile(SopsConfigPath())
+			require.NoError(t, err)
+			require.Equal(t, "creation_rules:\n    - path_regex: x\n      age: "+pub+"\n", string(got))
+			recips, err := Recipients()
+			require.NoError(t, err)
+			require.Equal(t, []string{pub}, recips)
+		})
+	}
+}
+
+func TestPlanAddRecipientAgreesWithAddRecipient(t *testing.T) {
+	v, _ := setupVault(t)
+	_, pub := genAgeKey(t, t.TempDir(), "k.txt")
+	cases := map[string]struct {
+		cfg     string
+		present bool
+		wantErr bool
+	}{
+		"in every rule":     {"creation_rules:\n  - path_regex: a\n    age: " + pub + "\n  - path_regex: b\n    age: x," + pub + "\n", true, false},
+		"in only one rule":  {"creation_rules:\n  - path_regex: a\n    age: " + pub + "\n  - path_regex: b\n    age: x\n", false, false},
+		"rule without age":  {"creation_rules:\n  - path_regex: a\n", false, false},
+		"non-scalar age":    {"creation_rules:\n  - path_regex: a\n    age:\n      - x\n", false, true},
+		"no creation rules": {"# only a comment\n", false, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(SopsConfigPath(), []byte(c.cfg), 0644))
+
+			plan, planErr := v.PlanAddRecipient(pub)
+			_, changed, applyErr := addRecipientToConfig([]byte(c.cfg), pub)
+
+			require.Equal(t, c.wantErr, planErr != nil)
+			require.Equal(t, c.wantErr, applyErr != nil)
+			if !c.wantErr {
+				require.Equal(t, c.present, plan.Present)
+				require.Equal(t, !changed, plan.Present)
+			}
+		})
+	}
+}
