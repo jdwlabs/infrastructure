@@ -183,7 +183,7 @@ func secretsAddDeviceCmd(a *app.App) *cobra.Command {
 				return err
 			}
 			if a.Cfg.DryRun {
-				return printAddDevicePlan(cmd, a, strings.TrimSpace(args[0]))
+				return printAddDevicePlan(ctx, cmd, a, strings.TrimSpace(args[0]))
 			}
 			if err := a.Vault.AddRecipient(ctx, strings.TrimSpace(args[0])); err != nil {
 				return err
@@ -194,17 +194,17 @@ func secretsAddDeviceCmd(a *app.App) *cobra.Command {
 	}
 }
 
-func printAddDevicePlan(cmd *cobra.Command, a *app.App, pubKey string) error {
+func printAddDevicePlan(ctx context.Context, cmd *cobra.Command, a *app.App, pubKey string) error {
 	// Hydration is skipped under --dry-run, so learn the cluster name from the
 	// encrypted tfvars with the parser a normal run applies to the plaintext.
 	if a.Cfg.ClusterName == types.DefaultClusterName {
-		data, ok, err := a.Vault.DecryptTFVars(cmd.Context())
+		data, ok, err := a.Vault.DecryptTFVars(ctx)
 		if err != nil {
 			return err
 		}
 		if ok {
 			if err := state.NewManager(a.Cfg, a.Logger).ApplyTerraformExtras(data); err != nil {
-				return err
+				return fmt.Errorf("read cluster name from encrypted tfvars: %w", err)
 			}
 		}
 	}
