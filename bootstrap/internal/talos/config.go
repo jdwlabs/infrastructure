@@ -83,6 +83,10 @@ func versionContract(talosVersion string) (*talosconfig.VersionContract, error) 
 // GenerateBaseConfigs generate cluster secrets and base configs using talosctl.
 // This produces secrets.yaml, control-plane.yaml, worker.yaml, and talosconfig in SecretsDir
 func (nc *NodeConfig) GenerateBaseConfigs() error {
+	if err := nc.ensureTalosctlSupportsPin(); err != nil {
+		return err
+	}
+
 	secretsDir := nc.cfg.SecretsDir
 	if err := os.MkdirAll(secretsDir, 0700); err != nil {
 		return fmt.Errorf("cannot create secrets directory %s: %w", secretsDir, err)
@@ -390,6 +394,12 @@ func (nc *NodeConfig) TemplateHash(spec *types.NodeSpec) (string, error) {
 // to the base config using talosctl machineconfig patch. Returns the SHA256 hash.
 // Uses the patch override chain: --patch-dir > clusters/<cluster>/patches/ > embedded.
 func (nc *NodeConfig) Generate(spec *types.NodeSpec, outputDir string) (string, error) {
+	// Checked here as well as in GenerateBaseConfigs: a fresh base config
+	// skips regeneration, yet the patch and merge below still run talosctl.
+	if err := nc.ensureTalosctlSupportsPin(); err != nil {
+		return "", err
+	}
+
 	baseConfigName, err := baseConfigFileName(spec.Role)
 	if err != nil {
 		return "", err
