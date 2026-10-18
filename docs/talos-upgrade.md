@@ -49,30 +49,37 @@ and DNS are `192.168.1.254` — **not** `.1`.
 
 ## Where the target version comes from
 
-Three pins move together and must agree before any node is touched:
+These pins move together and must agree before any node is touched:
 
 - `talos_version` and `installer_image` in `terraform/terraform.tfvars`
   (untracked; the tracked example is `terraform/terraform.tfvars.example`).
 - `TALOS_VERSION` in `.github/workflows/bootstrap.yml`, which is the
   talosctl version CI installs.
-- The `installer_image` in every `scenarios/scaling_tests/*.tfvars` fixture.
+- The `talos_version` and `installer_image` in every
+  `scenarios/scaling_tests/*.tfvars` fixture.
+- `TALOS_VERSION` and `INSTALLER_TAG` in `.github/workflows/extension-image.yml`,
+  plus the two base-image digests that must match it (`QEMU_GUEST_AGENT_IMAGE`
+  and the `FROM` line of `extensions/iscsi-tools/Dockerfile`; the workflow
+  fails the build when they disagree with the Image Factory list and prints the
+  expected value).
 
-Renovate owns all of them and groups them into a single PR so the target
-moves atomically — `renovate.json` states the intent explicitly:
+Renovate owns the tfvars and the CI talosctl pin and groups them into a single
+PR so the target moves atomically; the scaling fixtures and the extension
+workflow are moved by hand. `renovate.json` states the intent explicitly:
 
 > All Talos pins (tfvars, tfvars.example, CI talosctl install) are grouped
 > into one PR so the cluster target version moves atomically. Talos upgrades
 > are applied by a human runbook — the PR is a prompt, not an auto-rollout.
 
 **A merged Renovate PR does not upgrade anything.** It only moves the pins.
-As of this writing `terraform/terraform.tfvars.example` pins `v1.13.7`
-(commit `aea6d07`) while the live nodes run `v1.13.4` — that gap is normal
-and expected between the pin bump and the human rollout. Read the *live*
+As of this writing `terraform/terraform.tfvars.example` pins `v1.14.4`
+while the live nodes run `v1.13.4` — that gap is normal and expected between
+the pin bump and the human rollout. Read the *live*
 value from the hydrated `terraform/terraform.tfvars`, not the example.
 
 The installer image is an Image Factory reference carrying a schematic ID,
 e.g. the scaling-test fixtures use
-`factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.13.4`.
+`factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.14.4`.
 Across a patch upgrade **only the tag moves** — the schematic ID stays the
 same, as recorded in the v1.12.13 → v1.13.4 bump (commit `576baff`):
 
@@ -95,7 +102,9 @@ which a node below 1.14 cannot decode.
 
 So the order matters: upgrade every node to 1.14 first, and only then regenerate
 and apply configs with `talos_version` at 1.14 — applying a 1.14-schema config
-to a 1.13 node is rejected. The worker `kubelet.extraMounts` entry for
+to a 1.13 node is rejected. talops also refuses to generate when
+`talos_version` is newer than the `talosctl` on `PATH`, since that talosctl
+would silently emit the older schema. The worker `kubelet.extraMounts` entry for
 `/var/local` has no 1.14 counterpart and is not carried over.
 
 ## Preconditions — hard gates, all must pass

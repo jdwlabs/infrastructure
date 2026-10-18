@@ -25,8 +25,8 @@ partition keeps its size and simply stops carrying Longhorn data.
 
 ## Mechanism
 
-Talos 1.13 user volumes (this cluster runs v1.13.4, talosctl v1.13.4). Each
-worker gets a `UserVolumeConfig` document via its per-node patch
+Talos 1.13 user volumes (the live cluster runs v1.13.4 until the Talos
+upgrade; the tracked target is v1.14.4). Each worker gets a `UserVolumeConfig` document via its per-node patch
 `clusters/core/patches/node-{300..304}.yaml`; `talops` appends per-node
 patches after the role template when generating node configs
 (`resolveNodePatch` in `bootstrap/internal/talos/config.go`), and
@@ -128,7 +128,10 @@ and the eviction handling in step 3.
    drifted), then diff old vs new `clusters/core/nodes/node-worker-<vmid>.yaml`:
    the only delta must be the appended `UserVolumeConfig` document. Any
    other delta → stop and investigate.
-5. **Versions.** `talosctl version` client v1.13.x against nodes v1.13.4.
+5. **Versions.** `talosctl version` client v1.13.4 or newer against nodes
+   v1.13.4, with the hydrated `talos_version` still the live `v1.13.4`: the
+   `v1.14.4` pin would render the multi-document schema, which these nodes
+   reject and which would make the step 4 diff meaningless.
 
 ## Sequence — one worker at a time
 

@@ -262,7 +262,10 @@ mount injection is needed at all**. `extensions/iscsi-tools/` holds the fork:
   content, and on merge to main publishes `ghcr.io/jdwlabs/iscsi-tools` plus a
   custom nocloud installer `ghcr.io/jdwlabs/talos-installer` assembled by the
   matching `imager` from the fork and the digest-pinned `qemu-guest-agent` the
-  current schematic also carries.
+  current schematic also carries. The installer tag embeds the Talos version it
+  is built for: the workflow now targets `v1.14.4` (`v1.14.4-iscsi.1`), but the
+  live nodes still run `v1.13.4`, so the rollout below keeps using the already
+  published `v1.13.4-iscsi.1` until the Talos upgrade lands.
 
 Delivery is `talosctl upgrade --image` per node, and that is where the risk
 story improves over both dead mechanisms: the failure surface moves from
