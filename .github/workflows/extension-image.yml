@@ -38,13 +38,13 @@ env:
   INSTALLER_IMAGE: ghcr.io/jdwlabs/talos-installer
   # Leads with the Talos version, matching the tfvars convention that the
   # installer tag embeds the Talos version it installs.
-  INSTALLER_TAG: v1.13.4-iscsi.1
-  TALOS_VERSION: v1.13.4
+  INSTALLER_TAG: v1.14.4-iscsi.1
+  TALOS_VERSION: v1.14.4
   # Pinned to the digest the official extensions bundle for TALOS_VERSION
   # resolves — the same bits the current Image Factory schematic ships.
   # Re-derive from ghcr.io/siderolabs/extensions:<version> (crane export,
   # image-digests file) whenever TALOS_VERSION moves.
-  QEMU_GUEST_AGENT_IMAGE: ghcr.io/siderolabs/qemu-guest-agent:11.0.1@sha256:626be1d4cafbc6250723ee5b9683c3585b494d76f71d6ef55e3364d121defc7e
+  QEMU_GUEST_AGENT_IMAGE: ghcr.io/siderolabs/qemu-guest-agent:11.1.1@sha256:c396304665b7aa10ee0d6cc5094c7426025846b06e06f3fa576af48fca75b3a4
 
 jobs:
   build:
