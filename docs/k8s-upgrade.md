@@ -15,7 +15,7 @@ moves at a time. For system design see [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Current state (verified 2026-08-05)
 
 - **Live cluster**: `kubectl version` reports server `v1.35.1` on all nodes.
-- **Live Talos OS**: `v1.13.4` (the tracked pin has moved to `v1.13.7` per
+- **Live Talos OS**: `v1.13.4` (the tracked pin has moved to `v1.14.4` per
   [talos-upgrade.md](talos-upgrade.md), but that OS upgrade has not run yet —
   read the live value with `talosctl version`, not the tracked pin, before
   relying on either number).
@@ -44,10 +44,10 @@ by design:
 > prompt, not an auto-rollout.
 
 **The tracked pin has already moved.** `terraform/terraform.tfvars.example`
-and all 14 `scenarios/scaling_tests/*.tfvars` fixtures pin `v1.36.3`
-(commit `5adaf8c`, merged 2026-07-27) — that predates the Renovate manager
-that now tracks it (`1bf03b3`, 2026-07-30), so it was a manual bump, but the
-target it landed on is still correct as of this writing.
+and all 14 `scenarios/scaling_tests/*.tfvars` fixtures now pin `v1.37.1`,
+past the `v1.36.3` hop below. That hop is chosen from the live `v1.35.1` and
+is deliberately not the tracked pin: the tracked pin says what new builds
+target, this runbook says what the live cluster moves to next.
 
 **The live `terraform/terraform.tfvars` and `clusters/core/nodes/*.yaml`
 machine configs are still `v1.35.1` and deliberately untouched.** They are
@@ -154,8 +154,9 @@ which keys a prune would delete, which raw `talosctl` does not do.
 - **Update the operational pins to match**: `terraform/terraform.tfvars`
   and every `clusters/core/nodes/*.yaml` image tag
   (`kubelet`, `kube-apiserver`, `kube-controller-manager`, `kube-proxy`,
-  `kube-scheduler`) to `v1.36.3`, so the tracked example and the live
-  cluster agree again — the same closing step
+  `kube-scheduler`) to `v1.36.3`, so the operational pins match what the
+  cluster now runs (the tracked example is already at `v1.37.1`, so a
+  further hop follows) — the same closing step
   [talos-upgrade.md](talos-upgrade.md#post-checks) uses for the Talos OS
   pin.
 
