@@ -83,6 +83,21 @@ If a proposed upgrade also changes the schematic ID (new system extension,
 new kernel args), that is a different, larger change — treat it as a
 schematic migration, not a version bump, and diff the schematic first.
 
+### Config schema follows `talos_version`
+
+talops renders role patches for the schema of the version in `talos_version`,
+the same contract `talosctl gen config --talos-version` uses. Below 1.14 the
+config is v1alpha1 only (`machine.install`, `machine.kubelet`,
+`cluster.apiServer`, ...). From 1.14 the same settings are emitted as
+multi-document kinds (`UnattendedInstallConfig`, `KubeletConfig`,
+`KubeAPIServerConfig`, `KubeAuthenticationConfig`, `KubeNodeConfig`, ...),
+which a node below 1.14 cannot decode.
+
+So the order matters: upgrade every node to 1.14 first, and only then regenerate
+and apply configs with `talos_version` at 1.14 — applying a 1.14-schema config
+to a 1.13 node is rejected. The worker `kubelet.extraMounts` entry for
+`/var/local` has no 1.14 counterpart and is not carried over.
+
 ## Preconditions — hard gates, all must pass
 
 1. **Version skew is legal.** `talosctl version` client tag must be >= the
