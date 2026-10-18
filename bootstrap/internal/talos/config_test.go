@@ -862,3 +862,55 @@ func BenchmarkNodeConfigGenerate(b *testing.B) {
 		_, _ = nc.Generate(spec, dir)
 	}
 }
+
+func TestRenderRolePatchFollowsVersionContract(t *testing.T) {
+	render := func(t *testing.T, talosVersion string, role types.Role) string {
+		t.Helper()
+		cfg := types.TestConfig()
+		cfg.TalosVersion = talosVersion
+		out, err := NewNodeConfig(cfg).renderRolePatch(&types.NodeSpec{VMID: 201, Name: "n", Role: role})
+		require.NoError(t, err)
+		return string(out)
+	}
+
+	for _, version := range []string{"v1.13.4", "1.13.4"} {
+		t.Run("legacy "+version, func(t *testing.T) {
+			cp := render(t, version, types.RoleControlPlane)
+			assert.Contains(t, cp, "\n  install:")
+			assert.Contains(t, cp, "\n  apiServer:")
+			assert.Contains(t, cp, "allowSchedulingOnControlPlanes")
+			assert.NotContains(t, cp, "kind: UnattendedInstallConfig")
+			assert.NotContains(t, cp, "kind: KubeAPIServerConfig")
+
+			worker := render(t, version, types.RoleWorker)
+			assert.Contains(t, worker, "\n  nodeLabels:")
+			assert.Contains(t, worker, "destination: /var/local")
+			assert.NotContains(t, worker, "kind: KubeNodeConfig")
+		})
+	}
+
+	for _, version := range []string{"v1.14.4", "1.14.0"} {
+		t.Run("multidoc "+version, func(t *testing.T) {
+			cp := render(t, version, types.RoleControlPlane)
+			assert.Contains(t, cp, "kind: UnattendedInstallConfig")
+			assert.Contains(t, cp, "kind: KubeAPIServerConfig")
+			assert.Contains(t, cp, "kind: KubeAuthenticationConfig")
+			assert.NotContains(t, cp, "\n  install:")
+			assert.NotContains(t, cp, "\n  apiServer:")
+			assert.NotContains(t, cp, "\n  kubelet:")
+			assert.NotContains(t, cp, "allowSchedulingOnControlPlanes")
+
+			worker := render(t, version, types.RoleWorker)
+			assert.Contains(t, worker, "kind: KubeNodeConfig")
+			assert.NotContains(t, worker, "\n  nodeLabels:")
+			assert.NotContains(t, worker, "\n  kubelet:")
+		})
+	}
+}
+
+func TestRenderRolePatchRejectsUnparseableVersion(t *testing.T) {
+	cfg := types.TestConfig()
+	cfg.TalosVersion = "not-a-version"
+	_, err := NewNodeConfig(cfg).renderRolePatch(&types.NodeSpec{VMID: 1, Name: "n", Role: types.RoleWorker})
+	require.Error(t, err)
+}
