@@ -92,7 +92,7 @@ jobs:
           sudo install -m 0755 sops /usr/local/bin/sops
 
           curl -fsSL "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz" -o age.tar.gz
-          echo "bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377  age.tar.gz" | sha256sum -c -
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
           tar -xzf age.tar.gz
           sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
 
