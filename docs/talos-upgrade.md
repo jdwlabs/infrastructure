@@ -63,13 +63,18 @@ These pins move together and must agree before any node is touched:
   fails the build when they disagree with the Image Factory list and prints the
   expected value).
 
-Renovate owns the tfvars and the CI talosctl pin and groups them into a single
-PR so the target moves atomically; the scaling fixtures and the extension
-workflow are moved by hand. `renovate.json` states the intent explicitly:
+Renovate moves every version pin above (tfvars, the example, the scaling
+fixtures, `TALOS_VERSION` in both workflows, and `INSTALLER_TAG`, which keeps
+its `-iscsi.<n>` suffix) in a single PR so the target moves atomically. It
+cannot re-derive the values that travel with the version, so the PR note lists
+them as manual edits in the same PR: the talosctl sha256 in `bootstrap.yml`,
+and the two base-image digests in the extension workflow and its Dockerfile.
+`renovate.json` states the intent explicitly:
 
-> All Talos pins (tfvars, tfvars.example, CI talosctl install) are grouped
-> into one PR so the cluster target version moves atomically. Talos upgrades
-> are applied by a human runbook — the PR is a prompt, not an auto-rollout.
+> All Talos pins (tfvars, tfvars.example, scaling-test fixtures, CI talosctl
+> install, extension workflow) are grouped into one PR so the cluster target
+> version moves atomically. Talos upgrades are applied by a human runbook — the
+> PR is a prompt, not an auto-rollout.
 
 **A merged Renovate PR does not upgrade anything.** It only moves the pins.
 As of this writing `terraform/terraform.tfvars.example` pins `v1.14.4`

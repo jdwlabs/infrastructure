@@ -3,7 +3,7 @@
   "description": [
     "Renovate is the single owner of dependency updates for this repo; keep repository-level (UI) Dependabot disabled.",
     "Covers: Go modules (bootstrap/), Terraform providers (bpg/proxmox), GitHub Actions pins, and Talos/talosctl/sops/age/Kubernetes version pins via the custom regex managers below.",
-    "All Talos pins (tfvars, tfvars.example, CI talosctl install) are grouped into one PR so the cluster target version moves atomically. Talos upgrades are applied by a human runbook — the PR is a prompt, not an auto-rollout.",
+    "All Talos pins (tfvars, tfvars.example, scaling-test fixtures, CI talosctl install, extension workflow) are grouped into one PR so the cluster target version moves atomically. Talos upgrades are applied by a human runbook — the PR is a prompt, not an auto-rollout.",
     "The Kubernetes pin is deliberately kept out of the Talos group. A Kubernetes bump is rolled out with `talosctl upgrade-k8s`, a separate human runbook from a Talos OS upgrade; grouping them would imply a coupling the rollout process does not have. Like the Talos PRs, a Kubernetes PR is a prompt, not an auto-rollout."
   ],
   "extends": ["github>jdwlabs/.github"],
@@ -19,7 +19,7 @@
       "matchDepNames": ["siderolabs/talos"],
       "groupName": "talos",
       "prBodyNotes": [
-        "The talosctl sha256 in .github/workflows/bootstrap.yml does not move with the version. Re-derive it from the release's sha256sum.txt before merging, or the bootstrap job fails its checksum step. Pins still on an older value (extension-image.yml, scaling fixtures) are not tracked here; see docs/talos-upgrade.md."
+        "Renovate moves the version pins only; these values travel with the Talos version and must be re-derived in this PR before merging. (1) The talosctl sha256 in .github/workflows/bootstrap.yml: take it from the release's sha256sum.txt, or the bootstrap job fails its checksum step. (2) In .github/workflows/extension-image.yml, QEMU_GUEST_AGENT_IMAGE and the FROM digest in extensions/iscsi-tools/Dockerfile (iscsi-tools): re-derive both from the Image Factory for the new TALOS_VERSION; the extension build fails while they disagree. INSTALLER_TAG is bumped to v<new>-iscsi.1 by Renovate; if the extension sources changed too, bump EXTENSION_TAG and the -iscsi.N suffix by hand. See docs/talos-upgrade.md."
       ]
     },
     {
@@ -60,26 +60,47 @@
     {
       "customType": "regex",
       "description": "talos_version pin in Terraform tfvars",
-      "managerFilePatterns": ["/^terraform/terraform\\.tfvars(\\.example)?$/"],
+      "managerFilePatterns": [
+        "/^terraform/terraform\\.tfvars(\\.example)?$/",
+        "/^scenarios/scaling_tests/.*\\.tfvars$/"
+      ],
       "matchStrings": ["talos_version\\s*=\\s*\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""],
       "depNameTemplate": "siderolabs/talos",
       "datasourceTemplate": "github-releases"
     },
     {
       "customType": "regex",
-      "description": "Talos installer image tag in Terraform tfvars (factory.talos.dev schematic or ghcr.io installer)",
-      "managerFilePatterns": ["/^terraform/terraform\\.tfvars(\\.example)?$/"],
+      "description": [
+        "Talos installer image tag in tfvars and scaling-test fixtures: a factory.talos.dev schematic, a ghcr.io/siderolabs installer, or the forked ghcr.io/jdwlabs/talos-installer.",
+        "The forked tag is v<talos>-iscsi.<n>; only the Talos part is captured, so a bump keeps the -iscsi.<n> suffix as written. A new Talos version needs a fresh build, which the extension workflow publishes as -iscsi.1."
+      ],
+      "managerFilePatterns": [
+        "/^terraform/terraform\\.tfvars(\\.example)?$/",
+        "/^scenarios/scaling_tests/.*\\.tfvars$/"
+      ],
       "matchStrings": [
-        "installer_image\\s*=\\s*\"(?:factory\\.talos\\.dev|ghcr\\.io/siderolabs)/[^\"]+:(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""
+        "installer_image\\s*=\\s*\"(?:factory\\.talos\\.dev|ghcr\\.io/siderolabs)/[^\"]+:(?<currentValue>v\\d+\\.\\d+\\.\\d+)\"",
+        "installer_image\\s*=\\s*\"ghcr\\.io/jdwlabs/talos-installer:(?<currentValue>v\\d+\\.\\d+\\.\\d+)-iscsi\\.\\d+\""
       ],
       "depNameTemplate": "siderolabs/talos",
       "datasourceTemplate": "github-releases"
     },
     {
       "customType": "regex",
-      "description": "talosctl version installed in CI (pinned to the repo's target Talos version)",
-      "managerFilePatterns": ["/^\\.github/workflows/bootstrap\\.yml$/"],
+      "description": "Talos version pinned in CI: talosctl in bootstrap.yml and the imager version in extension-image.yml",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/bootstrap\\.yml$/",
+        "/^\\.github/workflows/extension-image\\.yml$/"
+      ],
       "matchStrings": ["TALOS_VERSION:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Forked installer tag in the extension workflow; only the Talos part is captured so the -iscsi.<n> suffix is kept",
+      "managerFilePatterns": ["/^\\.github/workflows/extension-image\\.yml$/"],
+      "matchStrings": ["INSTALLER_TAG:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)-iscsi\\.\\d+"],
       "depNameTemplate": "siderolabs/talos",
       "datasourceTemplate": "github-releases"
     },
