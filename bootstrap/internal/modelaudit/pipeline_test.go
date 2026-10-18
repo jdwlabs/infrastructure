@@ -404,8 +404,8 @@ func TestRunChecksTheArchitectureBeforeTheFit(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Qwen/Qwen3.8-Instruct"}, repos(r.Candidates))
-	assert.Equal(t, 27.35, r.Candidates[0].TotalGiB)
-	assert.Equal(t, 1.31, r.Candidates[0].MarginGiB)
+	assert.Equal(t, 27.49, r.Candidates[0].TotalGiB)
+	assert.Equal(t, 1.17, r.Candidates[0].MarginGiB)
 	assert.Contains(t, r.Candidates[0].TrialSteps, languageModelOnlyStep,
 		"a multimodal wrapper is trialled without the vision tower the estimate does not price")
 	assert.Equal(t, map[string]string{

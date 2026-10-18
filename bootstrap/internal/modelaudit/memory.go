@@ -101,32 +101,59 @@ func number(cfg map[string]any, name string) (float64, bool) {
 const elemBytes = 2
 
 // BatchedTokens is the max_num_batched_tokens vLLM will run with: the
-// serving flag, else v0.24.0's default for an OpenAI API server, which is
-// 8192 on a card of at least 70 GiB and 2048 below it
-// (vllm/engine/arg_utils.py:2404-2423). An 80 GB A100 also gets 2048 there;
+// serving flag, else v0.31.0's default for an OpenAI API server, which is
+// 16384 on a card of at least 160 GiB, 8192 from 70 GiB and 2048 below
+// (vllm/engine/arg_utils.py:2858-2884). An 80 GB A100 also gets 2048 there;
 // it is not told apart here because the larger figure only over-prices
 // sliding layers.
 func BatchedTokens(cur Current, gpuMemMiB int) int {
 	if cur.MaxNumBatchedTokens > 0 {
 		return cur.MaxNumBatchedTokens
 	}
-	if gpuMemMiB >= 70*1024 {
+	switch {
+	case gpuMemMiB >= 160*1024:
+		return 16384
+	case gpuMemMiB >= 70*1024:
 		return 8192
+	default:
+		return 2048
 	}
-	return 2048
+}
+
+// concurrentBatches is how many scheduler batches vLLM keeps in flight:
+// async scheduling is on by default and overlaps two, --no-async-scheduling
+// leaves one (vllm/config/vllm.py:592-602, 1576-1635). Pipeline parallelism,
+// which would add more, is not a flag this audit prices; the card is one GPU.
+func concurrentBatches(cur Current) int {
+	if cur.AsyncSchedulingOff {
+		return 1
+	}
+	return 2
 }
 
 // Serving is what serving.yaml decides about the cache besides the context
 // length.
 type Serving struct {
 	BatchedTokens int
+	// InFlightTokens is the tokens scheduled but not yet settled:
+	// BatchedTokens for every concurrent batch (VllmConfig.max_in_flight_tokens).
+	InFlightTokens int
+	// PrefixCaching is whether vLLM caches prefixes, which sets how many
+	// recurrent states a linear layer keeps per sequence.
+	PrefixCaching bool
 	// UnmodelledFlags are flags set away from the defaults the linear and
 	// sliding formulas assume; see unmodelledFlags.
 	UnmodelledFlags []string
 }
 
 func ServingFor(cur Current, gpuMemMiB int) Serving {
-	return Serving{BatchedTokens: BatchedTokens(cur, gpuMemMiB), UnmodelledFlags: cur.UnmodelledFlags}
+	batched := BatchedTokens(cur, gpuMemMiB)
+	return Serving{
+		BatchedTokens:   batched,
+		InFlightTokens:  batched * concurrentBatches(cur),
+		PrefixCaching:   !cur.PrefixCachingOff,
+		UnmodelledFlags: cur.UnmodelledFlags,
+	}
 }
 
 // flagReason rejects a linear or sliding layout priced under a serving flag
@@ -164,13 +191,14 @@ func architectures(cfg map[string]any) []string {
 	return out
 }
 
-// gatedDeltaNetTypes are the model types whose vLLM v0.24.0 classes size a
-// linear_attention layer with gated_delta_net_state_shape (qwen3_5.py:699-718,
-// qwen3_next.py:849-868). Another family's linear_attention is a different
+// gatedDeltaNetTypes are the model types whose vLLM v0.31.0 classes size a
+// linear_attention layer with gated_delta_net_state_shape
+// (qwen3_5.py:401-420, 621-640; qwen3_next.py:890-909;
+// mamba/gdn/qwen_gdn_linear_attn.py:373-384). Another family's linear_attention is a different
 // kernel with a different state, so it stays fit unknown.
 var gatedDeltaNetTypes = map[string]bool{"qwen3_5": true, "qwen3_5_moe": true, "qwen3_next": true}
 
-// CacheBytes is what vLLM v0.24.0 reserves for one sequence of contextTokens:
+// CacheBytes is what vLLM v0.31.0 reserves for one sequence of contextTokens:
 // each layer's max_memory_usage_bytes (vllm/v1/kv_cache_interface.py). Its
 // own startup check prices grouped, padded pages instead
 // (v1/core/kv_cache_utils.py); the block rounding and group padding that
@@ -228,7 +256,7 @@ func CacheBytes(cfg map[string]any, contextTokens int, sv Serving) (float64, str
 	}
 	total := float64(layers-nLinear) * perToken * float64(contextTokens)
 	if nLinear > 0 {
-		state, reason := gatedDeltaNetStateBytes(cfg)
+		state, reason := gatedDeltaNetStateBytes(cfg, sv)
 		if reason != "" {
 			return 0, reason
 		}
@@ -261,13 +289,17 @@ func fullAttentionBytesPerToken(cfg map[string]any) (float64, string) {
 // gatedDeltaNetStateBytes is one linear_attention layer's state, fixed in
 // size whatever the context: a conv state of conv_dim x (kernel - 1) and a
 // recurrent state of value_heads x value_dim x key_dim
-// (vllm/model_executor/layers/mamba/mamba_utils.py:213-234). One state per
-// layer is reserved because hybrid models default to prefix caching off
-// (vllm/config/model.py:1832-1837, engine/arg_utils.py:2492-2493), which
-// leaves mamba_cache_mode "none" (model_executor/models/config.py:454-460,
-// v1/kv_cache_interface.py:657). The serving flags that would change either
-// assumption are rejected before this runs (Serving.flagReason).
-func gatedDeltaNetStateBytes(cfg map[string]any) (float64, string) {
+// (vllm/model_executor/layers/mamba/mamba_utils.py:279-300). Hybrid models
+// default to prefix caching on (config/model.py:2216-2218,
+// engine/arg_utils.py:2926, 2956-2957), which makes mamba_cache_mode "align"
+// (model_executor/models/config.py:632-647) and reserves two states per
+// sequence, the live one and the last checkpoint (v1/kv_cache_interface.py:
+// 1089-1093); the Gated DeltaNet layers add no prefill checkpoint blocks.
+// --no-enable-prefix-caching leaves mode "none" and one state
+// (models/config.py:668-675, kv_cache_interface.py:1094). The serving flags
+// that would change either assumption are rejected before this runs
+// (Serving.flagReason).
+func gatedDeltaNetStateBytes(cfg map[string]any, sv Serving) (float64, string) {
 	v, reason := requireNumbers(cfg, "linear_num_key_heads", "linear_num_value_heads",
 		"linear_key_head_dim", "linear_value_head_dim", "linear_conv_kernel_dim")
 	if reason != "" {
@@ -280,24 +312,36 @@ func gatedDeltaNetStateBytes(cfg map[string]any) (float64, string) {
 	}
 	conv := (kDim*kHeads*2 + vDim*vHeads) * (kernel - 1) * elemBytes
 	recurrent := vHeads * vDim * kDim * ssmBytes
-	return conv + recurrent, ""
+	states := 1.0
+	if sv.PrefixCaching {
+		states = 2
+	}
+	return states * (conv + recurrent), ""
 }
 
-// recurrentStateBytes follows _mamba_state_dtype (mamba_utils.py:84-96): the
+// recurrentStateBytes follows _mamba_state_dtype (mamba_utils.py:98-110): the
 // recurrent state takes mamba_ssm_cache_dtype, which defaults to the conv
-// dtype. Only the two Qwen3.5 multimodal wrappers set it from the config's
-// mamba_ssm_dtype (model_executor/models/config.py:603-628, 704-705), so
-// Qwen3-Next and a text-only Qwen3.5 keep 2 bytes. Any listed architecture
-// counts, because vLLM tries each in turn and float32 is the larger guess.
+// dtype. The four Qwen3.5 classes, multimodal wrappers and text-only models
+// alike, set it from the config's mamba_ssm_dtype
+// (model_executor/models/config.py:819-844, 1059-1062), so only Qwen3-Next
+// keeps 2 bytes. Any listed architecture counts, because vLLM tries each in
+// turn and float32 is the larger guess.
+var qwen3_5Architectures = map[string]bool{
+	"Qwen3_5ForConditionalGeneration":    true,
+	"Qwen3_5MoeForConditionalGeneration": true,
+	"Qwen3_5ForCausalLM":                 true,
+	"Qwen3_5MoeForCausalLM":              true,
+}
+
 func recurrentStateBytes(cfg map[string]any) (float64, string) {
-	wrapped := false
+	setFromConfig := false
 	for _, a := range architectures(cfg) {
-		if a == "Qwen3_5ForConditionalGeneration" || a == "Qwen3_5MoeForConditionalGeneration" {
-			wrapped = true
+		if qwen3_5Architectures[a] {
+			setFromConfig = true
 		}
 	}
 	dtype := field(cfg, "mamba_ssm_dtype")
-	if !wrapped || dtype == nil {
+	if !setFromConfig || dtype == nil {
 		return elemBytes, ""
 	}
 	switch dtype {
@@ -313,11 +357,11 @@ func recurrentStateBytes(cfg map[string]any) (float64, string) {
 // mimoV2Bytes prices MiMo-V2 the way vllm/model_executor/models/mimo_v2.py
 // builds it: hybrid_layer_pattern[i] == 1 is a sliding layer with the swa_*
 // head counts and sliding_window_size, 0 a full layer with the plain ones
-// (mimo_v2.py:371-400, 458-459). K and V head dims differ, so a token costs
-// kv_heads x (k_dim + v_dim) (kv_cache_interface.py:497-503). A sliding layer
-// holds window - 1 + max_num_batched_tokens tokens, not the window, because
-// a chunked-prefill step keeps the previous window beside the new chunk
-// (kv_cache_interface.py:506-526).
+// (mimo_v2.py:371-410, 464). K and V head dims differ, so a token costs
+// kv_heads x (k_dim + v_dim) (kv_cache_interface.py:521-529). A sliding layer
+// holds window - 1 + in-flight tokens, not the window, because blocks leave
+// the window only once their step settles and async scheduling keeps two
+// batches unsettled (kv_cache_interface.py:840-877).
 func mimoV2Bytes(cfg map[string]any, contextTokens int, sv Serving) (float64, string) {
 	pattern, ok := field(cfg, "hybrid_layer_pattern").([]any)
 	if !ok {
@@ -363,7 +407,7 @@ func mimoV2Bytes(cfg map[string]any, contextTokens int, sv Serving) (float64, st
 		if !ok {
 			return 0, missing("sliding_window_size")
 		}
-		held := min(window-1+float64(sv.BatchedTokens), float64(contextTokens))
+		held := min(window-1+float64(sv.InFlightTokens), float64(contextTokens))
 		total += nSliding * perToken * held
 	}
 	return total, ""

@@ -41,6 +41,7 @@ func TestBudgetMatchesTheCard(t *testing.T) {
 func TestBatchedTokensFollowsVLLMsDefaultForTheCard(t *testing.T) {
 	assert.Equal(t, 2048, BatchedTokens(Current{}, 32607))
 	assert.Equal(t, 8192, BatchedTokens(Current{}, 81559), "an 80 GB card gets the larger default")
+	assert.Equal(t, 16384, BatchedTokens(Current{}, 183359), "a 180 GB card gets the largest default")
 	assert.Equal(t, 4096, BatchedTokens(Current{MaxNumBatchedTokens: 4096}, 32607), "the serving flag wins")
 }
 
@@ -202,9 +203,10 @@ func fixture(t *testing.T, config, tree string) (map[string]any, []hub.TreeEntry
 //	48 linear_attention layers, one state each:
 //	  conv: (128 x 16 x 2 + 128 x 48) x (4 - 1) x 2 B         =   61440 B
 //	  recurrent: 48 x 128 x 128 x 4 B (mamba_ssm_dtype float32) = 3145728 B
-//	  48 x 3207168 B = 153944064 B = 0.14 GiB
-//	kv + state: 2301427712 B = 2.14 GiB
-//	total: 22.20 + 2.14 + 3 = 27.35 GiB, under the 28.66 GiB budget
+//	  48 x 3207168 B = 153944064 B per state
+//	prefix caching is on by default, so two states per sequence: 307888128 B = 0.29 GiB
+//	kv + state: 2455371776 B = 2.29 GiB
+//	total: 22.20 + 2.29 + 3 = 27.49 GiB, under the 28.66 GiB budget
 func TestQwen35HybridIsPricedPerLayerType(t *testing.T) {
 	cfg, tree := fixture(t, "qwen3.8-27b-nvfp4-config.json", "qwen3.8-27b-nvfp4-tree.json")
 
@@ -212,9 +214,21 @@ func TestQwen35HybridIsPricedPerLayerType(t *testing.T) {
 
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 22.20, fit.WeightsGiB)
+	assert.Equal(t, 2.29, fit.KVGiB)
+	assert.Equal(t, 27.49, fit.TotalGiB)
+	assert.True(t, fit.Fits)
+}
+
+// The v0.24.0 layout, where hybrid models defaulted to prefix caching off and
+// kept one state per layer, still holds under --no-enable-prefix-caching.
+func TestQwen35HybridKeepsOneStateWithPrefixCachingOff(t *testing.T) {
+	cfg, tree := fixture(t, "qwen3.8-27b-nvfp4-config.json", "qwen3.8-27b-nvfp4-tree.json")
+
+	fit := Estimate(cfg, tree, 32768, ServingFor(Current{PrefixCachingOff: true}, 32607), 3, budget)
+
+	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 2.14, fit.KVGiB)
 	assert.Equal(t, 27.35, fit.TotalGiB)
-	assert.True(t, fit.Fits)
 }
 
 // Calibration: XiaomiMiMo/MiMo-V2.6-Flash-RL at 5711b268169967567844e1e560e8a3966da959b1,
@@ -227,10 +241,10 @@ func TestQwen35HybridIsPricedPerLayerType(t *testing.T) {
 //
 //	weights: 65 root safetensors, 172932505264 B = 161.06 GiB
 //	9 full layers: 9 x 4 kv heads x (192 k + 128 v) x 2 B x 32768 = 754974720 B
-//	39 sliding layers hold min(128 - 1 + 2048 batched, 32768) = 2175 tokens:
-//	  39 x 8 kv heads x (192 k + 128 v) x 2 B x 2175 = 434304000 B
-//	kv: 1189278720 B = 1.11 GiB
-//	total: 161.06 + 1.11 + 3 = 165.16 GiB
+//	39 sliding layers hold min(128 - 1 + 2 batches x 2048, 32768) = 4223 tokens:
+//	  39 x 8 kv heads x (192 k + 128 v) x 2 B x 4223 = 843248640 B
+//	kv: 1598223360 B = 1.49 GiB
+//	total: 161.06 + 1.49 + 3 = 165.54 GiB
 func TestMiMoV2SlidingLayersArePricedAtTheirWindow(t *testing.T) {
 	cfg, tree := fixture(t, "mimo-v2.6-flash-rl-config.json", "mimo-v2.6-flash-rl-tree.json")
 
@@ -238,8 +252,19 @@ func TestMiMoV2SlidingLayersArePricedAtTheirWindow(t *testing.T) {
 
 	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 161.06, fit.WeightsGiB)
+	assert.Equal(t, 1.49, fit.KVGiB)
+	assert.Equal(t, "does not fit: 165.54 GiB > 28.66 GiB budget", fit.Reason)
+}
+
+// Under --no-async-scheduling one batch is in flight, so a sliding layer holds
+// 128 - 1 + 2048 = 2175 tokens, the v0.24.0 figure.
+func TestMiMoV2SlidingLayersHoldOneBatchWithAsyncSchedulingOff(t *testing.T) {
+	cfg, tree := fixture(t, "mimo-v2.6-flash-rl-config.json", "mimo-v2.6-flash-rl-tree.json")
+
+	fit := Estimate(cfg, tree, 32768, ServingFor(Current{AsyncSchedulingOff: true}, 32607), 3, budget)
+
+	require.True(t, fit.Known, fit.Reason)
 	assert.Equal(t, 1.11, fit.KVGiB)
-	assert.Equal(t, "does not fit: 165.16 GiB > 28.66 GiB budget", fit.Reason)
 }
 
 func gdnConfig(modelType, arch string) map[string]any {
@@ -256,8 +281,9 @@ func gdnConfig(modelType, arch string) map[string]any {
 
 // One full layer is 2 x 2 x 128 x 2 B x 1024 = 1 MiB. Each linear layer's
 // conv state is (64 x 4 x 2 + 64 x 8) x 3 x 2 B = 6 KiB and its recurrent
-// state 8 x 64 x 64 elements = 32768, so three layers differ by 3 x 64 KiB
-// between float32 and bfloat16.
+// state 8 x 64 x 64 elements = 32768; prefix caching, on by default, keeps
+// two states per layer, so three layers differ by 2 x 3 x 64 KiB between
+// float32 and bfloat16.
 func TestGatedDeltaNetRecurrentStateDtype(t *testing.T) {
 	const mib = 1 << 20
 	kv := func(cfg map[string]any) float64 {
@@ -265,10 +291,12 @@ func TestGatedDeltaNetRecurrentStateDtype(t *testing.T) {
 		require.Empty(t, reason)
 		return b
 	}
-	assert.InDelta(t, mib+3*(6*1024+32768*4), kv(gdnConfig("qwen3_5", "Qwen3_5ForConditionalGeneration")), 0,
+	assert.InDelta(t, mib+2*3*(6*1024+32768*4), kv(gdnConfig("qwen3_5", "Qwen3_5ForConditionalGeneration")), 0,
 		"the config's mamba_ssm_dtype is applied to Qwen3.5 multimodal wrappers")
-	assert.InDelta(t, mib+3*(6*1024+32768*4), kv(gdnConfig("qwen3_5_moe", "Qwen3_5MoeForConditionalGeneration")), 0)
-	assert.InDelta(t, mib+3*(6*1024+32768*2), kv(gdnConfig("qwen3_next", "Qwen3NextForCausalLM")), 0,
+	assert.InDelta(t, mib+2*3*(6*1024+32768*4), kv(gdnConfig("qwen3_5_moe", "Qwen3_5MoeForConditionalGeneration")), 0)
+	assert.InDelta(t, mib+2*3*(6*1024+32768*4), kv(gdnConfig("qwen3_5", "Qwen3_5ForCausalLM")), 0,
+		"v0.31.0 applies it to the text-only Qwen3.5 classes too")
+	assert.InDelta(t, mib+2*3*(6*1024+32768*2), kv(gdnConfig("qwen3_next", "Qwen3NextForCausalLM")), 0,
 		"Qwen3-Next ignores mamba_ssm_dtype and keeps the model dtype")
 }
 
