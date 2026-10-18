@@ -34,7 +34,8 @@ func targetPin(t *testing.T, name string) string {
 
 // TestRolePatchesValidateAgainstTargetVersion renders each role's patch the way
 // talops renders it for a real node and runs the Talos validator over the
-// result, at the Talos version this repo currently targets.
+// result, at the Talos version this repo currently targets and at the version the live
+// cluster still runs.
 //
 // Rendering is what makes the check honest. A patch key can be individually
 // well-formed and still be rejected once it lands on a base config, because
@@ -61,32 +62,49 @@ func TestRolePatchesValidateAgainstTargetVersion(t *testing.T) {
 		t.Skipf("talosctl not on PATH: %v", err)
 	}
 
-	cfg := types.TestConfig()
-	cfg.KubernetesVersion = targetPin(t, "kubernetes_version")
-	cfg.TalosVersion = targetPin(t, "talos_version")
-	cfg.InstallerImage = targetPin(t, "installer_image")
-	cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
-
-	nc := NewNodeConfig(cfg)
+	// The repo target is what a fresh cluster is built from. The live-cluster
+	// contract is the last release whose nodes only understand the v1alpha1
+	// install/kubernetes fields; it must keep rendering a config those nodes
+	// accept until they are upgraded. Both are validated by the one pinned
+	// talosctl, which is the newer of the two and so judges the older contract
+	// by the rules the upgraded nodes will apply.
+	targets := []struct {
+		name           string
+		talosVersion   string
+		installerImage string
+	}{
+		{"live-cluster", "v1.13.4", "ghcr.io/siderolabs/installer:v1.13.4"},
+		{"repo-target", targetPin(t, "talos_version"), targetPin(t, "installer_image")},
+	}
 
 	specs := []*types.NodeSpec{
 		{VMID: 201, Name: "talos-cp-1", Node: "pve1", CPU: 4, Memory: 8192, Disk: 50, Role: types.RoleControlPlane},
 		{VMID: 301, Name: "talos-worker-1", Node: "pve2", CPU: 8, Memory: 16384, Disk: 100, Role: types.RoleWorker},
 	}
 
-	for _, spec := range specs {
-		t.Run(string(spec.Role), func(t *testing.T) {
-			outputDir := t.TempDir()
+	for _, target := range targets {
+		cfg := types.TestConfig()
+		cfg.KubernetesVersion = targetPin(t, "kubernetes_version")
+		cfg.TalosVersion = target.talosVersion
+		cfg.InstallerImage = target.installerImage
+		cfg.SecretsDir = filepath.Join(t.TempDir(), "secrets")
 
-			_, err := nc.Generate(spec, outputDir)
-			require.NoError(t, err, "render %s config", spec.Role)
+		nc := NewNodeConfig(cfg)
 
-			rendered := filepath.Join(outputDir, fmt.Sprintf("node-%s-%d.yaml", spec.Role, spec.VMID))
+		for _, spec := range specs {
+			t.Run(target.name+"/"+string(spec.Role), func(t *testing.T) {
+				outputDir := t.TempDir()
 
-			// metal is the mode the nodes actually install in, and the only one
-			// that exercises the install-section rules at all.
-			out, err := exec.Command(talosctl, "validate", "--mode", "metal", "--config", rendered).CombinedOutput()
-			require.NoErrorf(t, err, "talosctl validate --mode metal (talos %s):\n%s", cfg.TalosVersion, out)
-		})
+				_, err := nc.Generate(spec, outputDir)
+				require.NoError(t, err, "render %s config", spec.Role)
+
+				rendered := filepath.Join(outputDir, fmt.Sprintf("node-%s-%d.yaml", spec.Role, spec.VMID))
+
+				// metal is the mode the nodes actually install in, and the only one
+				// that exercises the install-section rules at all.
+				out, err := exec.Command(talosctl, "validate", "--mode", "metal", "--config", rendered).CombinedOutput()
+				require.NoErrorf(t, err, "talosctl validate --mode metal (talos %s):\n%s", cfg.TalosVersion, out)
+			})
+		}
 	}
 }

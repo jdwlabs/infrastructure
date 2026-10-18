@@ -15,6 +15,7 @@ import (
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/logging"
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
+	talosconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,6 +60,24 @@ type templateData struct {
 	ControlPlaneEndpoint    string
 	InstallerImage          string
 	ClusterName             string
+
+	// UnattendedInstall and MultidocKubernetes gate which schema a role patch
+	// targets. The base config is generated with --talos-version, so on a
+	// 1.14+ contract it already carries the multi-document forms; a patch that
+	// also sets the deprecated v1alpha1 field is rejected as a conflict, while
+	// a patch that sets the new documents is unknown to a node below 1.14.
+	UnattendedInstall  bool
+	MultidocKubernetes bool
+}
+
+// versionContract parses cfg's Talos version the way `talosctl gen config`
+// does, so patch rendering and base config generation agree on the schema.
+func versionContract(talosVersion string) (*talosconfig.VersionContract, error) {
+	contract, err := talosconfig.ParseContractFromVersion("v" + strings.TrimPrefix(talosVersion, "v"))
+	if err != nil {
+		return nil, fmt.Errorf("parse talos version %q: %w", talosVersion, err)
+	}
+	return contract, nil
 }
 
 // GenerateBaseConfigs generate cluster secrets and base configs using talosctl.
@@ -282,6 +301,11 @@ func (nc *NodeConfig) baseConfigStale(baseConfig string) (bool, error) {
 // renderRolePatch resolves the role patch template through the override chain
 // and renders it with this node's template data.
 func (nc *NodeConfig) renderRolePatch(spec *types.NodeSpec) ([]byte, error) {
+	contract, err := versionContract(nc.cfg.TalosVersion)
+	if err != nil {
+		return nil, err
+	}
+
 	data := templateData{
 		Hostname:                spec.Name,
 		DefaultDisk:             nc.cfg.DefaultDisk,
@@ -290,6 +314,8 @@ func (nc *NodeConfig) renderRolePatch(spec *types.NodeSpec) ([]byte, error) {
 		ControlPlaneEndpoint:    nc.cfg.ControlPlaneEndpoint,
 		InstallerImage:          nc.cfg.InstallerImage,
 		ClusterName:             nc.cfg.ClusterName,
+		UnattendedInstall:       contract.UnattendedInstallConfig(),
+		MultidocKubernetes:      contract.MultidocKubernetesConfigSupported(),
 	}
 
 	clusterDir := filepath.Join("clusters", nc.cfg.ClusterName)
