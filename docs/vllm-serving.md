@@ -954,20 +954,28 @@ that URL includes the `JIRA_BASE_URL` host.
 
 - **`fit unknown`**: this is a rejection, never an assumed fit. The estimate
   is `weights + KV cache and state + overheadGiB`, for one sequence of
-  `--max-model-len` tokens, priced per layer the way vLLM sizes it at
-  `serving.yaml`'s tag:
+  `--max-model-len` tokens, priced per layer the way vLLM v0.31.0 sizes it
+  (`vllm/v1/kv_cache_interface.py`, `model_executor/layers/mamba/mamba_utils.py`
+  and the model classes; re-derived when `serving.yaml`'s tag last moved, so
+  re-derive it again when the tag does):
   - a `full_attention` layer holds K and V for every token;
   - a Qwen3.5 or Qwen3-Next `linear_attention` (Gated DeltaNet) layer holds
-    one fixed-size state, whatever the context: a conv state and a recurrent
-    state. The recurrent state is float32 when a Qwen3.5 multimodal wrapper's
-    `mamba_ssm_dtype` says so;
+    a fixed-size state, whatever the context: a conv state and a recurrent
+    state. Hybrid models cache prefixes by default in v0.31.0 (v0.24.0 did
+    not), which keeps two such states per sequence, the live one and the last
+    checkpoint; `--no-enable-prefix-caching` keeps one. The recurrent state
+    is float32 when a Qwen3.5 config's `mamba_ssm_dtype` says so, for the
+    multimodal wrappers and the text-only `Qwen3_5ForCausalLM` alike;
+    Qwen3-Next keeps 2 bytes;
   - a MiMo-V2 sliding layer (`hybrid_layer_pattern` entry `1`) holds
-    `sliding_window_size − 1 + max_num_batched_tokens` tokens, capped at
-    `--max-model-len`, not just the window, because a chunked-prefill step
-    keeps the previous window beside the new chunk.
-    `max_num_batched_tokens` is `serving.yaml`'s
+    `sliding_window_size − 1 + max_in_flight_tokens` tokens, capped at
+    `--max-model-len`, not just the window, because blocks leave the window
+    only when their step settles. `max_in_flight_tokens` is
+    `max_num_batched_tokens` times the batches in flight: 2 under the default
+    async scheduling, 1 with `--no-async-scheduling` (v0.24.0 counted one
+    either way). `max_num_batched_tokens` is `serving.yaml`'s
     `--max-num-batched-tokens`, else vLLM's default for the card: 2048 below
-    70 GiB, 8192 at or above it.
+    70 GiB, 8192 from 70 GiB, 16384 from 160 GiB.
 
   It cannot price these, so it rejects them as `fit unknown`:
   - MLA (`kv_lora_rank` set, as in the DeepSeek families);
@@ -978,9 +986,10 @@ that URL includes the `JIRA_BASE_URL` host.
   - a `layer_types` or `hybrid_layer_pattern` whose length is not
     `num_hidden_layers`, or a pattern entry other than `0` or `1`;
   - a model with linear-attention or sliding layers when `serving.yaml` sets
-    a flag those formulas assume is at its default: `--enable-prefix-caching`,
+    a flag those formulas do not model: `--mamba-cache-mode`,
     `--no-enable-chunked-prefill`, `--mamba-cache-dtype` or
     `--mamba-ssm-cache-dtype` other than `auto`, or `--speculative-config`.
+    Prefix caching and async scheduling are priced on or off.
     The reason names the flag. Full-attention models are priced the same
     either way;
   - a config missing a field the formula needs. A Qwen3.5 or Qwen3-Next
@@ -994,7 +1003,9 @@ that URL includes the `JIRA_BASE_URL` host.
   - The KV cache and conv state are priced at 2 bytes per element, so an
     FP8 KV cache is over-counted.
   - Block rounding and hybrid group padding are left out. They are small
-    (0.01 GiB for Qwen3.8), but can exceed one block per layer when a
+    (measured at 0.01 GiB for Qwen3.8 under v0.24.0; not re-measured under
+    v0.31.0, where prefix caching sets the Mamba block size to the attention
+    block size), but can exceed one block per layer when a
     model's layer counts per type are not multiples of each other.
   - `overheadGiB` is one constant for every model, calibrated on the
     text-only `QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ`. A multimodal
@@ -1002,9 +1013,10 @@ that URL includes the `JIRA_BASE_URL` host.
     warm-up over a larger vocabulary, and CUDA graphs. A `marginGiB` below
     about 2 GiB on a multimodal model is tight; trial it with
     `--language-model-only` and watch the startup log.
-  - The estimate prices one sequence, but vLLM v0.24.0 serves up to 256
+  - The estimate prices one sequence, but vLLM v0.31.0 serves up to 256
     concurrently by default (`--max-num-seqs`) and at startup captures CUDA
-    graphs up to batch `min(2 × max_num_seqs, 512)`, which the estimate does
+    graphs up to batch `min(2 × max_num_seqs, 512)` (1024 on datacenter
+    Blackwell, and scaled by the speculative query length), which the estimate does
     not price. On 2026-10-02 `nvidia/Qwen3.8-27B-NVFP4`, a hybrid
     linear-attention model, loaded 19.08 GiB of weights and then ran the
     31.4 GiB card out of memory in CUDA-graph profiling, even with
@@ -1013,9 +1025,10 @@ that URL includes the `JIRA_BASE_URL` host.
     with `--max-num-seqs` sized to the consumers' concurrency.
   - The text-only model calibrates at 15.66 GiB weights + 3.00 GiB KV cache +
     3 GiB overhead = 21.66 GiB, against a 28.66 GiB budget.
-    `RedHatAI/Qwen3.8-27B-NVFP4` calibrates at 22.20 GiB weights + 2.14 GiB
-    (2.00 GiB for its 16 full-attention layers, 0.14 GiB of state for its 48
-    linear-attention layers) + 3 GiB = 27.35 GiB.
+    `RedHatAI/Qwen3.8-27B-NVFP4` calibrates at 22.20 GiB weights + 2.29 GiB
+    (2.00 GiB for its 16 full-attention layers, 0.29 GiB of state for its 48
+    linear-attention layers, two states each) + 3 GiB = 27.49 GiB; under
+    v0.24.0 it was 2.14 GiB and 27.35 GiB.
   - Tune `overheadGiB` against observed usage.
 - **Repos without `config.json`**, such as GGUF-only and adapter repos, are
   rejected as `enrich failed: 404 (no config.json)`. Each one still costs
