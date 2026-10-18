@@ -376,14 +376,15 @@ func TestRunFailsOnAnUnusableModelRegistry(t *testing.T) {
 			var f *Failure
 			require.ErrorAs(t, err, &f)
 			assert.Equal(t, code, f.Code)
-			assert.Contains(t, f.Msg, "v0.24.0")
+			assert.Contains(t, f.Msg, "v0.31.0")
 		})
 	}
 }
 
 // The recorded Qwen3.8 repo is a Qwen3_5ForConditionalGeneration; the same
-// config renamed to Qwen3_5ForCausalLM is the text-only class vLLM v0.24.0
-// does not register.
+// config renamed to Qwen3_5TextForCausalLM is a class vLLM v0.31.0 does not
+// register. Qwen3_5ForCausalLM itself is registered since v0.31.0, so it is
+// priced like the wrapper.
 func TestRunChecksTheArchitectureBeforeTheFit(t *testing.T) {
 	h := audittest.NewHub(t)
 	conf := audittest.Fixture("qwen3.8-27b-nvfp4-config.json")
@@ -391,7 +392,7 @@ func TestRunChecksTheArchitectureBeforeTheFit(t *testing.T) {
 	wrapped := fits("Qwen/Qwen3.8-Instruct", shaA, 3)
 	wrapped.Config, wrapped.Tree = conf, tree
 	textOnly := fits("Qwen/Qwen3.8-Text-Instruct", shaB, 2)
-	textOnly.Config = []byte(strings.Replace(string(conf), "Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", 1))
+	textOnly.Config = []byte(strings.Replace(string(conf), "Qwen3_5ForConditionalGeneration", "Qwen3_5TextForCausalLM", 1))
 	textOnly.Tree = tree
 	bare := fits("Qwen/No-Architecture-Instruct", shaC, 1)
 	bare.Config = []byte(`{"model_type":"qwen3_moe"}`)
@@ -408,7 +409,7 @@ func TestRunChecksTheArchitectureBeforeTheFit(t *testing.T) {
 	assert.Contains(t, r.Candidates[0].TrialSteps, languageModelOnlyStep,
 		"a multimodal wrapper is trialled without the vision tower the estimate does not price")
 	assert.Equal(t, map[string]string{
-		"Qwen/Qwen3.8-Text-Instruct":    "architecture Qwen3_5ForCausalLM not in vLLM v0.24.0",
+		"Qwen/Qwen3.8-Text-Instruct":    "architecture Qwen3_5TextForCausalLM not in vLLM v0.31.0",
 		"Qwen/No-Architecture-Instruct": "architecture missing",
 	}, rejected(r))
 }

@@ -89,23 +89,23 @@ func TestResolveCandidateParser(t *testing.T) {
 	cfg := testConfig(t)
 	reg := Registry{"qwen3_xml": true, "hermes": true}
 
-	r, reason := ResolveCandidateParser(cfg, reg, "v0.24.0", "Qwen/Qwen3-Coder-Next-Instruct", map[string]any{"model_type": "qwen3_moe"})
+	r, reason := ResolveCandidateParser(cfg, reg, "v0.31.0", "Qwen/Qwen3-Coder-Next-Instruct", map[string]any{"model_type": "qwen3_moe"})
 	assert.Empty(t, reason)
 	assert.Equal(t, "qwen3_xml", r.Parser)
 
-	r, reason = ResolveCandidateParser(cfg, reg, "v0.24.0", "Qwen/Qwen3-30B-A3B-Instruct-2507", map[string]any{"model_type": "qwen3_moe"})
+	r, reason = ResolveCandidateParser(cfg, reg, "v0.31.0", "Qwen/Qwen3-30B-A3B-Instruct-2507", map[string]any{"model_type": "qwen3_moe"})
 	assert.Empty(t, reason)
 	assert.Equal(t, "hermes", r.Parser)
 
-	_, reason = ResolveCandidateParser(cfg, reg, "v0.24.0", "google/gemma-4-it", map[string]any{"model_type": "gemma4"})
+	_, reason = ResolveCandidateParser(cfg, reg, "v0.31.0", "google/gemma-4-it", map[string]any{"model_type": "gemma4"})
 	assert.Equal(t, "no parser rule for gemma4", reason)
 
-	_, reason = ResolveCandidateParser(cfg, reg, "v0.24.0", "Org/M", map[string]any{})
+	_, reason = ResolveCandidateParser(cfg, reg, "v0.31.0", "Org/M", map[string]any{})
 	assert.Equal(t, "no parser rule for (none)", reason)
 
-	_, reason = ResolveCandidateParser(cfg, reg, "v0.24.0", "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+	_, reason = ResolveCandidateParser(cfg, reg, "v0.31.0", "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
 		map[string]any{"model_type": "mistral3", "text_config": map[string]any{"model_type": "mistral"}})
-	assert.Equal(t, "parser mistral not in vLLM v0.24.0", reason)
+	assert.Equal(t, "parser mistral not in vLLM v0.31.0", reason)
 }
 
 func TestCheckArchitecture(t *testing.T) {
@@ -115,12 +115,12 @@ func TestCheckArchitecture(t *testing.T) {
 		reason string
 	}{
 		"registered":   {map[string]any{"architectures": []any{"Qwen3_5ForConditionalGeneration"}}, ""},
-		"unregistered": {map[string]any{"architectures": []any{"Qwen3_5ForCausalLM"}}, "architecture Qwen3_5ForCausalLM not in vLLM v0.24.0"},
+		"unregistered": {map[string]any{"architectures": []any{"Qwen3_5ForCausalLM"}}, "architecture Qwen3_5ForCausalLM not in vLLM v0.31.0"},
 		"a later entry is registered": {
 			map[string]any{"architectures": []any{"CustomForCausalLM", "LlamaForCausalLM"}}, "",
 		},
 		"none registered names the first": {
-			map[string]any{"architectures": []any{"AForCausalLM", "BForCausalLM"}}, "architecture AForCausalLM not in vLLM v0.24.0",
+			map[string]any{"architectures": []any{"AForCausalLM", "BForCausalLM"}}, "architecture AForCausalLM not in vLLM v0.31.0",
 		},
 		"missing":     {map[string]any{"model_type": "llama"}, "architecture missing"},
 		"empty list":  {map[string]any{"architectures": []any{}}, "architecture missing"},
@@ -128,7 +128,7 @@ func TestCheckArchitecture(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, c.reason, CheckArchitecture(archs, "v0.24.0", c.conf))
+			assert.Equal(t, c.reason, CheckArchitecture(archs, "v0.31.0", c.conf))
 		})
 	}
 }

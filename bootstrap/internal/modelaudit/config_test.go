@@ -124,9 +124,9 @@ func TestCommittedRulesResolveTheIncumbentToItsServingParser(t *testing.T) {
 
 // Each case is shaped like the repo's real config.json: model_type, and
 // text_config.model_type where the repo is a multimodal wrapper. Resolving
-// through ResolveCandidateParser against the recorded v0.24.0 registry also
+// through ResolveCandidateParser against the recorded v0.31.0 registry also
 // proves every rule names a parser that release actually has.
-func TestCommittedRulesResolveEachFamilyToItsV0240Parser(t *testing.T) {
+func TestCommittedRulesResolveEachFamilyToItsV0310Parser(t *testing.T) {
 	c, err := LoadConfig("../../../inference/vllm/audit.yaml")
 	require.NoError(t, err)
 	reg, err := ParseRegistry(recordedRegistry(t), "qwen3_xml")
@@ -152,7 +152,7 @@ func TestCommittedRulesResolveEachFamilyToItsV0240Parser(t *testing.T) {
 			if tc.textModelType != "" {
 				conf["text_config"] = map[string]any{"model_type": tc.textModelType}
 			}
-			r, reason := ResolveCandidateParser(c, reg, "v0.24.0", tc.repo, conf)
+			r, reason := ResolveCandidateParser(c, reg, "v0.31.0", tc.repo, conf)
 			require.Empty(t, reason)
 			assert.Equal(t, tc.parser, r.Parser)
 		})
