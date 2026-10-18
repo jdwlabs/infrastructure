@@ -20,7 +20,7 @@
 # different Talos version's build most of the time. Moving TALOS_VERSION
 # means re-deriving this digest; the workflow fails the build when the two
 # disagree and prints the value to paste.
-FROM ghcr.io/siderolabs/iscsi-tools:v0.2.0@sha256:12521145e65403037a7412bf9abce1efd08583e018e5eed8e1c5b9faf52d1da4
+FROM ghcr.io/siderolabs/iscsi-tools:v0.2.0@sha256:584e1d106e424d3e17ddd43bddf892b386748f10d11a9fd024a358f0d42c0a2e
 
 COPY manifest.yaml /manifest.yaml
 COPY iscsid.yaml /rootfs/usr/local/etc/containers/iscsid.yaml
