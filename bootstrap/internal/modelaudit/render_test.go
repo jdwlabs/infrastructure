@@ -16,7 +16,7 @@ func goldenReport() Report {
 	return Report{
 		Summary: Summary{
 			Week: "2026-W40", Model: "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ@c58857a7f41c0920f73d1b56678640f9c02017d7",
-			ServedName: "qwen/qwen3-coder-30b-a3b", VLLMTag: "v0.24.0", BudgetGiB: 28.66,
+			ServedName: "qwen/qwen3-coder-30b-a3b", VLLMTag: "v0.31.0", BudgetGiB: 28.66,
 			Checked: 3, Candidates: 1, Rejected: 2, Requests: 9, DryRun: true,
 		},
 		Candidates: []CandidateRow{{

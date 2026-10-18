@@ -99,14 +99,14 @@ type Hub struct {
 	auth                []string
 }
 
-// NewHub starts a fake serving the recorded v0.24.0 registries and no models.
+// NewHub starts a fake serving the recorded v0.31.0 registries and no models.
 func NewHub(t *testing.T) *Hub {
 	t.Helper()
 	h := &Hub{
 		Orgs:          map[string][][]Model{},
 		OrgStatus:     map[string]int{},
-		Registry:      Fixture("tool_parsers_v0.24.0.py"),
-		ModelRegistry: Fixture("model_registry_v0.24.0.py"),
+		Registry:      Fixture("tool_parsers_v0.31.0.py"),
+		ModelRegistry: Fixture("model_registry_v0.31.0.py"),
 	}
 	h.Server = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.Server.Close)

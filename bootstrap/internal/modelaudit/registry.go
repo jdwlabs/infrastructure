@@ -12,7 +12,7 @@ import (
 // --tool-call-parser.
 type Registry map[string]bool
 
-// minRegistryKeys is a floor, not an expectation: v0.24.0 has 43. Fewer than
+// minRegistryKeys is a floor, not an expectation: v0.31.0 has 51. Fewer than
 // this means the extraction matched something other than the parser table.
 const minRegistryKeys = 10
 
@@ -60,7 +60,7 @@ func ParseRegistry(src []byte, incumbentParser string) (Registry, error) {
 // serves natively.
 type Architectures map[string]bool
 
-// minArchitectures is a floor, not an expectation: v0.24.0 has 359.
+// minArchitectures is a floor, not an expectation: v0.31.0 has 387.
 const minArchitectures = 100
 
 // anchorArchitecture must be present in any real registry. It is not the

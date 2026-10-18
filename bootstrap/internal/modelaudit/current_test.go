@@ -19,7 +19,7 @@ func spec(image string, args ...string) vllm.Spec {
 	}
 }
 
-const pinnedImage = "docker.io/vllm/vllm-openai:v0.24.0@sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f"
+const pinnedImage = "docker.io/vllm/vllm-openai:v0.31.0@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3"
 
 const (
 	committedSpec = "../../../inference/vllm/serving.yaml"
@@ -33,7 +33,7 @@ func TestCurrentFromServingSpecFile(t *testing.T) {
 	assert.Equal(t, "c58857a7f41c0920f73d1b56678640f9c02017d7", c.Revision)
 	assert.Equal(t, "local-chat", c.ServedName)
 	assert.Equal(t, []string{"qwen/qwen3-coder-30b-a3b"}, c.ServedAliases)
-	assert.Equal(t, "v0.24.0", c.VLLMTag)
+	assert.Equal(t, "v0.31.0", c.VLLMTag)
 	assert.Equal(t, 32768, c.ContextTokens)
 	assert.InDelta(t, 0.90, c.GPUMemoryUtilization, 1e-9)
 	assert.Equal(t, "qwen3_xml", c.ToolCallParser)
