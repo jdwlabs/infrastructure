@@ -116,19 +116,21 @@ func TestCurrentRecordsServingFlagsTheHybridEstimateDoesNotModel(t *testing.T) {
 		args []string
 		want []string
 	}{
-		"none":                           {nil, nil},
-		"prefix caching on":              {[]string{"--enable-prefix-caching"}, []string{"--enable-prefix-caching"}},
-		"prefix caching off is default":  {[]string{"--no-enable-prefix-caching"}, nil},
-		"chunked prefill off":            {[]string{"--no-enable-chunked-prefill"}, []string{"--no-enable-chunked-prefill"}},
-		"ssm dtype, two elements":        {[]string{"--mamba-ssm-cache-dtype", "float32"}, []string{"--mamba-ssm-cache-dtype"}},
-		"ssm dtype, underscores":         {[]string{"--mamba_ssm_cache_dtype=float16"}, []string{"--mamba-ssm-cache-dtype"}},
-		"ssm dtype auto is default":      {[]string{"--mamba-ssm-cache-dtype=auto"}, nil},
-		"conv dtype":                     {[]string{"--mamba-cache-dtype=float32"}, []string{"--mamba-cache-dtype"}},
-		"speculative config, = form":     {[]string{`--speculative-config={"method":"mtp","num_speculative_tokens":1}`}, []string{"--speculative-config"}},
-		"speculative config, short form": {[]string{"-sc", `{"method":"mtp"}`}, []string{"--speculative-config"}},
+		"none":                             {nil, nil},
+		"prefix caching on is default":     {[]string{"--enable-prefix-caching"}, nil},
+		"prefix caching off is modelled":   {[]string{"--no-enable-prefix-caching"}, nil},
+		"async scheduling off is modelled": {[]string{"--no-async-scheduling"}, nil},
+		"mamba cache mode":                 {[]string{"--mamba-cache-mode=all"}, []string{"--mamba-cache-mode"}},
+		"chunked prefill off":              {[]string{"--no-enable-chunked-prefill"}, []string{"--no-enable-chunked-prefill"}},
+		"ssm dtype, two elements":          {[]string{"--mamba-ssm-cache-dtype", "float32"}, []string{"--mamba-ssm-cache-dtype"}},
+		"ssm dtype, underscores":           {[]string{"--mamba_ssm_cache_dtype=float16"}, []string{"--mamba-ssm-cache-dtype"}},
+		"ssm dtype auto is default":        {[]string{"--mamba-ssm-cache-dtype=auto"}, nil},
+		"conv dtype":                       {[]string{"--mamba-cache-dtype=float32"}, []string{"--mamba-cache-dtype"}},
+		"speculative config, = form":       {[]string{`--speculative-config={"method":"mtp","num_speculative_tokens":1}`}, []string{"--speculative-config"}},
+		"speculative config, short form":   {[]string{"-sc", `{"method":"mtp"}`}, []string{"--speculative-config"}},
 		"several, in a fixed order": {
-			[]string{"--speculative-config", "{}", "--enable-prefix-caching"},
-			[]string{"--enable-prefix-caching", "--speculative-config"},
+			[]string{"--speculative-config", "{}", "--mamba-cache-mode", "align"},
+			[]string{"--mamba-cache-mode", "--speculative-config"},
 		},
 	}
 	for name, c := range cases {
@@ -138,6 +140,19 @@ func TestCurrentRecordsServingFlagsTheHybridEstimateDoesNotModel(t *testing.T) {
 			assert.Equal(t, c.want, cur.UnmodelledFlags)
 		})
 	}
+}
+
+func TestCurrentReadsTheDefaultsTheEstimateCanTurnOff(t *testing.T) {
+	base := []string{"--max-model-len=32768", "--tool-call-parser=hermes"}
+	c, err := CurrentFromSpec(spec(pinnedImage, base...))
+	require.NoError(t, err)
+	assert.False(t, c.PrefixCachingOff)
+	assert.False(t, c.AsyncSchedulingOff)
+
+	c, err = CurrentFromSpec(spec(pinnedImage, append(base, "--no-enable-prefix-caching", "--no-async-scheduling")...))
+	require.NoError(t, err)
+	assert.True(t, c.PrefixCachingOff)
+	assert.True(t, c.AsyncSchedulingOff)
 }
 
 func TestCurrentReadsLanguageModelOnly(t *testing.T) {

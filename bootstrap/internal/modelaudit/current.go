@@ -22,8 +22,12 @@ type Current struct {
 	ToolCallParser       string
 	Quantization         string
 	MaxNumBatchedTokens  int
-	UnmodelledFlags      []string
-	LanguageModelOnly    bool
+	// PrefixCachingOff and AsyncSchedulingOff are the two flags that turn
+	// off a vLLM default the memory estimate prices.
+	PrefixCachingOff   bool
+	AsyncSchedulingOff bool
+	UnmodelledFlags    []string
+	LanguageModelOnly  bool
 }
 
 var vllmTagRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
@@ -84,6 +88,8 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 		c.MaxNumBatchedTokens = n
 	}
 
+	c.PrefixCachingOff = hasFlag(s.Args, "--no-enable-prefix-caching")
+	c.AsyncSchedulingOff = hasFlag(s.Args, "--no-async-scheduling")
 	c.UnmodelledFlags = unmodelledFlags(s.Args)
 	c.LanguageModelOnly = hasFlag(s.Args, "--language-model-only")
 
@@ -96,20 +102,21 @@ func CurrentFromSpec(s vllm.Spec) (Current, error) {
 	return c, nil
 }
 
-// unmodelledFlags names the serving flags, set away from vLLM's default, that
-// change what a linear-attention or sliding layer holds: prefix caching keeps
-// one Gated DeltaNet state per block instead of one per sequence, the two
-// mamba dtypes resize that state, speculative decoding adds conv rows and
-// state blocks, and disabling chunked prefill makes a sliding layer hold the
-// whole context. The order is fixed so the reason a model is rejected with is
-// stable.
+// unmodelledFlags names the serving flags, set away from the defaults the
+// estimate assumes, that change what a linear-attention or sliding layer
+// holds: --mamba-cache-mode picks a different number of states per sequence
+// than prefix caching's default, the two mamba dtypes resize the state,
+// speculative decoding adds conv rows and state blocks, and disabling
+// chunked prefill makes a sliding layer hold the whole context. Prefix
+// caching and async scheduling are modelled, on or off. The order is fixed
+// so the reason a model is rejected with is stable.
 func unmodelledFlags(args []string) []string {
 	var out []string
-	if hasFlag(args, "--enable-prefix-caching") {
-		out = append(out, "--enable-prefix-caching")
-	}
 	if hasFlag(args, "--no-enable-chunked-prefill") {
 		out = append(out, "--no-enable-chunked-prefill")
+	}
+	if hasFlag(args, "--mamba-cache-mode") {
+		out = append(out, "--mamba-cache-mode")
 	}
 	for _, f := range []string{"--mamba-cache-dtype", "--mamba-ssm-cache-dtype"} {
 		if v, ok := argValue(args, f); ok && v != "auto" {
