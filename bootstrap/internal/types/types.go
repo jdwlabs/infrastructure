@@ -317,9 +317,9 @@ func TestConfig() *Config {
 	cfg.HAProxyLoginUser = "root"
 	cfg.HAProxyStatsUser = "admin"
 	cfg.HAProxyStatsPassword = "admin"
-	cfg.KubernetesVersion = "v1.35.1"
-	cfg.TalosVersion = "v1.12.3"
-	cfg.InstallerImage = "factory.talos.dev/nocloud-installer/test:v1.12.3"
+	cfg.KubernetesVersion = "v1.37.1"
+	cfg.TalosVersion = "v1.14.4"
+	cfg.InstallerImage = "factory.talos.dev/nocloud-installer/test:v1.14.4"
 	cfg.ProxmoxNodeIPs = map[string]net.IP{
 		"pve1": net.ParseIP("192.168.1.200"),
 		"pve2": net.ParseIP("192.168.1.201"),

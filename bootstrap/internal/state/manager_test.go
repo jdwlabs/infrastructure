@@ -891,23 +891,23 @@ func TestManager_LoadTerraformExtras(t *testing.T) {
 		},
 		{
 			name:          "extracts kubernetes_version",
-			tfvarsContent: `kubernetes_version = "v1.35.1"`,
+			tfvarsContent: `kubernetes_version = "v1.37.1"`,
 			validateConfig: func(t *testing.T, c *types.Config) {
-				assert.Equal(t, "v1.35.1", c.KubernetesVersion)
+				assert.Equal(t, "v1.37.1", c.KubernetesVersion)
 			},
 		},
 		{
 			name:          "extracts talos_version",
-			tfvarsContent: `talos_version = "v1.12.3"`,
+			tfvarsContent: `talos_version = "v1.14.4"`,
 			validateConfig: func(t *testing.T, c *types.Config) {
-				assert.Equal(t, "v1.12.3", c.TalosVersion)
+				assert.Equal(t, "v1.14.4", c.TalosVersion)
 			},
 		},
 		{
 			name:          "extracts installer_image",
-			tfvarsContent: `installer_image = "factory.talos.dev/nocloud-installer/test:v1.12.3"`,
+			tfvarsContent: `installer_image = "factory.talos.dev/nocloud-installer/test:v1.14.4"`,
 			validateConfig: func(t *testing.T, c *types.Config) {
-				assert.Equal(t, "factory.talos.dev/nocloud-installer/test:v1.12.3", c.InstallerImage)
+				assert.Equal(t, "factory.talos.dev/nocloud-installer/test:v1.14.4", c.InstallerImage)
 			},
 		},
 		{
@@ -974,7 +974,7 @@ func TestManager_LoadTerraformExtras(t *testing.T) {
 			initialConfig: func(c *types.Config) {
 				c.KubernetesVersion = "v1.99.0"
 			},
-			tfvarsContent: `kubernetes_version = "v1.35.1"`,
+			tfvarsContent: `kubernetes_version = "v1.37.1"`,
 			validateConfig: func(t *testing.T, c *types.Config) {
 				assert.Equal(t, "v1.99.0", c.KubernetesVersion)
 			},
@@ -1261,9 +1261,9 @@ haproxy_ip                = "192.168.1.199"
 haproxy_login_user        = "root"
 haproxy_stats_user		  = "admin"
 haproxy_stats_password    = "changeme"
-kubernetes_version        = "v1.35.1"
-talos_version             = "v1.12.3"
-installer_image           = "factory.talos.dev/nocloud-installer/test:v1.12.3"
+kubernetes_version        = "v1.37.1"
+talos_version             = "v1.14.4"
+installer_image           = "factory.talos.dev/nocloud-installer/test:v1.14.4"
 ingress_http_nodeport     = 30180
 ingress_tls_nodeport      = 30543
 
@@ -1289,9 +1289,9 @@ talos_worker_configuration = []
 	assert.Equal(t, "test-core", cfg.ClusterName)
 	assert.Equal(t, "cluster.example.com", cfg.ControlPlaneEndpoint)
 	assert.True(t, cfg.HAProxyIP.Equal(net.ParseIP("192.168.1.199")))
-	assert.Equal(t, "v1.35.1", cfg.KubernetesVersion)
-	assert.Equal(t, "v1.12.3", cfg.TalosVersion)
-	assert.Equal(t, "factory.talos.dev/nocloud-installer/test:v1.12.3", cfg.InstallerImage)
+	assert.Equal(t, "v1.37.1", cfg.KubernetesVersion)
+	assert.Equal(t, "v1.14.4", cfg.TalosVersion)
+	assert.Equal(t, "factory.talos.dev/nocloud-installer/test:v1.14.4", cfg.InstallerImage)
 	assert.Equal(t, "192.168.1.200", cfg.ProxmoxSSHHost)
 	assert.Equal(t, "root", cfg.HAProxyLoginUser)
 	assert.Equal(t, "admin", cfg.HAProxyStatsUser)

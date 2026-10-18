@@ -41,9 +41,9 @@ func setupTestApp(t *testing.T) *app.App {
 		TerraformTFVars:      filepath.Join(tmpDir, "terraform.tfvars"),
 		ControlPlaneEndpoint: "test.example.com",
 		HAProxyIP:            net.ParseIP("192.168.1.100"),
-		KubernetesVersion:    "v1.35.1",
-		TalosVersion:         "v1.12.3",
-		InstallerImage:       "factory.talos.dev/installer:v1.12.3",
+		KubernetesVersion:    "v1.37.1",
+		TalosVersion:         "v1.14.4",
+		InstallerImage:       "factory.talos.dev/installer:v1.14.4",
 		ProxmoxNodeIPs: map[string]net.IP{
 			"pve1": net.ParseIP("192.168.1.200"),
 		},
@@ -56,9 +56,9 @@ func setupTestApp(t *testing.T) *app.App {
 	tfvarsContent := `cluster_name = "test-cluster"
 control_plane_endpoint = "test.example.com"
 haproxy_ip = "192.168.1.100"
-kubernetes_version = "v1.35.1"
-talos_version = "v1.12.3"
-installer_image = "factory.talos.dev/installer:v1.12.3"
+kubernetes_version = "v1.37.1"
+talos_version = "v1.14.4"
+installer_image = "factory.talos.dev/installer:v1.14.4"
 
 proxmox_node_ips = {
   pve1 = "192.168.1.200"

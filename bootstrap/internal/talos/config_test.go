@@ -80,13 +80,16 @@ func TestNodeConfigGenerate_ControlPlane(t *testing.T) {
 	assert.Contains(t, contentStr, "auto: stable")
 	assert.Contains(t, contentStr, "clusterName: cluster")
 	assert.Contains(t, contentStr, "endpoint: https://cluster.example.com:6443")
-	assert.Contains(t, contentStr, "disk: /dev/sda")
+	// TestConfig targets the multi-document schema, where the install disk is
+	// an UnattendedInstallConfig selector rather than machine.install.disk.
+	assert.Contains(t, contentStr, "kind: UnattendedInstallConfig")
+	assert.Contains(t, contentStr, `disk.dev_path == "/dev/sda"`)
 	assert.Contains(t, contentStr, "interface: eth0")
 	// Control planes do not schedule workloads (allowSchedulingOnControlPlanes:
 	// false), so the hugepages reservation is worker-only — see the worker test.
 	assert.NotContains(t, contentStr, "vm.nr_hugepages")
-	// Note: the actual field name is allowSchedulingOnControlPlanes (with s)
-	assert.Contains(t, contentStr, "allowSchedulingOnControlPlanes: false")
+	assert.Contains(t, contentStr, "kind: KubeAPIServerConfig")
+	assert.NotContains(t, contentStr, "allowSchedulingOnControlPlanes")
 }
 
 func TestNodeConfigGenerate_Worker(t *testing.T) {
@@ -132,7 +135,7 @@ func TestNodeConfigGenerate_Worker(t *testing.T) {
 	assert.Contains(t, contentStr, "type: worker")
 	// Hostname is set via HostnameConfig with auto: stable, not inline
 	assert.Contains(t, contentStr, "auto: stable")
-	assert.Contains(t, contentStr, "destination: /var/local")
+	assert.Contains(t, contentStr, "kind: KubeNodeConfig")
 	// No hugepages reservation: nothing requests hugepages, and the 2Gi/node
 	// it stranded shrank allocatable enough to OOM-kill BestEffort pods.
 	assert.NotContains(t, contentStr, "vm.nr_hugepages")
@@ -199,9 +202,9 @@ func TestNodeConfigBaseConfigStale(t *testing.T) {
 		nc := NewNodeConfig(cfg)
 
 		baseConfig := filepath.Join(t.TempDir(), "control-plane.yaml")
-		require.NoError(t, os.WriteFile(baseConfig, []byte(fixture(cfg.KubernetesVersion, "factory.talos.dev/nocloud-installer/test:v1.12.3")), 0600))
+		require.NoError(t, os.WriteFile(baseConfig, []byte(fixture(cfg.KubernetesVersion, "factory.talos.dev/nocloud-installer/test:v1.13.4")), 0600))
 
-		cfg.InstallerImage = "factory.talos.dev/nocloud-installer/test:v1.13.0"
+		cfg.InstallerImage = "factory.talos.dev/nocloud-installer/test:v1.14.4"
 		stale, err := nc.baseConfigStale(baseConfig)
 		require.NoError(t, err)
 		assert.True(t, stale, "installer image drift against the existing base config should be detected")
