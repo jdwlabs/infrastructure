@@ -22,6 +22,11 @@ machine:
       - ip: {{ .HAProxyIP }}
         aliases:
           - {{ .ControlPlaneEndpoint }}
+          # The apiserver fetches the OIDC issuer's discovery document and
+          # keys from the host network. Public DNS gives the WAN address and
+          # the home router does not hairpin to it, so pin the issuer to the
+          # VIP that fronts the same gateway.
+          - argocd.jdwlabs.com
 {{- if not .MultidocKubernetes }}
   kubelet:
     extraArgs:
