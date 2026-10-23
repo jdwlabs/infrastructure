@@ -162,6 +162,11 @@ func TestVersionMatchesTarget(t *testing.T) {
 		{"v1.13.4", "factory.talos.dev/installer:v1.13.4@sha256:abc", true},
 		// Node version with "v" prefix vs image tag without
 		{"v1.13.4", "factory.talos.dev/installer/ext:1.13.4", false},
+		// Registry port is not the tag
+		{"v1.13.4", "registry.lan:5000/installer:v1.13.4", true},
+		{"v1.13.4", "registry.lan:5000/installer", false},
+		// Image Factory schematic path
+		{"v1.13.4", "factory.talos.dev/nocloud-installer/0123abcd:v1.13.4", true},
 	}
 
 	for _, tt := range tests {
