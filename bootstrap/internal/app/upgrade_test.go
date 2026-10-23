@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/jdwlabs/infrastructure/bootstrap/internal/types"
 	"github.com/stretchr/testify/assert"
@@ -335,17 +337,155 @@ func TestRunUpgrade_AbortOnFirstNodeFailure(t *testing.T) {
 	assert.Equal(t, 1, deps.upgradeCount, "upgrade should abort after first failure")
 }
 
-// mockUpgradeDeps is a test double for the Talos+kubectl API calls made during upgrade.
+// TestMain shortens the post-upgrade poll so tests do not sleep.
+func TestMain(m *testing.M) {
+	upgradePollInterval = time.Millisecond
+	os.Exit(m.Run())
+}
+
+func singleWorkerState() *types.ClusterState {
+	return &types.ClusterState{
+		BootstrapCompleted: true,
+		Workers:            []types.NodeState{{VMID: 301, IP: net.ParseIP("192.168.1.41")}},
+	}
+}
+
+func twoCPState() *types.ClusterState {
+	return &types.ClusterState{
+		BootstrapCompleted: true,
+		ControlPlanes: []types.NodeState{
+			{VMID: 201, IP: net.ParseIP("192.168.1.21")},
+			{VMID: 202, IP: net.ParseIP("192.168.1.22")},
+		},
+	}
+}
+
+func autoApproveApp(t *testing.T) *App {
+	cfg := types.TestConfig()
+	cfg.AutoApprove = true
+	return &App{Cfg: cfg, Logger: testLogger(t)}
+}
+
+const testTargetImage = "factory.talos.dev/installer:v1.13.4"
+
+// TestRunUpgrade_WaitsForRebootIntoTarget verifies the run does not move on
+// while the node still reports the old version, which is what it does between
+// accepting the upgrade and rebooting.
+func TestRunUpgrade_WaitsForRebootIntoTarget(t *testing.T) {
+	deps := &mockUpgradeDeps{
+		nodeVersions: map[string]string{"192.168.1.21": "v1.12.3", "192.168.1.22": "v1.12.3"},
+		oldPolls:     3,
+	}
+
+	err := autoApproveApp(t).runUpgradeWithState(context.Background(), twoCPState(), nil, testTargetImage, deps)
+	require.NoError(t, err)
+	assert.Equal(t, 2, deps.upgradeCount)
+	assert.GreaterOrEqual(t, deps.versionPolls["192.168.1.21"], 4,
+		"must keep polling until the node reports the target tag")
+}
+
+// TestRunUpgrade_AbortsWhenNodeNeverReportsTarget verifies a node that never
+// reboots into the target fails the run instead of letting the next node go.
+func TestRunUpgrade_AbortsWhenNodeNeverReportsTarget(t *testing.T) {
+	saved := upgradeNodeTimeout
+	upgradeNodeTimeout = 50 * time.Millisecond
+	defer func() { upgradeNodeTimeout = saved }()
+
+	deps := &mockUpgradeDeps{
+		nodeVersions: map[string]string{"192.168.1.21": "v1.12.3", "192.168.1.22": "v1.12.3"},
+		stuck:        true,
+	}
+
+	err := autoApproveApp(t).runUpgradeWithState(context.Background(), twoCPState(), nil, testTargetImage, deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not report the target version")
+	assert.Equal(t, 1, deps.upgradeCount, "second control plane must not be upgraded")
+}
+
+// TestRunUpgrade_GateFailuresAbort verifies every post-upgrade gate is fatal:
+// moving on to the next node after a failed gate is how quorum or the last
+// good Longhorn replica is lost.
+func TestRunUpgrade_GateFailuresAbort(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    *types.ClusterState
+		mutate   func(*mockUpgradeDeps)
+		wantErr  string
+		upgrades int
+	}{
+		{"node name unresolvable aborts before upgrading", twoCPState(),
+			func(m *mockUpgradeDeps) { m.nodeNameErr = errors.New("kubectl down") }, "resolve kubernetes node name", 0},
+		{"etcd not healthy", twoCPState(),
+			func(m *mockUpgradeDeps) { m.etcdErr = errors.New("timeout") }, "etcd not healthy", 1},
+		{"node not Ready", twoCPState(),
+			func(m *mockUpgradeDeps) { m.readyErr = errors.New("timeout") }, "not Ready", 1},
+		{"uncordon fails", singleWorkerState(),
+			func(m *mockUpgradeDeps) { m.uncordonErr = errors.New("forbidden") }, "uncordon worker", 1},
+		{"longhorn degraded", singleWorkerState(),
+			func(m *mockUpgradeDeps) { m.longhornErr = errors.New("2 degraded") }, "longhorn volumes degraded", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := &mockUpgradeDeps{nodeVersions: map[string]string{
+				"192.168.1.21": "v1.12.3", "192.168.1.22": "v1.12.3", "192.168.1.41": "v1.12.3",
+			}}
+			tt.mutate(deps)
+
+			err := autoApproveApp(t).runUpgradeWithState(context.Background(), tt.state, nil, testTargetImage, deps)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Equal(t, tt.upgrades, deps.upgradeCount)
+		})
+	}
+}
+
+// TestRunUpgrade_EtcdGateQueriesUpgradedNode verifies etcd is checked through
+// the upgraded member, expecting every control plane, not through a peer that
+// would answer while that member is still down.
+func TestRunUpgrade_EtcdGateQueriesUpgradedNode(t *testing.T) {
+	deps := &mockUpgradeDeps{nodeVersions: map[string]string{"192.168.1.21": "v1.12.3", "192.168.1.22": "v1.12.3"}}
+
+	err := autoApproveApp(t).runUpgradeWithState(context.Background(), twoCPState(), nil, testTargetImage, deps)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"192.168.1.21", "192.168.1.22"}, deps.etcdIPs)
+	assert.Equal(t, 2, deps.etcdExpected)
+}
+
+// mockUpgradeDeps is a test double for the Talos+kubectl API calls made during
+// upgrade. A successful Upgrade makes NodeVersion report the target tag after
+// oldPolls further polls, unless stuck is set.
 type mockUpgradeDeps struct {
 	nodeVersions  map[string]string
 	upgradeError  map[string]bool
 	upgradeCount  int
 	cordonCount   int
 	uncordonCount int
+
+	oldPolls     int
+	stuck        bool
+	versionPolls map[string]int
+	upgraded     map[string]int
+
+	nodeNameErr error
+	etcdErr     error
+	readyErr    error
+	uncordonErr error
+	longhornErr error
+
+	etcdIPs      []string
+	etcdExpected int
 }
 
 func (m *mockUpgradeDeps) NodeVersion(_ context.Context, ip net.IP) (string, error) {
-	if v, ok := m.nodeVersions[ip.String()]; ok {
+	key := ip.String()
+	if m.versionPolls == nil {
+		m.versionPolls = map[string]int{}
+	}
+	m.versionPolls[key]++
+	if start, ok := m.upgraded[key]; ok && !m.stuck && m.versionPolls[key]-start > m.oldPolls {
+		return "v1.13.4", nil
+	}
+	if v, ok := m.nodeVersions[key]; ok {
 		return v, nil
 	}
 	return "", nil
@@ -356,21 +496,31 @@ func (m *mockUpgradeDeps) Upgrade(_ context.Context, ip net.IP, _ string) error 
 	if m.upgradeError != nil && m.upgradeError[ip.String()] {
 		return errUpgradeFailed
 	}
+	if m.upgraded == nil {
+		m.upgraded = map[string]int{}
+	}
+	if m.versionPolls == nil {
+		m.versionPolls = map[string]int{}
+	}
+	m.upgraded[ip.String()] = m.versionPolls[ip.String()]
 	return nil
 }
 
-func (m *mockUpgradeDeps) WaitForAPI(_ context.Context, _ net.IP) error { return nil }
-
-func (m *mockUpgradeDeps) WaitForEtcdHealthy(_ context.Context, _ net.IP, _ interface{}) error {
-	return nil
+func (m *mockUpgradeDeps) WaitForEtcdMembers(_ context.Context, ip net.IP, expected int, _ time.Duration) error {
+	m.etcdIPs = append(m.etcdIPs, ip.String())
+	m.etcdExpected = expected
+	return m.etcdErr
 }
 
 func (m *mockUpgradeDeps) GetNodeNameByIP(_ context.Context, ip net.IP) (string, error) {
+	if m.nodeNameErr != nil {
+		return "", m.nodeNameErr
+	}
 	return "node-" + ip.String(), nil
 }
 
-func (m *mockUpgradeDeps) WaitForNodeReady(_ context.Context, _ string, _ interface{}) error {
-	return nil
+func (m *mockUpgradeDeps) WaitForNodeReady(_ context.Context, _ string, _ time.Duration) error {
+	return m.readyErr
 }
 
 func (m *mockUpgradeDeps) CordonNode(_ context.Context, _ string) error {
@@ -380,9 +530,9 @@ func (m *mockUpgradeDeps) CordonNode(_ context.Context, _ string) error {
 
 func (m *mockUpgradeDeps) UncordonNode(_ context.Context, _ string) error {
 	m.uncordonCount++
-	return nil
+	return m.uncordonErr
 }
 
-func (m *mockUpgradeDeps) WaitForLonghornVolumesHealthy(_ context.Context, _ interface{}) error {
-	return nil
+func (m *mockUpgradeDeps) WaitForLonghornVolumesHealthy(_ context.Context, _ time.Duration) error {
+	return m.longhornErr
 }
