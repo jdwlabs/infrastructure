@@ -444,6 +444,25 @@ func TestRunUpgrade_GateFailuresAbort(t *testing.T) {
 	}
 }
 
+// TestRunUpgrade_RejectsUntaggedImage verifies an image the run cannot verify
+// a reboot against is refused before any node, plan or audit entry.
+func TestRunUpgrade_RejectsUntaggedImage(t *testing.T) {
+	for _, image := range []string{
+		"factory.talos.dev/installer@sha256:abc",
+		"registry.lan:5000/installer",
+		"factory.talos.dev/installer:",
+	} {
+		t.Run(image, func(t *testing.T) {
+			deps := &mockUpgradeDeps{}
+			err := autoApproveApp(t).runUpgradeWithState(context.Background(), twoCPState(), nil, image, deps)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "has no tag")
+			assert.Zero(t, deps.upgradeCount)
+			assert.Empty(t, deps.versionPolls, "no node may be contacted")
+		})
+	}
+}
+
 // TestRunUpgrade_EtcdGateQueriesUpgradedNode verifies etcd is checked through
 // the upgraded member, expecting every control plane, not through a peer that
 // would answer while that member is still down.
