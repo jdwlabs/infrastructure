@@ -243,7 +243,8 @@ talops upgrade                              # every node, after a y/N prompt
 ```
 
 It refuses to run before bootstrap has completed and takes the target from
-`installer_image` in tfvars unless `--image` is given. `--plan` (or the global
+`installer_image` in tfvars unless `--image` is given, and refuses an image
+without a tag, since the tag is how it recognises a finished reboot. `--plan` (or the global
 `--dry-run`) queries each node's version and logs the action it would take.
 Without `--auto-approve` it asks before the first node. For each node, in the
 order above, it:
@@ -263,7 +264,8 @@ order above, it:
    member list to show every control plane.
 7. Waits up to 10 minutes for the node to be Ready.
 8. Workers: uncordons, then runs the Longhorn gate (worker step 6). The gate
-   fails closed: it passes only when every volume is healthy or the Longhorn
+   fails closed: it passes only when no volume is `degraded` or `faulted`
+   (a detached volume reports `unknown` and does not count) or the Longhorn
    CRD does not exist, and kubectl errors that persist until the timeout
    abort the run as "could not be verified".
 
