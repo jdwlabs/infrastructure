@@ -29,6 +29,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("GO_TEST_HELPER_PROCESS") == "1" {
 		// Write the requested output then exit with the requested code.
 		_, _ = fmt.Fprint(os.Stdout, os.Getenv("GO_TEST_HELPER_OUTPUT"))
+		_, _ = fmt.Fprint(os.Stderr, os.Getenv("GO_TEST_HELPER_STDERR"))
 		code, _ := strconv.Atoi(os.Getenv("GO_TEST_HELPER_EXIT"))
 		os.Exit(code)
 	}
@@ -61,11 +62,18 @@ func mockExecCmd(output string, exitCode int) *exec.Cmd {
 // spawning a shell. It re-invokes the test binary itself via the helper-process
 // pattern so no shell interpreter (and therefore no injection surface) is needed.
 func mockExecCmdFailing(output string) *exec.Cmd {
+	return mockExecCmdStreams(output, "", 1)
+}
+
+// mockExecCmdStreams is mockExecCmdFailing with separate stdout and stderr and
+// a chosen exit code, for code that must tell the two streams apart.
+func mockExecCmdStreams(stdout, stderr string, exitCode int) *exec.Cmd {
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 	cmd.Env = append(os.Environ(),
 		"GO_TEST_HELPER_PROCESS=1",
-		"GO_TEST_HELPER_OUTPUT="+output,
-		"GO_TEST_HELPER_EXIT=1",
+		"GO_TEST_HELPER_OUTPUT="+stdout,
+		"GO_TEST_HELPER_STDERR="+stderr,
+		"GO_TEST_HELPER_EXIT="+strconv.Itoa(exitCode),
 	)
 	return cmd
 }
@@ -798,8 +806,7 @@ func TestClient_WaitForLonghornVolumesHealthy(t *testing.T) {
 
 	t.Run("context timeout with persistent degraded volumes", func(t *testing.T) {
 		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			// Each line is a degraded volume name from the jsonpath query
-			return mockExecCmd("pvc-abc123\npvc-def456\npvc-ghi789", 0)
+			return mockExecCmdStreams("pvc-abc123\tdegraded\npvc-def456\tfaulted\npvc-ghi789\thealthy\n", "", 0)
 		}
 
 		client, _ := newTestClient(t)
@@ -809,6 +816,45 @@ func TestClient_WaitForLonghornVolumesHealthy(t *testing.T) {
 		err := client.WaitForLonghornVolumesHealthy(ctx, 100*time.Millisecond)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "degraded")
+	})
+}
+
+func TestClient_countDegradedLonghornVolumes(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	tests := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   int
+	}{
+		{"only degraded and faulted count", "a\thealthy\nb\tdegraded\nc\tfaulted\n", "", 2},
+		// Longhorn reports a detached volume as "unknown"; it has nothing to rebuild.
+		{"detached volume does not hold the gate", "a\thealthy\nb\tunknown\n", "", 0},
+		{"stderr warning is not counted as a volume", "a\thealthy\n",
+			"Warning: longhorn.io/v1beta1 Volume is deprecated\n", 0},
+		{"no volumes", "", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				return mockExecCmdStreams(tt.stdout, tt.stderr, 0)
+			}
+			client, _ := newTestClient(t)
+			got, err := client.countDegradedLonghornVolumes(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("absent CRD reported on stderr", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return mockExecCmdStreams("", `error: the server doesn't have a resource type "volumes"`, 1)
+		}
+		client, _ := newTestClient(t)
+		_, err := client.countDegradedLonghornVolumes(context.Background())
+		assert.ErrorIs(t, err, errLonghornAbsent)
 	})
 }
 
