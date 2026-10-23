@@ -2,6 +2,7 @@ package kubectl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os/exec"
@@ -196,6 +197,151 @@ func (c *Client) GetParsedNodes(ctx context.Context) ([]KubeNode, error) {
 		})
 	}
 	return nodes, nil
+}
+
+// CordonNode marks a node as unschedulable so pods are not placed on it
+// while the node is being upgraded or drained.
+func (c *Client) CordonNode(ctx context.Context, nodeName string) error {
+	c.logger.Info("cordoning node", zap.String("node", nodeName))
+
+	args := []string{"cordon", nodeName}
+	ac, cmd := c.auditedCommand(ctx, args...)
+	if output, err := combinedOutput(ac, cmd); err != nil {
+		return fmt.Errorf("%s: %w, output: %s", c.cmdString(args...), err, string(output))
+	}
+
+	return nil
+}
+
+// UncordonNode restores a node to schedulable state after an upgrade completes.
+func (c *Client) UncordonNode(ctx context.Context, nodeName string) error {
+	c.logger.Info("uncordoning node", zap.String("node", nodeName))
+
+	args := []string{"uncordon", nodeName}
+	ac, cmd := c.auditedCommand(ctx, args...)
+	if output, err := combinedOutput(ac, cmd); err != nil {
+		return fmt.Errorf("%s: %w, output: %s", c.cmdString(args...), err, string(output))
+	}
+
+	return nil
+}
+
+// errLonghornAbsent is a sentinel returned by countDegradedLonghornVolumes when
+// kubectl output confirms that the Longhorn CRD or namespace does not exist.
+// It is distinct from transient errors so the wait loop can pass the gate safely.
+var errLonghornAbsent = fmt.Errorf("longhorn CRD not present in this cluster")
+
+// longhornAbsentPhrases are substrings that the API server emits when a resource
+// type is unknown. Only these phrases justify passing the safety gate; anything
+// else (TLS errors, connection refused, timeouts) is treated as transient.
+var longhornAbsentPhrases = []string{
+	`the server doesn't have a resource type`,
+	`the server doesn't have a resource type "volumes"`,
+	`no matches for kind "Volume" in group "longhorn.io"`,
+	`couldn't find resource for`,
+}
+
+// isLonghornAbsentOutput returns true when combined kubectl output contains a
+// known "resource type not found" phrase from the API server.
+func isLonghornAbsentOutput(output string) bool {
+	lower := strings.ToLower(output)
+	for _, phrase := range longhornAbsentPhrases {
+		if strings.Contains(lower, strings.ToLower(phrase)) {
+			return true
+		}
+	}
+	return false
+}
+
+// WaitForLonghornVolumesHealthy polls until no volumes in volumes.longhorn.io report
+// a degraded replica count, or the timeout expires.
+//
+// Error classification:
+//   - "Longhorn absent" (CRD unknown to the API server) → gate is not applicable, return nil immediately.
+//   - Transient kubectl error (connection refused, TLS, timeout, etc.) → log warn and keep polling.
+//   - Deadline reached while still receiving transient errors → return error (fail closed) so the
+//     operator knows the gate could not verify health rather than silently allowing the next node down.
+func (c *Client) WaitForLonghornVolumesHealthy(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	var lastErr error
+
+	for {
+		degraded, err := c.countDegradedLonghornVolumes(ctx)
+
+		switch {
+		case errors.Is(err, errLonghornAbsent):
+			// Longhorn is not installed; the gate does not apply.
+			return nil
+		case err != nil:
+			// Transient failure — kubectl could not reach the API server yet.
+			// Do not pass the gate; keep polling until deadline.
+			lastErr = err
+			c.logger.Warn("transient error querying Longhorn volumes — will retry",
+				zap.Error(err))
+		case degraded == 0:
+			return nil
+		default:
+			lastErr = nil
+			c.logger.Info("waiting for Longhorn volumes to heal",
+				zap.Int("degraded", degraded),
+				zap.Duration("timeout", timeout))
+		}
+
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				// Never got a clean response — fail closed so the operator is alerted.
+				return fmt.Errorf("longhorn health gate could not be verified after %s (last error: %w)", timeout, lastErr)
+			}
+			return fmt.Errorf("%d degraded Longhorn volume(s) after %s — aborting to protect data", degraded, timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("longhorn health gate could not be verified: %w", ctx.Err())
+			}
+			return fmt.Errorf("%d degraded Longhorn volume(s): %w", degraded, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// countDegradedLonghornVolumes counts volumes.longhorn.io whose robustness is not
+// "healthy". It returns:
+//   - (count, nil) — query succeeded; count may be zero (all healthy) or positive.
+//   - (0, errLonghornAbsent) — the API server does not know this resource type.
+//   - (0, err) — a transient failure (connection error, timeout, etc.).
+func (c *Client) countDegradedLonghornVolumes(ctx context.Context) (int, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// jsonpath emits one line per degraded volume name; empty output means all healthy.
+	args := []string{
+		"get", "volumes.longhorn.io",
+		"--all-namespaces",
+		"--no-headers",
+		"-o", `jsonpath={range .items[?(@.status.robustness!="healthy")]}{.metadata.name}{"\n"}{end}`,
+	}
+	ac, cmd := c.auditedCommand(queryCtx, args...)
+	output, err := combinedOutput(ac, cmd)
+	if err != nil {
+		if isLonghornAbsentOutput(string(output)) {
+			return 0, errLonghornAbsent
+		}
+		return 0, fmt.Errorf("longhorn query failed: %w", err)
+	}
+
+	// Each non-empty line is a degraded volume name produced by the jsonpath template.
+	count := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // WaitForNodeReady polls until the named node reaches Ready status or the timeout expires
