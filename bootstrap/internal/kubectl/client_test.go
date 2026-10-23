@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,11 +21,32 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-// mockExecCmd creates a mock exec.Cmd that returns predefined output
+// TestMain runs the helper-process stub when the test binary is re-invoked as a
+// mock subprocess (GO_TEST_HELPER_PROCESS=1). This avoids any shell interpreter
+// and eliminates command-injection risk in test helpers that need to combine
+// custom output with a non-zero exit code.
+func TestMain(m *testing.M) {
+	if os.Getenv("GO_TEST_HELPER_PROCESS") == "1" {
+		// Write the requested output then exit with the requested code.
+		_, _ = fmt.Fprint(os.Stdout, os.Getenv("GO_TEST_HELPER_OUTPUT"))
+		_, _ = fmt.Fprint(os.Stderr, os.Getenv("GO_TEST_HELPER_STDERR"))
+		code, _ := strconv.Atoi(os.Getenv("GO_TEST_HELPER_EXIT"))
+		os.Exit(code)
+	}
+	os.Exit(m.Run())
+}
+
+// TestHelperProcess is a no-op test that exists only so the test binary can be
+// re-invoked with -test.run=TestHelperProcess as a subprocess mock. The real
+// work happens in TestMain when GO_TEST_HELPER_PROCESS=1 is set.
+func TestHelperProcess(*testing.T) {}
+
+// mockExecCmd creates a mock Cmd that writes output to stdout and exits with
+// exitCode. On Windows, -NoProfile suppresses shell-profile banners that would
+// otherwise appear in CombinedOutput and corrupt the mock's intended payload.
 func mockExecCmd(output string, exitCode int) *exec.Cmd {
 	if runtime.GOOS == "windows" {
-		// Use PowerShell with [Console]::Write which outputs raw text
-		// Escape single quotes by doubling them
+		// Escape single quotes by doubling them.
 		escaped := strings.ReplaceAll(output, "'", "''")
 		psCmd := fmt.Sprintf("[Console]::Write('%s'); exit %d", escaped, exitCode)
 		// -NoProfile keeps the developer's shell profile from writing its own
@@ -33,6 +56,26 @@ func mockExecCmd(output string, exitCode int) *exec.Cmd {
 	}
 	// Unix: use printf for reliable output without trailing newline
 	return exec.Command("printf", "%s", output)
+}
+
+// mockExecCmdFailing returns a mock Cmd that writes output then exits 1, without
+// spawning a shell. It re-invokes the test binary itself via the helper-process
+// pattern so no shell interpreter (and therefore no injection surface) is needed.
+func mockExecCmdFailing(output string) *exec.Cmd {
+	return mockExecCmdStreams(output, "", 1)
+}
+
+// mockExecCmdStreams is mockExecCmdFailing with separate stdout and stderr and
+// a chosen exit code, for code that must tell the two streams apart.
+func mockExecCmdStreams(stdout, stderr string, exitCode int) *exec.Cmd {
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+	cmd.Env = append(os.Environ(),
+		"GO_TEST_HELPER_PROCESS=1",
+		"GO_TEST_HELPER_OUTPUT="+stdout,
+		"GO_TEST_HELPER_STDERR="+stderr,
+		"GO_TEST_HELPER_EXIT="+strconv.Itoa(exitCode),
+	)
+	return cmd
 }
 
 // Helper to create a test client
@@ -576,6 +619,293 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func TestClient_CordonNode(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	tests := []struct {
+		name        string
+		nodeName    string
+		mockErr     bool
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "successful cordon",
+			nodeName: "worker-1",
+			wantErr:  false,
+		},
+		{
+			name:        "cordon fails",
+			nodeName:    "worker-1",
+			mockErr:     true,
+			wantErr:     true,
+			errContains: "kubectl cordon",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				assert.Equal(t, "kubectl", name)
+				assert.Contains(t, args, "cordon")
+				assert.Contains(t, args, tt.nodeName)
+
+				if tt.mockErr {
+					if runtime.GOOS == "windows" {
+						return exec.Command("cmd", "/c", "exit", "1")
+					}
+					return exec.Command("false")
+				}
+				return mockExecCmd("node/worker-1 cordoned", 0)
+			}
+
+			client, _ := newTestClient(t)
+			err := client.CordonNode(context.Background(), tt.nodeName)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestClient_UncordonNode(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	tests := []struct {
+		name        string
+		nodeName    string
+		mockErr     bool
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "successful uncordon",
+			nodeName: "worker-1",
+			wantErr:  false,
+		},
+		{
+			name:        "uncordon fails",
+			nodeName:    "worker-1",
+			mockErr:     true,
+			wantErr:     true,
+			errContains: "kubectl uncordon",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				assert.Equal(t, "kubectl", name)
+				assert.Contains(t, args, "uncordon")
+				assert.Contains(t, args, tt.nodeName)
+
+				if tt.mockErr {
+					if runtime.GOOS == "windows" {
+						return exec.Command("cmd", "/c", "exit", "1")
+					}
+					return exec.Command("false")
+				}
+				return mockExecCmd("node/worker-1 uncordoned", 0)
+			}
+
+			client, _ := newTestClient(t)
+			err := client.UncordonNode(context.Background(), tt.nodeName)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestClient_WaitForLonghornVolumesHealthy(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	t.Run("healthy immediately — no degraded volumes", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			assert.Equal(t, "kubectl", name)
+			assert.Contains(t, args, "volumes.longhorn.io")
+			// Empty output means jsonpath found no degraded volumes
+			return mockExecCmd("", 0)
+		}
+
+		client, _ := newTestClient(t)
+		err := client.WaitForLonghornVolumesHealthy(context.Background(), 5*time.Second)
+		assert.NoError(t, err)
+	})
+
+	// The old behaviour was to pass the gate on ANY error. The new behaviour is
+	// fail-closed: only output that positively identifies the CRD as absent passes
+	// the gate. A bare non-zero exit (connection refused, TLS error, etc.) must not.
+	t.Run("persistent transient error — fails closed at deadline", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			// Exits non-zero with no output that identifies Longhorn as absent.
+			if runtime.GOOS == "windows" {
+				return exec.Command("cmd", "/c", "exit", "1")
+			}
+			return exec.Command("false")
+		}
+
+		client, _ := newTestClient(t)
+		err := client.WaitForLonghornVolumesHealthy(context.Background(), 100*time.Millisecond)
+		require.Error(t, err, "a persistent transient error must not pass the safety gate")
+		assert.Contains(t, err.Error(), "could not be verified")
+	})
+
+	t.Run("transient error then healthy — eventually returns nil", func(t *testing.T) {
+		callCount := 0
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			callCount++
+			if callCount == 1 {
+				// First call: transient failure with no absent signature.
+				if runtime.GOOS == "windows" {
+					return exec.Command("cmd", "/c", "exit", "1")
+				}
+				return exec.Command("false")
+			}
+			// Second call: all volumes healthy (empty jsonpath output).
+			return mockExecCmd("", 0)
+		}
+
+		client, _ := newTestClient(t)
+		// Generous timeout so the ticker fires at least once after the first failure.
+		err := client.WaitForLonghornVolumesHealthy(context.Background(), 60*time.Second)
+		assert.NoError(t, err, "gate must pass once Longhorn reports all volumes healthy")
+		assert.GreaterOrEqual(t, callCount, 2, "must have retried after the transient error")
+	})
+
+	t.Run("Longhorn CRD absent — returns nil immediately without polling", func(t *testing.T) {
+		callCount := 0
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			callCount++
+			// kubectl exits non-zero and outputs the API-server unknown-resource message.
+			return mockExecCmdFailing(`Error from server (NotFound): the server doesn't have a resource type "volumes"`)
+		}
+
+		client, _ := newTestClient(t)
+		err := client.WaitForLonghornVolumesHealthy(context.Background(), 60*time.Second)
+		assert.NoError(t, err, "absent CRD must not block the gate")
+		assert.Equal(t, 1, callCount, "must return after the first absent-CRD response without further polling")
+	})
+
+	t.Run("context timeout with persistent degraded volumes", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return mockExecCmdStreams("pvc-abc123\tdegraded\npvc-def456\tfaulted\npvc-ghi789\thealthy\n", "", 0)
+		}
+
+		client, _ := newTestClient(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		err := client.WaitForLonghornVolumesHealthy(ctx, 100*time.Millisecond)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "degraded")
+	})
+}
+
+func TestClient_countDegradedLonghornVolumes(t *testing.T) {
+	originalExec := execCommandContext
+	defer func() { execCommandContext = originalExec }()
+
+	tests := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   int
+	}{
+		{"only degraded and faulted count", "a\thealthy\nb\tdegraded\nc\tfaulted\n", "", 2},
+		// Longhorn reports a detached volume as "unknown"; it has nothing to rebuild.
+		{"detached volume does not hold the gate", "a\thealthy\nb\tunknown\n", "", 0},
+		{"stderr warning is not counted as a volume", "a\thealthy\n",
+			"Warning: longhorn.io/v1beta1 Volume is deprecated\n", 0},
+		{"no volumes", "", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				return mockExecCmdStreams(tt.stdout, tt.stderr, 0)
+			}
+			client, _ := newTestClient(t)
+			got, err := client.countDegradedLonghornVolumes(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("absent CRD reported on stderr", func(t *testing.T) {
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return mockExecCmdStreams("", `error: the server doesn't have a resource type "volumes"`, 1)
+		}
+		client, _ := newTestClient(t)
+		_, err := client.countDegradedLonghornVolumes(context.Background())
+		assert.ErrorIs(t, err, errLonghornAbsent)
+	})
+}
+
+func Test_isLonghornAbsentOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name:   "standard kubectl unknown-resource error",
+			output: `Error from server (NotFound): the server doesn't have a resource type "volumes"`,
+			want:   true,
+		},
+		{
+			name:   "generic server-doesn't-have phrase",
+			output: "error: the server doesn't have a resource type",
+			want:   true,
+		},
+		{
+			name:   "no matches for kind",
+			output: `no matches for kind "Volume" in group "longhorn.io"`,
+			want:   true,
+		},
+		{
+			name:   "connection refused — transient",
+			output: "dial tcp 192.168.1.1:6443: connect: connection refused",
+			want:   false,
+		},
+		{
+			name:   "TLS error — transient",
+			output: "tls: failed to verify certificate: x509: certificate signed by unknown authority",
+			want:   false,
+		},
+		{
+			name:   "empty output on non-zero exit — transient",
+			output: "",
+			want:   false,
+		},
+		{
+			name:   "case insensitive match",
+			output: "The Server Doesn't Have A Resource Type",
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLonghornAbsentOutput(tt.output)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestIntegration_Client(t *testing.T) {

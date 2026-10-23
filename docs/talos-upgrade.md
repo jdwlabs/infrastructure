@@ -1,9 +1,10 @@
 # Runbook: Talos node upgrade
 
-Status: PLANNED — every `talosctl upgrade` in this runbook is executed by a
-human. The agent contract forbids autonomous cluster mutation; agents may run
-the read-only inspection commands here (`talosctl get`, `talosctl version`,
-`talosctl etcd status`, `kubectl get`) but never the upgrade itself.
+Status: PLANNED — every `talosctl upgrade` and `talops upgrade` in this
+runbook is executed by a human. The agent contract forbids autonomous cluster
+mutation; agents may run the read-only inspection commands here
+(`talosctl get`, `talosctl version`, `talosctl etcd status`, `kubectl get`,
+`talops upgrade --plan`) but never the upgrade itself.
 
 Scope: upgrading the **Talos OS** on existing nodes in place. Upgrading
 Kubernetes is a separate operation (`talosctl upgrade-k8s`) and is out of
@@ -159,9 +160,10 @@ would silently emit the older schema. The worker `kubelet.extraMounts` entry for
 Order: **control planes ascending by VMID (200 → 201 → 202), then workers
 ascending by VMID (300 → 301 → 302 → 303 → 304)**.
 
-This ordering is not arbitrary — it is the plan the (unmerged) `talops
-upgrade` command builds in `buildUpgradePlan`: control planes sorted by VMID,
-then workers sorted by VMID, with per-node gates between. Control planes go
+This ordering is not arbitrary — it is the plan
+[`talops upgrade`](#automating-the-sequence-with-talops-upgrade) builds in
+`buildUpgradePlan`: control planes sorted by VMID, then workers sorted by
+VMID, with per-node gates between. Control planes go
 first so the control plane is running the new version before any worker
 kubelet is; a worker that comes back on a newer Talos than its control plane
 is the skew direction Talos does not support.
@@ -223,9 +225,59 @@ Never touch two nodes in the same pass. Quorum must stay >= 2/3 throughout.
    sender-side.
 6. **Wait for Longhorn to fully heal before the next worker**:
    `kubectl -n longhorn-system get volumes.longhorn.io` all Healthy, no
-   rebuilding replicas. This gate is the one the `talops upgrade` branch
-   treats as fatal rather than advisory — it aborts the whole run on
-   "Longhorn volumes degraded after upgrading <ip>". Do the same by hand.
+   rebuilding replicas. `talops upgrade` treats this gate as fatal rather
+   than advisory — it aborts the whole run with "longhorn volumes degraded
+   after upgrading <ip>". Do the same by hand.
+
+## Automating the sequence with `talops upgrade`
+
+`talops upgrade` runs the per-node loop above through the Talos and
+Kubernetes APIs. It changes live nodes, so the same rule applies as for
+`talosctl upgrade`: a human runs it; an agent runs only `--plan`.
+
+```bash
+talops upgrade --plan                       # per-node action list, changes nothing
+talops upgrade --nodes 192.168.1.241        # one node (comma-separated list)
+talops upgrade --image <installer>:<tag>    # override installer_image from tfvars
+talops upgrade                              # every node, after a y/N prompt
+```
+
+It refuses to run before bootstrap has completed and takes the target from
+`installer_image` in tfvars unless `--image` is given, and refuses an image
+without a tag, since the tag is how it recognises a finished reboot. `--plan` (or the global
+`--dry-run`) queries each node's version and logs the action it would take.
+Without `--auto-approve` it asks before the first node. For each node, in the
+order above, it:
+
+1. Skips the node when it already reports the target image's tag. Only the
+   tag is compared, so a schematic change at the same Talos version is
+   skipped — consistent with [Out of scope](#out-of-scope).
+2. Resolves the Kubernetes node name. Failure aborts with the node untouched.
+3. Cordons workers.
+4. Triggers the upgrade over the Talos machine API (no `--stage`, no
+   `--force`).
+5. Waits up to 10 minutes for the node to report the target tag. The upgrade
+   call returns before the reboot, so this is what proves the node rebooted
+   into the new image. A control plane that comes back on a different IP
+   fails here, because the old IP never answers.
+6. Control planes: waits up to 10 minutes for the upgraded node's own etcd
+   member list to show every control plane.
+7. Waits up to 10 minutes for the node to be Ready.
+8. Workers: uncordons, then runs the Longhorn gate (worker step 6). The gate
+   fails closed: it passes only when no volume is `degraded` or `faulted`
+   (a detached volume reports `unknown` and does not count) or the Longhorn
+   CRD does not exist, and kubectl errors that persist until the timeout
+   abort the run as "could not be verified".
+
+Any failure aborts the whole run, names the node and suggests
+`talosctl rollback`. The audit log records `UPGRADE-START`, one
+`UPGRADE-NODE` per node, and `UPGRADE-END` with `status=success` or
+`status=failed`.
+
+It does **not** run the CP memory gate, the VXLAN offload re-check, the
+cross-node TCP verification or the soak. Run it one node at a time with
+`--nodes` and do those checks by hand between nodes; a run without
+`--nodes` goes straight from one node to the next.
 
 ## Failure modes carried forward
 
@@ -389,7 +441,7 @@ Ordered cheapest to most invasive.
 - **Single node, new version misbehaving**: `talosctl -n X rollback` reverts
   that node to the previous installation (it is a real talosctl subcommand;
   `talosctl rollback --help` confirms "Rollback a node to the previous
-  installation"). This is the hint the `talops upgrade` branch emits on
+  installation"). This is the hint `talops upgrade` emits on
   failure: *"use `talosctl rollback` on that node if needed"*. Roll back the
   failed node and stop the run — do not continue to the next node.
 - **Node does not come back at all**: use the Proxmox console to see where
@@ -432,8 +484,8 @@ Ordered cheapest to most invasive.
 - etcd healthy members < 2, or a rebooted CP absent from the mesh after
   10 minutes → stop; treat as an incident.
 - A node fails to reach Ready within ~10 minutes of the upgrade returning →
-  stop, roll that node back, investigate. Ten minutes is the per-node timeout
-  the `talops upgrade` branch uses (`upgradeNodeTimeout`).
+  stop, roll that node back, investigate. Ten minutes is the per-gate timeout
+  `talops upgrade` uses (`upgradeNodeTimeout`).
 - Longhorn volumes still degraded after the heal wait → stop before the next
   worker.
 - Cross-node pod TCP fails while ICMP passes → the VXLAN offload settings did
@@ -459,22 +511,20 @@ Ordered cheapest to most invasive.
 
 Stated explicitly so nobody treats them as established fact:
 
-- **`talops upgrade` is not available.** A `talops upgrade` command exists on
-  the **unmerged** branch `feat/talops-upgrade` (commits `bf0d68a`,
-  `e0e9b38`, `facb1d5`) implementing exactly the ordering and gates above,
-  with `--plan`/`--dry-run`, `--nodes`, `--image`, `--auto-approve`, and
-  `UPGRADE-START`/`UPGRADE-NODE`/`UPGRADE-END` audit entries. It is **not on
-  `main`** — `main`'s `bootstrap/cmd/root.go` has no `upgrade` subcommand and
-  `bootstrap/internal/talos/client.go` has neither `Upgrade` nor
-  `NodeVersion`. This runbook therefore uses `talosctl` directly. If that
-  branch merges, the manual sequence collapses to a single reviewed
-  `talops upgrade --plan` followed by a human-approved run — re-verify this
-  document at that point.
+- **`talops upgrade` has never run against this cluster.** Its gates are
+  covered by unit tests against fakes only. Rehearse it on cp-01 alone with
+  `--nodes` before trusting a full run.
+- **Whether a node drains itself during the upgrade.** `talops upgrade` only
+  cordons workers; it does not evict pods the way `talosctl upgrade --drain`
+  does. Whether the node's own upgrade sequence drains before rebooting was
+  not confirmed for v1.13/v1.14 — until it is, drain by hand
+  (`kubectl drain N --ignore-daemonsets --delete-emptydir-data`) before
+  running it against a worker if pods must move gracefully.
 - **No previous Talos upgrade of this cluster is recorded in the repo.** The
   v1.12.13 → v1.13.4 bump (`576baff`) moved pins only; its message says live
   node configs "are untracked and updated operationally during preflight".
   Nothing in `logs/` records an upgrade run. The per-node sequence here is
-  reconstructed from the `talops upgrade` branch, the surrounding runbooks,
+  reconstructed from the `talops upgrade` design, the surrounding runbooks,
   and `talosctl upgrade --help` — **it has not been executed end to end and
   reviewed against a real run.** Treat the first execution as a rehearsal:
   do cp-01 alone, then stop and re-read this document against what actually

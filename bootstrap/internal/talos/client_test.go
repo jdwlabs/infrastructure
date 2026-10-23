@@ -491,6 +491,42 @@ func TestResetNode_Scenarios(t *testing.T) {
 	})
 }
 
+// TestNodeVersion_UninitializedClientReturnsError verifies that NodeVersion
+// fails fast when the client has no loaded talosconfig.
+func TestNodeVersion_UninitializedClientReturnsError(t *testing.T) {
+	cfg := types.TestConfig()
+	c := NewClient(cfg)
+	ip := net.ParseIP("192.168.1.201")
+
+	_, err := c.NodeVersion(context.Background(), ip)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client not initialized")
+}
+
+// TestUpgrade_UninitializedClientReturnsError verifies that Upgrade
+// fails fast when the client has no loaded talosconfig.
+func TestUpgrade_UninitializedClientReturnsError(t *testing.T) {
+	cfg := types.TestConfig()
+	c := NewClient(cfg)
+	ip := net.ParseIP("192.168.1.201")
+
+	err := c.Upgrade(context.Background(), ip, "factory.talos.dev/installer:v1.13.4")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client not initialized")
+}
+
+// TestUpgrade_CancelledContextReturnsError verifies context propagation in Upgrade.
+func TestUpgrade_CancelledContextReturnsError(t *testing.T) {
+	cfg := types.TestConfig()
+	c := NewClient(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ip := net.ParseIP("192.168.1.201")
+
+	err := c.Upgrade(ctx, ip, "factory.talos.dev/installer:v1.13.4")
+	require.Error(t, err)
+}
+
 // Benchmarks
 
 func BenchmarkIsMaintenanceModeError(b *testing.B) {
