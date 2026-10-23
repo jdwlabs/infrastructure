@@ -15,7 +15,11 @@ import (
 	"go.uber.org/zap"
 )
 
-const upgradeNodeTimeout = 10 * time.Minute
+// Variables rather than constants so tests can run the waits without sleeping.
+var (
+	upgradeNodeTimeout  = 10 * time.Minute
+	upgradePollInterval = 10 * time.Second
+)
 
 // upgradeNodeEntry carries per-node data for the upgrade sequence.
 type upgradeNodeEntry struct {
@@ -29,13 +33,12 @@ type upgradeNodeEntry struct {
 type upgradeDeps interface {
 	NodeVersion(ctx context.Context, ip net.IP) (string, error)
 	Upgrade(ctx context.Context, ip net.IP, image string) error
-	WaitForAPI(ctx context.Context, ip net.IP) error
-	WaitForEtcdHealthy(ctx context.Context, ip net.IP, d interface{}) error
+	WaitForEtcdMembers(ctx context.Context, ip net.IP, expected int, d time.Duration) error
 	GetNodeNameByIP(ctx context.Context, ip net.IP) (string, error)
-	WaitForNodeReady(ctx context.Context, nodeName string, d interface{}) error
+	WaitForNodeReady(ctx context.Context, nodeName string, d time.Duration) error
 	CordonNode(ctx context.Context, nodeName string) error
 	UncordonNode(ctx context.Context, nodeName string) error
-	WaitForLonghornVolumesHealthy(ctx context.Context, d interface{}) error
+	WaitForLonghornVolumesHealthy(ctx context.Context, d time.Duration) error
 }
 
 // realUpgradeDeps wires real talos.Client + kubectl.Client to the upgradeDeps interface.
@@ -52,28 +55,16 @@ func (r *realUpgradeDeps) Upgrade(ctx context.Context, ip net.IP, image string) 
 	return r.talos.Upgrade(ctx, ip, image)
 }
 
-func (r *realUpgradeDeps) WaitForAPI(ctx context.Context, ip net.IP) error {
-	return r.talos.WaitForAPI(ctx, ip)
-}
-
-func (r *realUpgradeDeps) WaitForEtcdHealthy(ctx context.Context, ip net.IP, d interface{}) error {
-	dur, _ := d.(time.Duration)
-	if dur == 0 {
-		dur = upgradeNodeTimeout
-	}
-	return r.talos.WaitForEtcdHealthy(ctx, ip, dur)
+func (r *realUpgradeDeps) WaitForEtcdMembers(ctx context.Context, ip net.IP, expected int, d time.Duration) error {
+	return r.talos.WaitForEtcdMembers(ctx, ip, expected, d)
 }
 
 func (r *realUpgradeDeps) GetNodeNameByIP(ctx context.Context, ip net.IP) (string, error) {
 	return r.kubectl.GetNodeNameByIP(ctx, ip)
 }
 
-func (r *realUpgradeDeps) WaitForNodeReady(ctx context.Context, nodeName string, d interface{}) error {
-	dur, _ := d.(time.Duration)
-	if dur == 0 {
-		dur = upgradeNodeTimeout
-	}
-	return r.kubectl.WaitForNodeReady(ctx, nodeName, dur)
+func (r *realUpgradeDeps) WaitForNodeReady(ctx context.Context, nodeName string, d time.Duration) error {
+	return r.kubectl.WaitForNodeReady(ctx, nodeName, d)
 }
 
 func (r *realUpgradeDeps) CordonNode(ctx context.Context, nodeName string) error {
@@ -84,12 +75,8 @@ func (r *realUpgradeDeps) UncordonNode(ctx context.Context, nodeName string) err
 	return r.kubectl.UncordonNode(ctx, nodeName)
 }
 
-func (r *realUpgradeDeps) WaitForLonghornVolumesHealthy(ctx context.Context, d interface{}) error {
-	dur, _ := d.(time.Duration)
-	if dur == 0 {
-		dur = upgradeNodeTimeout
-	}
-	return r.kubectl.WaitForLonghornVolumesHealthy(ctx, dur)
+func (r *realUpgradeDeps) WaitForLonghornVolumesHealthy(ctx context.Context, d time.Duration) error {
+	return r.kubectl.WaitForLonghornVolumesHealthy(ctx, d)
 }
 
 // RunUpgrade is the entry point for `talops upgrade`.
@@ -222,22 +209,22 @@ func (app *App) upgradeOneNode(ctx context.Context, entry upgradeNodeEntry, targ
 			zap.String("target_image", targetImage))
 	}
 
-	// Workers must be cordoned so workloads drain before the node reboots.
-	var nodeName string
+	// Every gate after the reboot needs the Kubernetes node name, so resolve it
+	// while nothing has changed yet: failing here aborts with the node untouched.
+	nodeName, err := deps.GetNodeNameByIP(ctx, entry.IP)
+	if err != nil {
+		return fmt.Errorf("resolve kubernetes node name for %s: %w", entry.IP, err)
+	}
+
+	// Workers are cordoned so no new workloads land on them before the reboot.
 	if entry.Role == types.RoleWorker {
-		nodeName, err = deps.GetNodeNameByIP(ctx, entry.IP)
-		if err != nil {
-			log.Warn("could not resolve node name for cordon (continuing)", zap.Error(err))
-		} else {
-			if err := deps.CordonNode(ctx, nodeName); err != nil {
-				return fmt.Errorf("cordon worker %s: %w", nodeName, err)
-			}
+		if err := deps.CordonNode(ctx, nodeName); err != nil {
+			return fmt.Errorf("cordon worker %s: %w", nodeName, err)
 		}
 	}
 
-	// Trigger the upgrade — Talos reboots immediately after accepting the request.
 	if err := deps.Upgrade(ctx, entry.IP, targetImage); err != nil {
-		if entry.Role == types.RoleWorker && nodeName != "" {
+		if entry.Role == types.RoleWorker {
 			_ = deps.UncordonNode(ctx, nodeName)
 		}
 		return fmt.Errorf("trigger upgrade: %w", err)
@@ -245,43 +232,30 @@ func (app *App) upgradeOneNode(ctx context.Context, entry upgradeNodeEntry, targ
 
 	log.Info("upgrade triggered, waiting for node to reboot and become ready")
 
-	// Wait for Talos API to come back up after reboot.
-	if err := deps.WaitForAPI(ctx, entry.IP); err != nil {
-		return fmt.Errorf("node %s did not come back after upgrade: %w", entry.IP, err)
+	// The upgrade call returns before the node reboots, and until it does the
+	// API, the node's Ready condition and Longhorn all still look healthy. Only
+	// the node reporting the target tag proves it rebooted into the new image.
+	if err := waitForNodeVersion(ctx, deps, entry.IP, targetImage, upgradeNodeTimeout); err != nil {
+		return err
 	}
 
-	// Control planes additionally need etcd to recover quorum.
+	// Control planes additionally need etcd to recover. A member list served
+	// by the upgraded node itself needs its etcd up and in quorum; a peer would
+	// answer while this member is still down.
 	if entry.Role == types.RoleControlPlane {
-		// Find the healthiest CP endpoint to poll etcd from (prefer self, fall back to peer).
-		pollIP := entry.IP
-		for _, cp := range deployed.ControlPlanes {
-			if cp.VMID != entry.VMID && cp.IP != nil {
-				pollIP = cp.IP
-				break
-			}
-		}
-		if err := deps.WaitForEtcdHealthy(ctx, pollIP, upgradeNodeTimeout); err != nil {
-			log.Warn("etcd health wait timed out (continuing)", zap.Error(err))
+		if err := deps.WaitForEtcdMembers(ctx, entry.IP, len(deployed.ControlPlanes), upgradeNodeTimeout); err != nil {
+			return fmt.Errorf("etcd not healthy after upgrading %s: %w", entry.IP, err)
 		}
 	}
 
-	// Wait for the K8s node to reach Ready.
-	if nodeName == "" {
-		nodeName, err = deps.GetNodeNameByIP(ctx, entry.IP)
-		if err != nil {
-			log.Warn("could not resolve node name for readiness wait", zap.Error(err))
-		}
-	}
-	if nodeName != "" {
-		if err := deps.WaitForNodeReady(ctx, nodeName, upgradeNodeTimeout); err != nil {
-			log.Warn("node readiness wait timed out (continuing)", zap.Error(err))
-		}
+	if err := deps.WaitForNodeReady(ctx, nodeName, upgradeNodeTimeout); err != nil {
+		return fmt.Errorf("node %s not Ready after upgrade: %w", nodeName, err)
 	}
 
 	// Workers: uncordon and then wait for Longhorn to heal before the next worker.
-	if entry.Role == types.RoleWorker && nodeName != "" {
+	if entry.Role == types.RoleWorker {
 		if err := deps.UncordonNode(ctx, nodeName); err != nil {
-			log.Warn("uncordon failed (continuing)", zap.Error(err))
+			return fmt.Errorf("uncordon worker %s: %w", nodeName, err)
 		}
 		// Give Longhorn time to replicate data back before stressing the next node.
 		if err := deps.WaitForLonghornVolumesHealthy(ctx, upgradeNodeTimeout); err != nil {
@@ -291,6 +265,43 @@ func (app *App) upgradeOneNode(ctx context.Context, entry upgradeNodeEntry, targ
 
 	log.Info("node upgrade complete")
 	return nil
+}
+
+// waitForNodeVersion polls the node until it reports the tag of targetImage.
+// Errors while polling are expected (the node is rebooting) and only the
+// deadline ends the wait.
+func waitForNodeVersion(ctx context.Context, deps upgradeDeps, ip net.IP, targetImage string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(upgradePollInterval)
+	defer ticker.Stop()
+
+	var last string
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("node %s did not report the target version of %s within %s (last error: %w)",
+					ip, targetImage, timeout, lastErr)
+			}
+			return fmt.Errorf("node %s did not report the target version of %s within %s (last reported %q)",
+				ip, targetImage, timeout, last)
+		case <-ticker.C:
+		}
+
+		version, err := deps.NodeVersion(ctx, ip)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		lastErr = nil
+		last = version
+		if versionMatchesTarget(version, targetImage) {
+			return nil
+		}
+	}
 }
 
 // buildUpgradePlan returns the ordered list of nodes to upgrade: control planes
