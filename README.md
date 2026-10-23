@@ -57,6 +57,8 @@ talops reconcile --plan      Preview changes without applying
 talops status                Show cluster status
 talops reset                 Reset cluster state
 talops prune-nodes           Delete NotReady K8s node objects not in the desired state
+talops upgrade --plan        Preview a rolling Talos upgrade of every node
+talops upgrade               Rolling Talos upgrade, one node at a time
 talops upgrade-k8s           Upgrade Kubernetes, previewed by default (--apply to run it)
 talops infra deploy          Deploy/update infrastructure (Terraform)
 talops infra destroy         Destroy infrastructure
