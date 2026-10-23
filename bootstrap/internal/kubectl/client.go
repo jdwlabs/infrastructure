@@ -78,6 +78,15 @@ func combinedOutput(ac *logging.AuditedCmd, cmd *exec.Cmd) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
+// stdoutOutput runs Output through the audited command if available, otherwise
+// falls back to raw exec. On a non-zero exit, stderr is in the *exec.ExitError.
+func stdoutOutput(ac *logging.AuditedCmd, cmd *exec.Cmd) ([]byte, error) {
+	if ac != nil {
+		return ac.Output()
+	}
+	return cmd.Output()
+}
+
 // GetNodeNameByIP finds the Kubernetes node name for a given IP address
 func (c *Client) GetNodeNameByIP(ctx context.Context, ip net.IP) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -309,8 +318,9 @@ func (c *Client) WaitForLonghornVolumesHealthy(ctx context.Context, timeout time
 	}
 }
 
-// countDegradedLonghornVolumes counts volumes.longhorn.io whose robustness is not
-// "healthy". It returns:
+// countDegradedLonghornVolumes counts volumes.longhorn.io whose robustness is
+// "degraded" or "faulted". Longhorn reports "unknown" for a detached volume,
+// which has no replicas to rebuild, so it does not hold the gate. It returns:
 //   - (count, nil) — query succeeded; count may be zero (all healthy) or positive.
 //   - (0, errLonghornAbsent) — the API server does not know this resource type.
 //   - (0, err) — a transient failure (connection error, timeout, etc.).
@@ -318,26 +328,35 @@ func (c *Client) countDegradedLonghornVolumes(ctx context.Context) (int, error) 
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	// jsonpath emits one line per degraded volume name; empty output means all healthy.
 	args := []string{
 		"get", "volumes.longhorn.io",
 		"--all-namespaces",
 		"--no-headers",
-		"-o", `jsonpath={range .items[?(@.status.robustness!="healthy")]}{.metadata.name}{"\n"}{end}`,
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.robustness}{"\n"}{end}`,
 	}
 	ac, cmd := c.auditedCommand(queryCtx, args...)
-	output, err := combinedOutput(ac, cmd)
+	// Stdout only: a kubectl warning on stderr would otherwise be parsed as a volume.
+	output, err := stdoutOutput(ac, cmd)
 	if err != nil {
-		if isLonghornAbsentOutput(string(output)) {
+		diagnostic := string(output)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			diagnostic += string(exitErr.Stderr)
+		}
+		if isLonghornAbsentOutput(diagnostic) {
 			return 0, errLonghornAbsent
 		}
 		return 0, fmt.Errorf("longhorn query failed: %w", err)
 	}
 
-	// Each non-empty line is a degraded volume name produced by the jsonpath template.
 	count := 0
 	for _, line := range strings.Split(string(output), "\n") {
-		if strings.TrimSpace(line) != "" {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[len(fields)-1] {
+		case "degraded", "faulted":
 			count++
 		}
 	}
