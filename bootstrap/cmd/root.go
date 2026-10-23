@@ -46,7 +46,7 @@ func newRootCmd(a *app.App) *cobra.Command {
 		Use:   "talops",
 		Short: "Provision and operate the jdwlabs infrastructure",
 		Long: `talops covers four areas: Terraform provisioning of every VM (` + "`infra`" + `), the
-Talos cluster's own lifecycle (` + "`bootstrap`" + `, ` + "`reconcile`" + `, ` + "`upgrade-k8s`" + `, ` + "`status`" + `, ...),
+Talos cluster's own lifecycle (` + "`bootstrap`" + `, ` + "`reconcile`" + `, ` + "`upgrade`" + `, ` + "`upgrade-k8s`" + `, ` + "`status`" + `, ...),
 and the two hosts it converges outside that cluster — the HAProxy load
 balancer (` + "`haproxy`" + `) and the vLLM GPU host (` + "`vllm`" + `).`,
 		SilenceUsage: true,
@@ -125,6 +125,7 @@ balancer (` + "`haproxy`" + `) and the vLLM GPU host (` + "`vllm`" + `).`,
 		upCmd(a),
 		downCmd(a),
 		pruneNodesCmd(a),
+		upgradeCmd(a),
 		upgradeK8sCmd(a),
 		secretsCmd(a),
 		versionCmd(version),
@@ -398,6 +399,46 @@ Use --dry-run to preview which nodes would be deleted.`,
 			return a.RunPruneNodes(ctx)
 		},
 	}
+}
+
+func upgradeCmd(a *app.App) *cobra.Command {
+	var (
+		nodes    string
+		image    string
+		planMode bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "upgrade",
+		Args:  cobra.NoArgs,
+		Short: "Rolling upgrade of cluster nodes to a new Talos installer image",
+		Long: `Upgrade Talos on each node in the cluster, one at a time, in a safe order:
+control planes first (sorted by VMID), then workers (sorted by VMID).
+
+Each node is upgraded only if it does not already report the target version.
+Workers are cordoned before upgrade and uncordoned afterwards; the command
+waits for Longhorn volume health before proceeding to the next worker.
+
+On any failure the run aborts immediately. Use 'talosctl rollback' on the
+affected node to restore it to the previous installer.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
+			if planMode {
+				a.Cfg.PlanMode = true
+				a.Cfg.DryRun = true
+			}
+
+			return a.RunUpgrade(ctx, nodes, image)
+		},
+	}
+
+	cmd.Flags().StringVar(&nodes, "nodes", "", "Comma-separated list of node IPs to upgrade (default: all)")
+	cmd.Flags().StringVar(&image, "image", "", "Talos installer image override (default: cfg.InstallerImage from tfvars)")
+	cmd.Flags().BoolVarP(&planMode, "plan", "p", false, "Show per-node upgrade actions without applying")
+
+	return cmd
 }
 
 func versionCmd(version string) *cobra.Command {
