@@ -139,6 +139,12 @@ func (app *App) RunUpgrade(ctx context.Context, nodesFlag, imageFlag string) err
 func (app *App) runUpgradeWithState(ctx context.Context, deployed *types.ClusterState, nodeFilter []net.IP, targetImage string, deps upgradeDeps) error {
 	cfg := app.Cfg
 
+	// The run proves each reboot by the node reporting this tag, so an image
+	// without one would upgrade the first node and then time out waiting.
+	if _, ok := imageTag(targetImage); !ok {
+		return fmt.Errorf("target image %q has no tag: pass an installer image tagged with the Talos version", targetImage)
+	}
+
 	plan := buildUpgradePlan(deployed, nodeFilter)
 	if len(plan) == 0 {
 		app.Logger.Info("no nodes to upgrade (empty plan)")
@@ -365,18 +371,21 @@ func parseNodeIPs(raw string) ([]net.IP, error) {
 // matches the tag embedded in the target installer image reference.
 // e.g. nodeVersion="v1.13.4", targetImage="factory.talos.dev/installer:v1.13.4" → true
 func versionMatchesTarget(nodeVersion, targetImage string) bool {
-	if nodeVersion == "" || targetImage == "" {
-		return false
-	}
-	// Strip any digest, then take the tag after the last path segment's colon so
-	// a registry port ("host:5000/installer:v1.13.4") is not read as the tag.
-	imageRef := strings.SplitN(targetImage, "@", 2)[0]
-	lastSegment := imageRef[strings.LastIndex(imageRef, "/")+1:]
+	tag, ok := imageTag(targetImage)
+	return ok && nodeVersion != "" && tag == nodeVersion
+}
+
+// imageTag returns the tag of an image reference, ignoring any digest. It reads
+// the tag from the last path segment so a registry port
+// ("host:5000/installer:v1.13.4") is not mistaken for it.
+func imageTag(image string) (string, bool) {
+	ref := strings.SplitN(image, "@", 2)[0]
+	lastSegment := ref[strings.LastIndex(ref, "/")+1:]
 	i := strings.LastIndex(lastSegment, ":")
 	if i < 0 || i == len(lastSegment)-1 {
-		return false
+		return "", false
 	}
-	return lastSegment[i+1:] == nodeVersion
+	return lastSegment[i+1:], true
 }
 
 // printUpgradePlan logs or displays the per-node action list for plan/dry-run mode.
