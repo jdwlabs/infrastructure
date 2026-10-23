@@ -368,13 +368,15 @@ func versionMatchesTarget(nodeVersion, targetImage string) bool {
 	if nodeVersion == "" || targetImage == "" {
 		return false
 	}
-	// Strip any digest from the image reference before extracting the tag.
+	// Strip any digest, then take the tag after the last path segment's colon so
+	// a registry port ("host:5000/installer:v1.13.4") is not read as the tag.
 	imageRef := strings.SplitN(targetImage, "@", 2)[0]
-	parts := strings.SplitN(imageRef, ":", 2)
-	if len(parts) < 2 || parts[1] == "" {
+	lastSegment := imageRef[strings.LastIndex(imageRef, "/")+1:]
+	i := strings.LastIndex(lastSegment, ":")
+	if i < 0 || i == len(lastSegment)-1 {
 		return false
 	}
-	return parts[1] == nodeVersion
+	return lastSegment[i+1:] == nodeVersion
 }
 
 // printUpgradePlan logs or displays the per-node action list for plan/dry-run mode.
