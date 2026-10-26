@@ -6,16 +6,52 @@ would take to stop depending on a single workstation's `hosts` file.
 Companion to [host-addressing.md](host-addressing.md), which covers the Proxmox
 hypervisors' own addresses and names.
 
-**Status: resolver live and boot-proven; distribution still on the gateway,
-and the gateway almost certainly cannot do it.** A LAN resolver (`dnsmasq`)
-ships as part of the HAProxy VM (`terraform/files/dnsmasq-jdwlabs-lan.conf`,
+**Status: resolver live; the gateway cannot distribute it (confirmed
+2026-10-26); distribution is per client, and one machine is done.** A LAN
+resolver (`dnsmasq`) ships as part of the HAProxy VM
+(`terraform/files/dnsmasq-jdwlabs-lan.conf`,
 [scenarios/lan-dns-resolver-deploy.md](../scenarios/lan-dns-resolver-deploy.md))
-and has been answering on `192.168.1.199:53` since 2026-08-13. As of
-2026-08-30 the gateway still hands every DHCP client `192.168.1.254`, so no
-client is using the resolver yet. What remains is one gateway login
-([scenarios/lan-dns-gateway-check.sh](../scenarios/lan-dns-gateway-check.sh))
-to confirm the finding below, and — because the expected answer is "no field"
-— the per-client fallback in "Pointing clients at the resolver".
+and has been answering on `192.168.1.199:53` since 2026-08-13. The gateway
+still hands every DHCP client `192.168.1.254`, so a client uses the resolver
+only if it is configured by hand — see "Pointing clients at the resolver".
+
+## Gateway login and client rollout, 2026-10-26
+
+**The gateway was logged into and every settings page read** (36 pages from
+`/cgi-bin/sitemap.ha`, read-only, nothing changed). Result: **there is no
+field to change the DNS server handed out by DHCP, and no local DNS record
+page.** "Subnets & DHCP" holds only the device address, DHCP on/off, the pool
+(`192.168.1.64`–`.253`), the lease time, a public-subnet block and a cascaded
+router switch; the only DNS fields anywhere are the read-only upstream
+servers on a status page. The two ways to get automatic distribution remain a
+second DHCP server (rejected above) or a cascaded router; neither is planned.
+
+Login is a nonce challenge: the form posts `hashpassword = md5(code + nonce)`
+with the code field replaced by asterisks of the same length.
+
+**Failure that prompted this.** The Windows workstation (`JakeGamingPC`,
+`192.168.1.197`) could not open `crew.prd.jdwlabs.com`: Chrome showed
+`ERR_CONNECTION_RESET` / `ERR_CONNECTION_TIMED_OUT`. It was using the
+gateway's DNS (IPv4 and IPv6 RDNSS), got `104.53.12.62`, and the WAN hairpin
+does not work for that name. Names such as `alertmanager.jdwlabs.com` do
+hairpin, so the symptom is name-specific and easy to misread as a cluster
+fault.
+
+**Fix applied to that machine** (admin PowerShell; the adapter must be the
+one with the default gateway, not Tailscale, which has the highest link speed):
+
+```powershell
+$a = (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1).InterfaceAlias
+Set-DnsClientServerAddress -InterfaceAlias $a -ServerAddresses 192.168.1.199,192.168.1.254
+Disable-NetAdapterBinding -InterfaceAlias $a -ComponentID ms_tcpip6
+ipconfig /flushdns
+```
+
+Afterwards `nslookup crew.prd.jdwlabs.com` answered `192.168.1.199` from
+server `192.168.1.199`, `google.com` still resolved, and the site loaded.
+Disabling IPv6 on the adapter was needed so RDNSS stopped overriding the
+setting. Other LAN devices (Wi-Fi clients) were reported not to show the
+failure and were left unchanged; configure them as above if one does.
 
 ## Re-verified 2026-08-30 (agent, from the devbox — a DHCP client with no `hosts` entry)
 
