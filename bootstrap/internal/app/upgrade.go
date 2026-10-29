@@ -146,6 +146,11 @@ func (app *App) runUpgradeWithState(ctx context.Context, deployed *types.Cluster
 	}
 
 	plan := buildUpgradePlan(deployed, nodeFilter)
+	// A mistyped --nodes IP is silently dropped by the plan, so a one-node-at-a-time
+	// run would report success without touching the node.
+	if err := checkNodeFilterMatched(plan, nodeFilter); err != nil {
+		return err
+	}
 	if len(plan) == 0 {
 		app.Logger.Info("no nodes to upgrade (empty plan)")
 		return nil
@@ -308,6 +313,20 @@ func waitForNodeVersion(ctx context.Context, deps upgradeDeps, ip net.IP, target
 			return nil
 		}
 	}
+}
+
+// checkNodeFilterMatched errors when any filter IP is absent from the plan.
+func checkNodeFilterMatched(plan []upgradeNodeEntry, nodeFilter []net.IP) error {
+	inPlan := make(map[string]bool, len(plan))
+	for _, e := range plan {
+		inPlan[e.IP.String()] = true
+	}
+	for _, ip := range nodeFilter {
+		if !inPlan[ip.String()] {
+			return fmt.Errorf("--nodes IP %s is not a deployed node", ip)
+		}
+	}
+	return nil
 }
 
 // buildUpgradePlan returns the ordered list of nodes to upgrade: control planes
