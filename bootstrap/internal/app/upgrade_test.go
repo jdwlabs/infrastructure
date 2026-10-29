@@ -560,3 +560,23 @@ func (m *mockUpgradeDeps) UncordonNode(_ context.Context, _ string) error {
 func (m *mockUpgradeDeps) WaitForLonghornVolumesHealthy(_ context.Context, _ time.Duration) error {
 	return m.longhornErr
 }
+
+func TestRunUpgrade_RejectsUnknownNodeIP(t *testing.T) {
+	a := &App{Cfg: types.TestConfig(), Logger: testLogger(t)}
+	deployed := &types.ClusterState{
+		BootstrapCompleted: true,
+		ControlPlanes:      []types.NodeState{{VMID: 201, IP: net.ParseIP("192.168.1.21")}},
+	}
+
+	for name, filter := range map[string][]net.IP{
+		"all mistyped": {net.ParseIP("192.168.1.99")},
+		"one mistyped": {net.ParseIP("192.168.1.21"), net.ParseIP("192.168.1.99")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := a.runUpgradeWithState(context.Background(), deployed, filter,
+				"factory.talos.dev/installer:v1.13.4", &mockUpgradeDeps{})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "192.168.1.99")
+		})
+	}
+}
