@@ -207,13 +207,16 @@ func (app *App) upgradeOneNode(ctx context.Context, entry upgradeNodeEntry, targ
 			entry.VMID, entry.IP, entry.Role, targetImage))
 	}
 
-	// Check current version — skip if already at target
+	// A node already at the target skips only the reboot: a rerun after a failed
+	// post-upgrade gate must re-check it, or the next node is upgraded on a
+	// cluster that never proved healthy.
+	alreadyAtTarget := false
 	currentVersion, err := deps.NodeVersion(ctx, entry.IP)
 	if err != nil {
 		log.Warn("could not query node version, proceeding with upgrade", zap.Error(err))
 	} else if versionMatchesTarget(currentVersion, targetImage) {
-		log.Info("node already at target version, skipping", zap.String("version", currentVersion))
-		return nil
+		alreadyAtTarget = true
+		log.Info("node already at target version, running post-upgrade checks only", zap.String("version", currentVersion))
 	} else {
 		log.Info("upgrading node",
 			zap.String("current_version", currentVersion),
@@ -227,27 +230,29 @@ func (app *App) upgradeOneNode(ctx context.Context, entry upgradeNodeEntry, targ
 		return fmt.Errorf("resolve kubernetes node name for %s: %w", entry.IP, err)
 	}
 
-	// Workers are cordoned so no new workloads land on them before the reboot.
-	if entry.Role == types.RoleWorker {
-		if err := deps.CordonNode(ctx, nodeName); err != nil {
-			return fmt.Errorf("cordon worker %s: %w", nodeName, err)
-		}
-	}
-
-	if err := deps.Upgrade(ctx, entry.IP, targetImage); err != nil {
+	if !alreadyAtTarget {
+		// Workers are cordoned so no new workloads land on them before the reboot.
 		if entry.Role == types.RoleWorker {
-			_ = deps.UncordonNode(ctx, nodeName)
+			if err := deps.CordonNode(ctx, nodeName); err != nil {
+				return fmt.Errorf("cordon worker %s: %w", nodeName, err)
+			}
 		}
-		return fmt.Errorf("trigger upgrade: %w", err)
-	}
 
-	log.Info("upgrade triggered, waiting for node to reboot and become ready")
+		if err := deps.Upgrade(ctx, entry.IP, targetImage); err != nil {
+			if entry.Role == types.RoleWorker {
+				_ = deps.UncordonNode(ctx, nodeName)
+			}
+			return fmt.Errorf("trigger upgrade: %w", err)
+		}
 
-	// The upgrade call returns before the node reboots, and until it does the
-	// API, the node's Ready condition and Longhorn all still look healthy. Only
-	// the node reporting the target tag proves it rebooted into the new image.
-	if err := waitForNodeVersion(ctx, deps, entry.IP, targetImage, upgradeNodeTimeout); err != nil {
-		return err
+		log.Info("upgrade triggered, waiting for node to reboot and become ready")
+
+		// The upgrade call returns before the node reboots, and until it does the
+		// API, the node's Ready condition and Longhorn all still look healthy. Only
+		// the node reporting the target tag proves it rebooted into the new image.
+		if err := waitForNodeVersion(ctx, deps, entry.IP, targetImage, upgradeNodeTimeout); err != nil {
+			return err
+		}
 	}
 
 	// Control planes additionally need etcd to recover. A member list served

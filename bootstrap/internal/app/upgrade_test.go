@@ -251,6 +251,33 @@ func TestRunUpgrade_SkipsNodeAlreadyAtVersion(t *testing.T) {
 	assert.Equal(t, 0, deps.upgradeCount, "node already at target version should not trigger upgrade")
 }
 
+// TestRunUpgrade_RerunRechecksNodeAlreadyAtTarget verifies that a worker which
+// is already at the target still passes the post-upgrade gates, so a failed
+// gate cannot be skipped by simply rerunning.
+func TestRunUpgrade_RerunRechecksNodeAlreadyAtTarget(t *testing.T) {
+	cfg := types.TestConfig()
+	cfg.AutoApprove = true
+	a := &App{Cfg: cfg, Logger: testLogger(t)}
+
+	deps := &mockUpgradeDeps{
+		nodeVersions: map[string]string{"192.168.1.41": "v1.13.4"},
+	}
+	deployed := &types.ClusterState{
+		BootstrapCompleted: true,
+		Workers:            []types.NodeState{{VMID: 301, IP: net.ParseIP("192.168.1.41")}},
+	}
+
+	err := a.runUpgradeWithState(context.Background(), deployed, nil, "factory.talos.dev/installer:v1.13.4", deps)
+	require.NoError(t, err)
+	assert.Equal(t, 0, deps.upgradeCount)
+	assert.Equal(t, 0, deps.cordonCount)
+	assert.Equal(t, 1, deps.uncordonCount, "a skipped worker must still be uncordoned")
+
+	deps.longhornErr = errors.New("degraded")
+	err = a.runUpgradeWithState(context.Background(), deployed, nil, "factory.talos.dev/installer:v1.13.4", deps)
+	require.Error(t, err, "the Longhorn gate must hold across reruns")
+}
+
 // TestRunUpgrade_UpgradesNodeNotAtVersion verifies that a node behind the target
 // version gets an upgrade call followed by the wait sequence.
 func TestRunUpgrade_UpgradesNodeNotAtVersion(t *testing.T) {
