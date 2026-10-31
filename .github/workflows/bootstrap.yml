@@ -57,7 +57,7 @@ jobs:
     env:
       SOPS_VERSION: v3.13.3
       AGE_VERSION: v1.3.2
-      TALOS_VERSION: v1.14.4
+      TALOS_VERSION: v1.14.5
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0

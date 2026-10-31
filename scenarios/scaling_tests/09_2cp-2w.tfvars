@@ -16,8 +16,8 @@ haproxy_login_user     = "root"
 haproxy_stats_user     = "admin"
 haproxy_stats_password = "admin"
 kubernetes_version     = "v1.37.1"
-talos_version          = "v1.14.4"
-installer_image        = "factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.14.4"
+talos_version          = "v1.14.5"
+installer_image        = "factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.14.5"
 
 proxmox_node_ips = {
   pve1 = "192.168.1.200"
