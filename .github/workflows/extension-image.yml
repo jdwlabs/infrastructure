@@ -38,8 +38,8 @@ env:
   INSTALLER_IMAGE: ghcr.io/jdwlabs/talos-installer
   # Leads with the Talos version, matching the tfvars convention that the
   # installer tag embeds the Talos version it installs.
-  INSTALLER_TAG: v1.14.4-iscsi.1
-  TALOS_VERSION: v1.14.4
+  INSTALLER_TAG: v1.14.5-iscsi.1
+  TALOS_VERSION: v1.14.5
   # Pinned to the digest the official extensions bundle for TALOS_VERSION
   # resolves — the same bits the current Image Factory schematic ships.
   # Re-derive from ghcr.io/siderolabs/extensions:<version> (crane export,
