@@ -15,7 +15,7 @@ moves at a time. For system design see [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Current state (verified 2026-08-05)
 
 - **Live cluster**: `kubectl version` reports server `v1.35.1` on all nodes.
-- **Live Talos OS**: `v1.13.4` (the tracked pin has moved to `v1.14.4` per
+- **Live Talos OS**: `v1.13.4` (the tracked pin has moved to `v1.14.5` per
   [talos-upgrade.md](talos-upgrade.md), but that OS upgrade has not run yet —
   read the live value with `talosctl version`, not the tracked pin, before
   relying on either number).

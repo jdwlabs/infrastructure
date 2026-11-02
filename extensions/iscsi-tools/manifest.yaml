@@ -1,7 +1,7 @@
 version: v1alpha1
 metadata:
   name: iscsi-tools
-  version: "v0.2.0-jdwlabs.1"
+  version: "v0.2.0-jdwlabs.2"
   author: jdwlabs (forked from Sidero Labs)
   description: |
     [core] This system extension provides iscsi-tools with a baked-in
