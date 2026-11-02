@@ -34,7 +34,7 @@ env:
   # under extensions/iscsi-tools must bump EXTENSION_TAG and INSTALLER_TAG
   # together; the publish job skips (with a warning) rather than overwrite.
   EXTENSION_IMAGE: ghcr.io/jdwlabs/iscsi-tools
-  EXTENSION_TAG: v0.2.0-jdwlabs.1
+  EXTENSION_TAG: v0.2.0-jdwlabs.2
   INSTALLER_IMAGE: ghcr.io/jdwlabs/talos-installer
   # Leads with the Talos version, matching the tfvars convention that the
   # installer tag embeds the Talos version it installs.
@@ -104,7 +104,7 @@ jobs:
           test -f verify-etc-iscsi/initiatorname.iscsi
           grep -F 'source: /usr/local/etc/iscsi' verify-iscsid.yaml
           grep -F 'source: /etc/iscsi/initiatorname.iscsi' verify-iscsid.yaml
-          grep -F 'version: "v0.2.0-jdwlabs.1"' verify-manifest.yaml
+          grep -F 'version: "v0.2.0-jdwlabs.2"' verify-manifest.yaml
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

@@ -78,14 +78,14 @@ and the two base-image digests in the extension workflow and its Dockerfile.
 > PR is a prompt, not an auto-rollout.
 
 **A merged Renovate PR does not upgrade anything.** It only moves the pins.
-As of this writing `terraform/terraform.tfvars.example` pins `v1.14.4`
+As of this writing `terraform/terraform.tfvars.example` pins `v1.14.5`
 while the live nodes run `v1.13.4` — that gap is normal and expected between
 the pin bump and the human rollout. Read the *live*
 value from the hydrated `terraform/terraform.tfvars`, not the example.
 
 The installer image is an Image Factory reference carrying a schematic ID,
 e.g. the scaling-test fixtures use
-`factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.14.4`.
+`factory.talos.dev/nocloud-installer/b553b4a25d76e938fd7a9aaa7f887c06ea4ef75275e64f4630e6f8f739cf07df:v1.14.5`.
 Across a patch upgrade **only the tag moves** — the schematic ID stays the
 same, as recorded in the v1.12.13 → v1.13.4 bump (commit `576baff`):
 

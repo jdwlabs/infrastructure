@@ -263,7 +263,7 @@ mount injection is needed at all**. `extensions/iscsi-tools/` holds the fork:
   custom nocloud installer `ghcr.io/jdwlabs/talos-installer` assembled by the
   matching `imager` from the fork and the digest-pinned `qemu-guest-agent` the
   current schematic also carries. The installer tag embeds the Talos version it
-  is built for: the workflow now targets `v1.14.4` (`v1.14.4-iscsi.1`), but the
+  is built for: the workflow now targets `v1.14.5` (`v1.14.5-iscsi.1`), but the
   live nodes still run `v1.13.4`, so the rollout below keeps using the already
   published `v1.13.4-iscsi.1` until the Talos upgrade lands.
 
@@ -294,7 +294,7 @@ Preconditions:
   merge to main). Confirm:
 
   ```bash
-  docker manifest inspect ghcr.io/jdwlabs/iscsi-tools:v0.2.0-jdwlabs.1
+  docker manifest inspect ghcr.io/jdwlabs/iscsi-tools:v0.2.0-jdwlabs.2
   docker manifest inspect ghcr.io/jdwlabs/talos-installer:v1.13.4-iscsi.1
   ```
 
@@ -338,7 +338,7 @@ at a time.
    talosctl -n <worker-ip> get extensions
    ```
 
-   `iscsi-tools` must report version `v0.2.0-jdwlabs.1`. The factory version
+   `iscsi-tools` must report version `v0.2.0-jdwlabs.2`. The factory version
    string means the node booted the old image — stop and investigate before
    touching the service.
 3. The service gate — this is the step the canary exists for:
