@@ -97,7 +97,7 @@ jobs:
           sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
 
           curl -fsSL "https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/talosctl-linux-amd64" -o talosctl
-          echo "0a69e3f9b682c5cd844b78dae305f6056ceb86c5fcc6913dcea78c527ed97cee  talosctl" | sha256sum -c -
+          echo "ff432b68986709e6b69c563a08a2ced4232d5196b0dccd6d2e783e9d714d7d7d  talosctl" | sha256sum -c -
           sudo install -m 0755 talosctl /usr/local/bin/talosctl
 
       # Runs on a cache hit too, so a restored cache is proven executable
