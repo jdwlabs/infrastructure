@@ -323,7 +323,7 @@ live; the right-hand column is the workaround this section uses.
 
 ### Before you start
 
-- **Terraform itself.** `terraform/providers.tf` requires `>= 1.16.3`, and
+- **Terraform itself.** `terraform/providers.tf` requires `>= 1.17.1`, and
   devbox's system binary was `1.16.0` on 2026-10-02. Check `terraform version`
   and have a new enough binary to hand before step 5, not during it.
 - **Remote state** lives on TrueNAS (`192.168.1.205:9000`), not on a Proxmox

@@ -63,7 +63,7 @@ Any of these, usually several at once:
   works as-is. Terraform does not: `proxmox_endpoint` is pve1. The override is
   in `docs/host-addressing.md`.
 - **Terraform's version**, if this ends in a rebuild: the repo requires
-  `>= 1.16.3` and devbox's system binary was `1.16.0` on 2026-10-02. Find out
+  `>= 1.17.1` and devbox's system binary was `1.16.0` on 2026-10-02. Find out
   now, not at step 5 of a rebuild.
 
 ## Checks: confirm the scope
