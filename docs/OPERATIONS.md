@@ -294,7 +294,7 @@ Preconditions:
   merge to main). Confirm:
 
   ```bash
-  docker manifest inspect ghcr.io/jdwlabs/iscsi-tools:v0.2.0-jdwlabs.2
+  docker manifest inspect ghcr.io/jdwlabs/iscsi-tools:v0.2.0-jdwlabs.1
   docker manifest inspect ghcr.io/jdwlabs/talos-installer:v1.13.4-iscsi.1
   ```
 
@@ -338,7 +338,7 @@ at a time.
    talosctl -n <worker-ip> get extensions
    ```
 
-   `iscsi-tools` must report version `v0.2.0-jdwlabs.2`. The factory version
+   `iscsi-tools` must report version `v0.2.0-jdwlabs.1`. The factory version
    string means the node booted the old image — stop and investigate before
    touching the service.
 3. The service gate — this is the step the canary exists for:
