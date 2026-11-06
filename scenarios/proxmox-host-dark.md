@@ -4,10 +4,10 @@ One of pve1-5 stops answering without anyone having asked it to. This is the
 unplanned counterpart to `scenarios/host-restart-coordination.md`: there was no
 pre-flight, no drain, and the first job is working out what is actually down.
 
-Written from the 2026-10-01 pve1 outage and re-checked against the live fleet
-on 2026-10-02. The best-supported reading is a hard hang with power present;
-what caused it is **not** established — see
-[Evidence for root cause](#evidence-for-root-cause).
+Written from the 2026-10-01 pve1 outage, re-checked against the live fleet on
+2026-10-02, and extended with the 2026-11-05 recurrence. The best-supported
+reading is a hard hang with power present; what caused it is **not**
+established — see [Evidence for root cause](#evidence-for-root-cause).
 
 ## What happened on 2026-10-01
 
@@ -32,6 +32,40 @@ reachable on the control planes' own addresses throughout.
 
 Hosts log in `America/Chicago`. Every timestamp read off a host below is CDT
 (UTC-5); the ones in this section are converted.
+
+## What happened on 2026-11-05
+
+The same host hung again, 34 days into the boot that followed the first hang.
+pve1's journal ends at `2026-11-04 20:17:17 CST` (02:17:17 UTC on 2026-11-05)
+with a routine `sshd` connection close — no shutdown sequence, no kernel
+message, empty `pstore`. Wake-on-LAN was ignored. A manual power cycle brought
+it back; the next boot began at `02:14:20 CST` (08:14:20 UTC), about six hours
+down.
+
+What differed from 2026-10-01:
+
+- **The host was not idle.** Host metrics now exist (node-exporter on
+  `192.168.1.200:9100`). Between 01:00 and 02:10 UTC the CPU die sensor
+  (`k10temp`) read 78–87.5 °C, load ran 0.7–2.2 and 3.1–3.2 GB of 28 was
+  available. That is the same hot-under-ordinary-load picture as 2026-10-04,
+  now on record for the hour before a hang. No thermal trip was reached.
+- **One more unclean stop on the drive.** `Unsafe Shutdowns` went from 29 to
+  30 and `Power Cycles` from 49 to 50 — exactly the one stop, consistent with
+  a single hang and one manual power cycle.
+- **The outage was six hours, not two**, because nobody was at the rack. That,
+  not the hang, is what made it long: no remote way to cut power, no armed
+  hardware watchdog, and no second load balancer.
+- **The cluster stayed degraded even though the API answered on the control
+  planes' own addresses.** Measured on 2026-11-06, the workers on pve2–4
+  reserve 98–99% of their allocatable memory, and the pve5 worker is at its
+  110-pod limit with memory to spare.
+  Evicted pods with no room anywhere — Argo CD, cert-manager and the Vault
+  operator — sat `Pending` for the whole outage. See
+  [Pods stuck Pending after a host loss](#pods-stuck-pending-after-a-host-loss).
+
+Host-side state on 2026-11-05 is unchanged from the first hang: `softdog` is
+the only watchdog loaded, `sp5100_tco` is present but not loaded, and no crash
+capture (`pstore`, `kdump`, `netconsole`) is configured.
 
 ## Symptom
 
@@ -255,6 +289,33 @@ Reading them:
   fuller — re-run the drain-capacity check in
   `scenarios/host-restart-coordination.md` before the next planned restart.
 
+### Pods stuck Pending after a host loss
+
+A host loss can leave pods `Pending` for as long as it lasts, even though the
+API answers, because the survivors have no room. Two limits matter and
+neither shows as a node condition:
+
+```bash
+kubectl describe nodes | grep -A6 'Allocated resources'     # memory Requests near 100%
+for n in $(kubectl get nodes -o name | cut -d/ -f2); do
+  echo "$n $(kubectl get pods -A --field-selector spec.nodeName=$n,status.phase!=Succeeded,status.phase!=Failed --no-headers | wc -l)/$(kubectl get node $n -o jsonpath='{.status.allocatable.pods}')"
+done                                                          # pod count against maxPods
+kubectl get events -A --field-selector reason=FailedScheduling | tail
+```
+
+- A worker at `N/N` pods cannot take evictions however much memory it has.
+- A worker whose memory *requests* are near 100% cannot either; usage is
+  irrelevant to the scheduler.
+- Pods on the default `tenant-default` class never preempt anything. Only
+  workloads on `platform-critical` can displace others, and as of 2026-11-06
+  Argo CD, cert-manager, the Vault operator and the ai-sre relay were not on
+  it.
+- A single-replica StatefulSet pod stuck `Terminating` on a dead node does
+  not move on its own. Once the node is confirmed off (not merely
+  unreachable), a human can force it with
+  `kubectl delete pod <pod> --force --grace-period=0` after checking its
+  volume is not attached anywhere else.
+
 If the host was pve1, two more things rode on the load balancer and neither
 shows in the checks above:
 
@@ -330,16 +391,26 @@ What that does and does not establish:
   to compare, so it shows this host has a history of unclean stops and cannot
   show whether this one added to it. **Record it now on every host**, so the
   next outage has a before.
-- 71 °C is one reading on a lightly loaded host half an hour after boot. There
-  is no temperature history: none of the five hosts runs a metrics exporter
-  (nothing listening on 9100 on any of them, 2026-10-02), so whether pve1 was
-  hot at 23:44 is not recoverable. A later read-only look, 2026-10-04 20:36
+- 71 °C is one reading on a lightly loaded host half an hour after boot. On
+  2026-10-02 there was no temperature history: none of the five hosts ran a
+  metrics exporter (nothing listening on 9100 on any of them), so whether pve1
+  was hot at 23:44 was not recoverable. That has since been fixed for the next
+  occurrence — see the 2026-11-05 section above. A later read-only look, 2026-10-04 20:36
   CDT, found `k10temp` at 89.5 °C and `acpitz` at 84 °C with the worker VM at
   about 245% CPU and load near 2 — pve1 runs hot under ordinary load. That is
   an observation about the host, not a cause of the hang.
 - The journal's last line bounds the stop from below only. journald writes to
   disk at intervals, so an abrupt stop can lose the final lines along with
   whatever the kernel said in them.
+
+**2026-11-05, same host.** The drive's unsafe-shutdown counter read 30 of 50
+power cycles, one more of each than on 2026-10-02. The journal again ended on
+a routine `sshd` line with nothing at warning level after it, and `pstore` was
+empty. The metrics from the hour before show a hot but not throttling CPU
+(78–87.5 °C) at ordinary load, which fits a thermal or firmware-power-state
+cause without proving either. Two occurrences on this host and none on pve2–5
+(different boards, BIOS 1.04 and 1401) point at pve1's platform rather than
+the fleet.
 
 So: most likely a hard hang with power present. **What caused it is unknown.**
 Nothing above names a component — the logs are silent, the temperatures were
