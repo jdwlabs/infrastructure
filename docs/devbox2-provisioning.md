@@ -224,11 +224,11 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
    `scenarios/host-restart-coordination.md` depends on it, and nothing
    above provisions that authorization automatically.
 
-7. Install Terraform >= 1.16.0. **Don't trust the dotfiles bootstrap for
+7. Install Terraform >= 1.17.1. **Don't trust the dotfiles bootstrap for
    this one.** `run_once_46-install-cloud-clis.sh` installs Terraform
    ungated — it ran in step 2 regardless of `installDevTooling` — but its
    `TERRAFORM_FALLBACK_VERSION` is `1.15.8`, below `terraform/providers.tf`'s
-   `required_version = ">= 1.16.0"`. That fallback is what actually lands if
+   `required_version = ">= 1.17.1"`. That fallback is what actually lands if
    the GitHub releases API lookup the script prefers fails or is
    rate-limited, the same trap that had to be worked around getting devbox
    itself onto a qualifying version. Verify what's actually present and
@@ -236,7 +236,7 @@ SSH in once cloud-init completes (`ssh dev-admin@192.168.1.57`), then:
 
    ```sh
    terraform version
-   # if < 1.16.0: download a qualifying release from
+   # if < 1.17.1: download a qualifying release from
    # https://releases.hashicorp.com/terraform/ and install it over the
    # existing binary, checksum-verified, same as run_once_46 does
    ```

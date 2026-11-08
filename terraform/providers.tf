@@ -1,13 +1,13 @@
 terraform {
   # use_lockfile (native S3 state locking) requires Terraform >= 1.10
-  required_version = ">= 1.17.0"
+  required_version = ">= 1.17.1"
   required_providers {
     proxmox = {
       source = "bpg/proxmox"
       # Pessimistic patch-level pin: the committed .terraform.lock.hcl holds the
       # exact version; this window allows deliberate `init -upgrade` patch bumps
       # without editing HCL, while blocking surprise minor-version jumps.
-      version = "~> 0.118.0"
+      version = "~> 0.119.0"
     }
   }
 
