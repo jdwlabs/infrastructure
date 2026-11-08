@@ -1,15 +1,20 @@
 # Runbook: Rebuild the HAProxy load-balancer VM
 
-Status: **EXECUTED, 2026-08-09** (commit `568b368`). `haproxy-1` (VMID 110 on
-pve1) is the live production load balancer at `192.168.1.199`. `haproxy-0`
-(VMID 100) is gone: no VMID 100 exists on any node as of 2026-10-02. Every
-`terraform apply` in this runbook is executed by a human. The agent contract
-forbids autonomous applies, and this VM carries the Kubernetes API, the Talos
-API, and all HTTP(S) ingress. Kept here as the tested recovery path for the
-next rebuild, not as a pending TODO.
+Status: **EXECUTED, 2026-08-09** (commit `568b368`). `haproxy-1` (VMID 110) is
+the live production load balancer at `192.168.1.199`. It moved from pve1 to
+pve5 on 2026-11-08 by offline migration, after pve1 powered off abruptly three
+times. `haproxy-0` (VMID 100) is gone: no VMID 100 exists on any node as of
+2026-10-02. Every `terraform apply` in this runbook is executed by a human. The
+agent contract forbids autonomous applies, and this VM carries the Kubernetes
+API, the Talos API, and all HTTP(S) ingress. Kept here as the tested recovery
+path for the next rebuild, not as a pending TODO.
 
-**The tested path assumes the VM's Proxmox host is up.** With pve1 offline it
-fails at the first `terraform plan` — found on 2026-10-01, when pve1 died and
+**The tfvars have not caught up with that move.** They still carry
+`node_name = "pve1"` for VM 110 and point `proxmox_endpoint` at pve1, so **no
+`terraform apply` in this runbook may run** until a human corrects both.
+
+**The tested path assumes the VM's Proxmox host is up.** With that host offline
+it fails at the first `terraform plan` — found on 2026-10-01, when pve1 died and
 took the load balancer with it. The variant for that case is
 [Emergency rebuild: the original host is offline](#emergency-rebuild-the-original-host-is-offline),
 and it has **not** been executed. What to try before rebuilding anything is in
@@ -69,8 +74,10 @@ after the soak period, not by `terraform destroy`.
    ```
    A colliding address takes down the API endpoint, not just the new VM.
 4. Placement avoids control-plane hosts. Control planes currently sit on pve2,
-   pve3, and pve4, so a load balancer belongs on pve1 (or pve5) — one host
+   pve3, and pve4, so a load balancer belongs on pve1 or pve5 — one host
    failure must not remove a control-plane node *and* the load balancer.
+   `haproxy-1` lives on pve5 since 2026-11-08, which leaves pve1 as the other
+   host without a control plane.
 5. The target node's `local` datastore advertises both `snippets` and
    `import` content types:
    ```bash
@@ -306,6 +313,12 @@ missing three things no command restores (below). Work through
 `scenarios/proxmox-host-dark.md` first and come here only when the host is not
 coming back in a time you can accept.
 
+The dead host is whichever node carries VM 110 — pve5 since 2026-11-08 — and
+the survivor without a control plane is the other of pve1 and pve5. pve5 also
+carries devbox, so its loss takes the workstation an agent session would run
+from: work from devbox2. The commands below name pve5 as the dead host and pve1
+as the survivor; swap them if the VM moves again.
+
 ### What breaks, and why
 
 Each of these stops the tested path above. All were observed or re-checked
@@ -313,13 +326,13 @@ live; the right-hand column is the workaround this section uses.
 
 | What | Why it bites with the host offline | Workaround |
 |---|---|---|
-| `proxmox_endpoint` is pve1 (`https://192.168.1.200:8006/api2/json`) | Every Terraform call to Proxmox fails before planning anything | `-var 'proxmox_endpoint=https://192.168.1.204:8006/api2/json'` — any surviving node serves the whole cluster's API. Worked on 2026-10-01 |
-| `-target` on the new VM still plans operations on pve1 | The VM instances depend on the image and snippet resources as whole resources, so a target pulls in every instance of both. The plan read `4 to add, 1 to change, 1 to destroy`, including an in-place update of `haproxy_cloud_image["pve1"]` and a replacement of `haproxy_cloud_init["haproxy-1"]`. Those cannot succeed on a dead node and block the apply | Remove the old VM's three resources from state — step 5. **Untested** |
+| `proxmox_endpoint` is pve1 (`https://192.168.1.200:8006/api2/json`) | Fails the apply whenever pve1 is the dead host, and either way the tfvars still declare VM 110 on pve1 | Override with `-var 'proxmox_endpoint=https://<surviving-node>:8006/api2/json'` — any surviving node serves the whole cluster's API. A human corrects `node_name` in the tfvars before any apply |
+| `-target` on the new VM still plans operations on the dead host | The VM instances depend on the image and snippet resources as whole resources, so a target pulls in every instance of both. The plan read `4 to add, 1 to change, 1 to destroy`, including an in-place update of `haproxy_cloud_image["pve1"]` and a replacement of `haproxy_cloud_init["haproxy-1"]`. Those cannot succeed on a dead node and block the apply | Remove the old VM's three resources from state — step 5. **Untested** |
 | `haproxy_vms` rejects two entries with the same `ip` | `terraform/variables.tf` validates distinct addresses, so old and new cannot both be declared on `192.168.1.199/24` | Replace the entry instead of adding one — step 4 |
-| VMID 110 stays taken | VMIDs are cluster-wide, and `/etc/pve/nodes/pve1/qemu-server/110.conf` still exists while the node is merely offline | New VMID and name. 113 was free on 2026-10-02; re-derive |
+| VMID 110 stays taken | VMIDs are cluster-wide, and VM 110's config still exists under the dead node's `/etc/pve/nodes/` directory while the node is merely offline | New VMID and name. 113 was free on 2026-10-02; re-derive |
 | VM 110 has `onboot: 1` on `192.168.1.199` | The moment the dead host is powered on, the old VM boots and answers the same address as the replacement. On 2026-10-02 it started 21 s after the kernel did | Set `onboot: 0` from a surviving node **before** the host returns — step 2 |
 | The provider needs an ssh-agent | Snippet upload goes over node SSH and the provider reads keys only from a running agent (`terraform/providers.tf`). Agent sessions on devbox have none: `ssh-add -l` fails with `Could not open a connection to your authentication agent` | The human who applies starts one — step 7 |
-| No backup of VM 110 existed | Its disk is on pve1's `local-lvm`, so it cannot be started anywhere else, and during the outage `truenas-backup` held nothing for it | A nightly job exists as of 2026-10-02; the restore is untested. See [Backing up VM 110](#backing-up-vm-110) |
+| No backup of VM 110 existed | Its disk lives on the dead host's `local-lvm` — pve1's at the time — so it cannot be started anywhere else, and during the outage `truenas-backup` held nothing for it | A nightly job exists as of 2026-10-02; the restore is untested. See [Backing up VM 110](#backing-up-vm-110) |
 
 ### Before you start
 
@@ -332,7 +345,7 @@ live; the right-hand column is the workaround this section uses.
 - **Quorum.** Steps 2 and 3 need `/etc/pve` writable, which needs a quorate
   cluster — four of five votes with one host down:
   ```bash
-  ssh root@192.168.1.204 'pvecm status | grep -E "Total votes|Quorate"'
+  ssh root@192.168.1.200 'pvecm status | grep -E "Total votes|Quorate"'
   ```
 - **The cluster API, without the load balancer.** kubeconfig points at
   `https://192.168.1.199:6443`, which is the thing that is down. The control
@@ -352,16 +365,17 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
    top of this runbook still apply, against the surviving node:
    ```bash
    ping -c2 192.168.1.199; arp -n | grep 192.168.1.199     # no reply, no entry
-   ssh root@192.168.1.204 'pvesh get /cluster/resources --type vm --output-format json' \
+   ssh root@192.168.1.200 'pvesh get /cluster/resources --type vm --output-format json' \
      | jq -r '.[] | [.vmid, .name, .node, .status] | @tsv' | sort -n
    ```
    `jq` is not installed on the hypervisors — pipe to it locally, as above.
-   Place the replacement on pve5: it is the only other host without a
-   control plane. It is also already memory-overcommitted
-   (`docs/devbox2-provisioning.md`, "pve5 is over-allocated"), so 1 GB more is
-   an emergency placement, not a permanent home. Its `local` datastore
-   advertised `import,iso,vztmpl,snippets,backup` on 2026-10-02, which
-   satisfies precondition 5.
+   Place the replacement on the survivor without a control plane — pve1 while
+   pve5 is the dead host. Check its allocation first: when pve5 was the
+   candidate it was already memory-overcommitted
+   (`docs/devbox2-provisioning.md`, "pve5 is over-allocated"), so 1 GB more was
+   an emergency placement, not a permanent home. The target's `local` datastore
+   must advertise `import,iso,vztmpl,snippets,backup`; pve5 did on 2026-10-02,
+   which satisfies precondition 5.
 
 2. **Disarm the old VM.** Human. Do this first and do not skip it because the
    host "is dead anyway" — it returns the moment someone power-cycles it, and
@@ -369,8 +383,8 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
    the owning node and cannot reach it, so edit the config through the cluster
    filesystem, which every quorate node holds a writable copy of:
    ```bash
-   ssh root@192.168.1.204 "sed -i 's/^onboot: 1$/onboot: 0/' /etc/pve/nodes/pve1/qemu-server/110.conf"
-   ssh root@192.168.1.204 "grep '^onboot' /etc/pve/nodes/pve1/qemu-server/110.conf"   # expect: onboot: 0
+   ssh root@192.168.1.200 "sed -i 's/^onboot: 1$/onboot: 0/' /etc/pve/nodes/pve5/qemu-server/110.conf"
+   ssh root@192.168.1.200 "grep '^onboot' /etc/pve/nodes/pve5/qemu-server/110.conf"   # expect: onboot: 0
    ```
    The file was confirmed readable from another node; the edit itself was not
    made on 2026-10-01. The returning node syncs `/etc/pve` from the quorate
@@ -385,7 +399,7 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
    ```hcl
    haproxy_vms = [
      {
-       node_name = "pve5"
+       node_name = "pve1"
        vm_name   = "haproxy-2"
        vmid      = 113
        cpu_cores = 2
@@ -421,17 +435,17 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
 6. **Plan, targeted, without refresh:**
    ```bash
    terraform plan -refresh=false \
-     -var 'proxmox_endpoint=https://192.168.1.204:8006/api2/json' \
+     -var 'proxmox_endpoint=https://192.168.1.200:8006/api2/json' \
      -target='proxmox_virtual_environment_vm.haproxy["haproxy-2"]' \
      -out=tfplan
    terraform show tfplan | less
    ```
-   Expect `3 to add, 0 to change, 0 to destroy` — `haproxy_cloud_image["pve5"]`,
+   Expect `3 to add, 0 to change, 0 to destroy` — `haproxy_cloud_image["pve1"]`,
    `haproxy_cloud_init["haproxy-2"]`, and the VM. **Abort** on any line that
-   names pve1, `haproxy-1`, or any other VM. Both flags are load-bearing:
-   - `-refresh=false`, because state still holds `talos-worker-01` and
-     `devbox2` on the dead node, and refreshing them is a read that cannot be
-     answered.
+   names pve5, `haproxy-1`, or any other VM. Both flags are load-bearing:
+   - `-refresh=false`, because state still holds `talos-worker-05`, `devbox`
+     and `vllm-inference` on the dead node, and refreshing them is a read that
+     cannot be answered.
    - `-target`, because an untargeted plan also carries whatever is pending for
      those guests, and none of it can apply.
 
@@ -439,7 +453,7 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
    plan takes the lock. The saved plan records the `-var`, so the apply needs
    no flags.
 
-7. **Apply.** Human, in a shell with an agent holding a key `root@pve5`
+7. **Apply.** Human, in a shell with an agent holding a key `root@pve1`
    accepts:
    ```bash
    eval "$(ssh-agent -s)" && ssh-add ~/.ssh/<key>
@@ -456,7 +470,7 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
    (`docs/host-addressing.md`, "SSH host keys are part of this"), so all three
    are appended and all three must match:
    ```bash
-   ssh root@192.168.1.204 "qm guest exec 113 -- sh -c 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf \$f; done'"
+   ssh root@192.168.1.200 "qm guest exec 113 -- sh -c 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf \$f; done'"
    ssh-keygen -R 192.168.1.199
    ssh-keyscan -t rsa,ecdsa,ed25519 192.168.1.199 > "$XDG_RUNTIME_DIR/haproxy-2.keys"
    ssh-keygen -lf "$XDG_RUNTIME_DIR/haproxy-2.keys"      # every line must match one above
@@ -505,22 +519,22 @@ The LAN DNS resolver (`dnsmasq`) is not on this list: cloud-init ships it.
 
 9. **Check VM 110 before anything else.** It must be stopped:
    ```bash
-   ssh root@192.168.1.200 'qm list'
+   ssh root@192.168.1.204 'qm list'
    ```
    If it is running, the edit in step 2 did not hold and two hosts are
-   answering `192.168.1.199`. Stop it — `ssh root@192.168.1.200 'qm stop 110'`,
+   answering `192.168.1.199`. Stop it — `ssh root@192.168.1.204 'qm stop 110'`,
    human — then confirm which MAC the LAN now has for the address
    (`arp -n | grep 192.168.1.199`) before trusting the API again.
 10. **Decide which VM stays.** Keeping `haproxy-2` means deleting VM 110 by
-    hand after a soak — `pvesh delete /nodes/pve1/qemu/110`, never
+    hand after a soak — `pvesh delete /nodes/pve5/qemu/110`, never
     `terraform destroy`, which no longer knows it — plus the two files
-    Terraform also forgot, or a later load balancer declared on pve1 will
+    Terraform also forgot, or a later load balancer declared on pve5 will
     collide with them:
     ```
     /var/lib/vz/snippets/haproxy-1-cloud-init.yaml
     /var/lib/vz/import/ubuntu-24.04-server-cloudimg-amd64-haproxy.qcow2
     ```
-    Moving back to pve1 is a second rebuild, by the tested path at the top of
+    Moving back to pve5 is a second rebuild, by the tested path at the top of
     this runbook, with `haproxy-2` in the role `haproxy-0` played.
 11. Everything else the returning host needs is in
     `scenarios/proxmox-host-dark.md`, "After the host is back".
@@ -568,7 +582,7 @@ The trade-off:
   version to fix first. The disk is 10 GB, so seven archives cost little next
   to VM 111's 40-48 GB each.
 - **Against.** A restored VM is a second way to get a load balancer, and it
-  competes with the first. While pve1's config exists it lands under a new
+  competes with the first. While VM 110's config exists it lands under a new
   VMID, unknown to Terraform — and `talops haproxy status` will not say so: it
   matches on address, finds the `haproxy-1` entry and VMID 110 in state, and
   reports `source: terraform` for a VM Terraform did not build. The archive
@@ -582,15 +596,16 @@ rebuild stays the path for a VM that is wrong rather than merely gone.
 The restore has **not been tested**, and two traps are already visible:
 
 - The archive's config still says `cicustom: user=local:snippets/haproxy-1-cloud-init.yaml`.
-  That file exists only on pve1's `local` datastore. A VM restored onto another
-  node is expected to refuse to start until the snippet is copied there or the
-  `cicustom` line is removed.
+  That file exists on pve1's and pve5's `local` datastores (copied byte-identical
+  when the VM moved) and must be staged on any other restore target. A VM
+  restored onto a node without it is expected to refuse to start until the
+  snippet is copied there or the `cicustom` line is removed.
 - It restores `onboot: 1` and the same MAC and address as VM 110. Step 2 above
   matters more after a restore than after a rebuild, not less: two VMs with one
   MAC is worse than two with one address.
 
-Drill the restore onto pve5 with the network device disconnected before
-relying on it.
+Drill the restore onto pve1 with the network device disconnected before relying
+on it.
 
 ## Known follow-ups
 
@@ -604,10 +619,12 @@ relying on it.
 - The emergency rebuild above is unexecuted, and its `terraform state rm` step
   is unplanned as well. Until it is drilled, the tested recovery for a dead
   host is getting the host back.
-- `proxmox_endpoint` names one host, and it is the host the load balancer
-  lives on — so the outage that needs a rebuild is the one that breaks
-  Terraform. The command-line override works; making the endpoint survive a
-  single host is not done. `docs/host-addressing.md` has the note.
+- `proxmox_endpoint` names one host, pve1, and the vaulted tfvars are now
+  stale: they place VM 110 on pve1 while it runs on pve5. No `terraform apply`
+  may run until a human updates `node_name` and, if pve1 stays the endpoint,
+  decides what happens when pve1 is the dead host. The command-line override
+  works; making the endpoint survive a single host is not done.
+  `docs/host-addressing.md` has the note.
 - VM 110's nightly backup job exists as of 2026-10-02, and nothing has been
   restored from it. The drill is described in
   [Backing up VM 110](#backing-up-vm-110).
