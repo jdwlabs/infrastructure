@@ -375,7 +375,10 @@ host, and are a human's. Re-joining the tailnet (after step 8) is a human's
    (`docs/devbox2-provisioning.md`, "pve5 is over-allocated"), so 1 GB more was
    an emergency placement, not a permanent home. The target's `local` datastore
    must advertise `import,iso,vztmpl,snippets,backup`; pve5 did on 2026-10-02,
-   which satisfies precondition 5.
+   which satisfies precondition 5. pve1 is also the host that powered off
+   abruptly three times between 2026-10-01 and 2026-11-06, which is why the
+   load balancer left it: a rebuild there is a stopgap, so move it back to pve5
+   once pve5 returns.
 
 2. **Disarm the old VM.** Human. Do this first and do not skip it because the
    host "is dead anyway" — it returns the moment someone power-cycles it, and
