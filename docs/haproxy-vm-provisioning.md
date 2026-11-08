@@ -329,9 +329,10 @@ its own static address, which is what VRRP adverts and the config push use. One
 entry is a standalone load balancer and renders, validates and behaves exactly
 as before; the list length is the only switch.
 
-**Placement.** `haproxy-1` stays on pve1; the peer goes on pve5. Control planes
-occupy pve2, pve3 and pve4 and have no memory to spare, and a load balancer
-sharing a host with a control plane loses both to one failure.
+**Placement.** `haproxy-1` now runs on pve5, moved off pve1 on 2026-11-08; the
+peer would go on pve1. Control planes occupy pve2, pve3 and pve4 and have no
+memory to spare, and a load balancer sharing a host with a control plane loses
+both to one failure.
 
 **The three touchpoints phase 1 left open:**
 
@@ -376,11 +377,11 @@ sharing a host with a control plane loses both to one failure.
 | UDP DNAT (`table ip minecraft`) | Follows for LAN clients, by copying the rules to the peer by hand. **Internet clients stay on `haproxy-1`** | The rules match on port, so they are inert on a backup. The gateway's port forward is attached to a MAC, not to `.199`, so it cannot follow. No automation in this change: the rules were placed by hand on `haproxy-1` and still are |
 | Tailscale subnet router | **Stays on `haproxy-1`** | Independent of the virtual address either way. A second router is a join, which mints a credential — a human step, not provisioning |
 
-Consequences of the two "stays" rows, while pve1 is down: Bedrock is
-unreachable from the internet and tailnet clients lose the LAN route. Both are
-what happens today. Closing them means a VRRP virtual MAC for the gateway
-forward and a second subnet router; both are tracked separately and neither is
-designed here.
+Consequences of the two "stays" rows, while the host carrying `haproxy-1` is
+down: Bedrock is unreachable from the internet and tailnet clients lose the LAN
+route. Both are what happens today. Closing them means a VRRP virtual MAC for
+the gateway forward and a second subnet router; both are tracked separately and
+neither is designed here.
 
 **Not changed, deliberately.** `terraform/files/dnsmasq-jdwlabs-lan.conf` still
 says a second instance "would need its own listen-address". It would not — see
@@ -433,11 +434,12 @@ and ARP settle), schedulable in a quiet window.
    NAS would make a load-balancer rebuild depend on the NAS being up, and a
    rebuild is exactly the situation where that assumption is least safe.
 
-3. **Placement — RESOLVED: pve1.** Control planes sit on pve2, pve3, and pve4,
-   so the design's own sketch (`node_name = "pve3"`) contradicted its
-   requirement that one host failure must not take a control plane *and* the
-   load balancer. pve1 runs no control plane and already hosts the existing
-   load balancer. pve5 is the equivalent alternative for a future peer.
+3. **Placement — pve1, then pve5 after the 2026-11-08 move.** Control planes sit
+   on pve2, pve3, and pve4, so the design's own sketch
+   (`node_name = "pve3"`) contradicted its requirement that one host failure
+   must not take a control plane *and* the load balancer. pve1 runs no control
+   plane and hosted the existing load balancer until 2026-11-08, when it moved
+   to pve5; pve1 is now the equivalent alternative for a future peer.
 
 4. **SSH user cutover — RESOLVED: bundle it with the swap.** Cloud-init creates
    `haproxy-admin` and sets `disable_root: true`, so keeping `root` in tfvars

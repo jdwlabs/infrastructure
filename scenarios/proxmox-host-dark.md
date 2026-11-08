@@ -74,8 +74,9 @@ Any of these, usually several at once:
 - `HardwareHostUnreachable` fires — a TCP probe of port 22, five minutes of
   failures (`scenarios/host-remote-power-recovery.md`, "Detection"). Later
   than that if the dead host was carrying the prober; see above.
-- `kubectl` hangs or times out. That is pve1 specifically: kubeconfig points
-  at the load balancer, and the load balancer lives there.
+- `kubectl` hangs or times out. That is pve5 specifically: kubeconfig points
+  at the load balancer, and the load balancer lives there — it moved off pve1
+  on 2026-11-08.
 - A Kubernetes node goes `NotReady` and stays that way.
 - `ssh root@<host>` times out — a timeout, not `Permission denied`. A refusal
   with the host still answering on port 22 is a different failure with a
@@ -85,17 +86,21 @@ Any of these, usually several at once:
 ## Before you start
 
 - **Work from a machine that is not on the dead host.** devbox is on pve5 and
-  devbox2 on pve1, so each is the lifeboat for the other's host.
-- **The cluster API without the load balancer.** Needed whenever pve1 is the
-  host that is down:
+  devbox2 on pve1, so each is the lifeboat for the other's host. A pve5 loss
+  now also takes the load balancer, so devbox2 on pve1 is the lifeboat for an
+  LB outage as well.
+- **The cluster API without the load balancer.** Needed whenever the host
+  carrying VM 110 is down — pve5 since 2026-11-08:
   ```bash
   kubectl --server=https://192.168.1.241:6443 get nodes   # or .98, .125
   ```
   Every `kubectl` in this runbook takes the same flag until `192.168.1.199`
   answers again.
 - **The Proxmox API without pve1.** `pvesh` over SSH to any surviving node
-  works as-is. Terraform does not: `proxmox_endpoint` is pve1. The override is
-  in `docs/host-addressing.md`.
+  works as-is. Terraform does not while pve1 is down: `proxmox_endpoint` is
+  pve1. The vaulted tfvars also still place VM 110 on pve1, so no
+  `terraform apply` may run until a human corrects `node_name`. The override
+  is in `docs/host-addressing.md`.
 - **Terraform's version**, if this ends in a rebuild: the repo requires
   `>= 1.16.3` and devbox's system binary was `1.16.0` on 2026-10-02. Find out
   now, not at step 5 of a rebuild.
@@ -161,7 +166,8 @@ before it has failed.
 
 ### 1. If a replacement load balancer will be built, disarm the old one first
 
-Only for pve1, and only if step 4 below is on the table. VM 110 has
+Only for the host carrying VM 110 — pve5 since 2026-11-08 — and only if step 4
+below is on the table. VM 110 has
 `onboot: 1` on the production address and starts within seconds of the host
 booting. Set it to `0` from a surviving node **before** anyone powers the host
 on — `scenarios/haproxy-vm-rebuild.md`, emergency rebuild, step 2. If no
@@ -210,7 +216,7 @@ else from the list was recorded.
 Only when the host is not coming back in a time you can accept. What that
 means per guest:
 
-- **The load balancer (pve1).** `scenarios/haproxy-vm-rebuild.md`, "Emergency
+- **The load balancer (pve5).** `scenarios/haproxy-vm-rebuild.md`, "Emergency
   rebuild: the original host is offline". Unexecuted, with a state-surgery
   step nobody has planned; read its status paragraph before starting.
 - **A Talos worker.** Nothing to rebuild in a hurry. The cluster runs on the
@@ -316,8 +322,8 @@ kubectl get events -A --field-selector reason=FailedScheduling | tail
   `kubectl delete pod <pod> --force --grace-period=0` after checking its
   volume is not attached anywhere else.
 
-If the host was pve1, two more things rode on the load balancer and neither
-shows in the checks above:
+If the host carried the load balancer (pve5 today), two more things rode on it
+and neither shows in the checks above:
 
 ```bash
 ssh haproxy-admin@192.168.1.199 'sudo nft list tables; sysctl net.ipv4.ip_forward'

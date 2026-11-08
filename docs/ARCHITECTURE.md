@@ -340,7 +340,7 @@ balancer and behaves exactly as it did before the group existed.
                            │
                  192.168.1.199 (virtual)
                  ┌─────────┴─────────┐
-        haproxy-1 (pve1)      haproxy-2 (pve5)
+        haproxy-1 (pve5)      haproxy-2 (pve1)
         own address <A>  VRRP  own address <B>
                  └─────────┬─────────┘
                     control planes

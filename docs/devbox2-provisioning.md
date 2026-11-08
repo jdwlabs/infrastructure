@@ -92,7 +92,7 @@ enough to drive a restart and keep working in a degraded but functional state.
 | Disk | 32 GB on `truenas-vmdisks` | NFS-backed, not pinned to pve1's local storage |
 | Address | 192.168.1.57/24, gateway 192.168.1.254 | below the .64 DHCP pool floor, adjacent to devbox's .56 |
 | Admin user | `dev-admin`, existing SSH key | existing Remote-SSH and tailnet habits carry over unchanged |
-| Snippet datastore | `local` on pve1 | same pattern haproxy-1 already uses on this host; see §7 |
+| Snippet datastore | `local` on pve1 | the pattern the other VMs use — haproxy-1's snippet sits on pve1 and pve5; see §7 |
 | `on_boot` | true | returns unattended after a pve1 reboot |
 | Tags | `dev;lifeboat` | |
 
@@ -520,7 +520,7 @@ four other nodes.
 
 The real exposure is narrower: the snippet *file* exists in exactly one place
 per VM — `devbox-cloud-init.yaml` only on pve5, `haproxy-1-cloud-init.yaml`
-only on pve1. A migration succeeds and the guest keeps running, but
+only on pve1 and pve5. A migration succeeds and the guest keeps running, but
 regenerating the cloud-init drive on the new host would not find its user-data.
 That is latent configuration drift rather than a blocker, it affects the
 existing VMs equally, and it is left as follow-up work rather than being fixed

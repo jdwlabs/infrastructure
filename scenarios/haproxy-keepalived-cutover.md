@@ -5,6 +5,12 @@ rehearsal and the pinned provider source; no step below has been run against
 the live cluster. Every `terraform apply`, `qm` and `talops haproxy apply` here
 is run by a human.
 
+**The placement below is stale as of 2026-11-08.** `haproxy-1` moved from pve1
+to pve5, so this runbook's pair — `haproxy-1` on pve1, `haproxy-2` on pve5 —
+would now put both instances on one host, which the design forbids. Re-derive
+both hosts before running anything here; the sequence and the reasoning
+otherwise still hold.
+
 ## Why
 
 `haproxy-1` on pve1 is the only load balancer. When pve1 died on 2026-10-01 the

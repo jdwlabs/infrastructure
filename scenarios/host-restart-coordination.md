@@ -128,11 +128,11 @@ rather than "run this."
 
 | Host | Guests | What happens on reboot |
 |---|---|---|
-| pve1 | haproxy-1 (110), talos-worker-01 (300), devbox2 (112, once provisioned) | HAProxy is the control-plane API endpoint and the only instance — cluster API access drops until it's back, there's no second instance to fail over to. devbox2 goes down with it, so pve1 restarts are worked from devbox, not devbox2. |
+| pve1 | talos-worker-01 (300), devbox2 (112, once provisioned) | devbox2 goes down with it, so pve1 restarts are worked from devbox, not devbox2. The load balancer is not here any more, so the cluster API stays up through a pve1 restart. |
 | pve2 | talos-cp-01 (200), talos-worker-02 (301) | One etcd member down; quorum holds at 2/3. Draining the worker removes one of the three CNPG-eligible workers for the duration. |
 | pve3 | talos-cp-02 (201), talos-worker-03 (302) | Same shape as pve2. Never concurrent with pve2 or pve4 — see the corosync constraint above. |
 | pve4 | talos-cp-03 (202), talos-worker-04 (303) | Same shape as pve2. |
-| pve5 | devbox (111), talos-worker-05 (304), vllm-inference (500) | The heavy one. vllm-inference cannot migrate — it holds an RTX 5090 through PCI passthrough (`hostpci0: mapping=gpu-rtx5090`) and its disk is on pve5's local `local-lvm`, not shared storage — so it always goes down and comes back only when pve5 does. talos-worker-05 carries most of the `monitoring` namespace — Prometheus, Grafana, Loki, Alertmanager, Tempo — but not all of it: `kube-state-metrics`, the `kube-prometheus-stack` operator, `github-repo-health-exporter`, and the `am-check` job pods run on `talos-4h8-zy6` (pve1) instead (confirmed live via `kubectl get pods -n monitoring -o wide`). Expect the dashboards and alerting pipeline to blink out for the duration; expect metrics scraping/exporters on pve1 to keep running. Work from devbox2. |
+| pve5 | haproxy-1 (110), devbox (111), talos-worker-05 (304), vllm-inference (500) | The heavy one. haproxy-1 is the control-plane API endpoint and the only instance — cluster API access drops until it is back, and there is no second instance to fail over to. vllm-inference cannot migrate — it holds an RTX 5090 through PCI passthrough (`hostpci0: mapping=gpu-rtx5090`) and its disk is on pve5's local `local-lvm`, not shared storage — so it always goes down and comes back only when pve5 does. talos-worker-05 carries most of the `monitoring` namespace — Prometheus, Grafana, Loki, Alertmanager, Tempo — but not all of it: `kube-state-metrics`, the `kube-prometheus-stack` operator, `github-repo-health-exporter`, and the `am-check` job pods run on `talos-4h8-zy6` (pve1) instead (confirmed live via `kubectl get pods -n monitoring -o wide`). Expect the dashboards and alerting pipeline to blink out for the duration; expect metrics scraping/exporters on pve1 to keep running. Work from devbox2. |
 
 VM name ≠ Kubernetes node name — Proxmox's guest name (e.g.
 `talos-worker-01`) is not what `kubectl drain` wants. The mapping, confirmed
@@ -200,8 +200,7 @@ section below for what this looks like when it's genuinely marginal.
 
 ## pve1
 
-**Guests:** haproxy-1 (110), talos-worker-01 (300), devbox2 (112, once
-provisioned).
+**Guests:** talos-worker-01 (300), devbox2 (112, once provisioned).
 
 **Work from:** devbox, not devbox2. devbox2 lives on pve1 — it goes down for
 exactly the restart it would otherwise let you drive, so it's useless as a
@@ -214,18 +213,15 @@ depends on devbox being up, same as before devbox2 existed.
    ```
    kubectl drain talos-4h8-zy6 --ignore-daemonsets --delete-emptydir-data
    ```
-3. Shut down the guests. haproxy-1 first — nothing routes to the cluster API
-   through it once it's down anyway, so there's no ordering cost — then
-   devbox2, then the now-drained worker:
+3. Shut down the guests. devbox2 first, then the now-drained worker:
    ```
-   ssh root@pve1 'qm shutdown 110'
    ssh root@pve1 'qm shutdown 112'
    ssh root@pve1 'qm shutdown 300'
    ```
 4. Reboot pve1.
 5. Post-flight:
    ```
-   ssh root@pve1 'qm list'                 # 110 and 300 running; 112 will NOT be
+   ssh root@pve1 'qm list'                 # 300 running; 112 will NOT be
    kubectl uncordon talos-4h8-zy6
    kubectl get nodes                       # 8 Ready
    kubectl -n longhorn-system get volumes.longhorn.io   # back to healthy
@@ -234,9 +230,9 @@ depends on devbox being up, same as before devbox2 existed.
    kubectl get applications.argoproj.io -A --no-headers | awk '$3!="Synced" || $4!="Healthy"'
                                             # empty output = everything synced and healthy
    ```
-   Confirm the cluster API itself is reachable again (HAProxy back up) before
-   trusting any of the `kubectl` output above — a `kubectl` command that
-   hangs or times out here is HAProxy, not the cluster. Remember uncordon
+   Confirm the cluster API stays reachable through `.199` — the load balancer
+   is no longer on this host, so a `kubectl` that hangs or times out here is the
+   cluster, not HAProxy. Remember uncordon
    only re-enables scheduling on `talos-4h8-zy6`; it does not move anything
    back that the drain relocated elsewhere.
 
@@ -273,8 +269,8 @@ workstation.
 4. Reboot pve2.
 5. Post-flight, same shape as pve1's step 5 (`ssh root@pve2 'qm list'`,
    `kubectl uncordon talos-k3y-y3e`, 8 Ready, Longhorn healthy, no Pending
-   pods, ArgoCD synced) minus the HAProxy caveat — the API endpoint doesn't
-   live on this host. Uncordon doesn't rebalance here either.
+   pods, ArgoCD synced) — the API endpoint doesn't live on this host either.
+   Uncordon doesn't rebalance here either.
 
 One etcd member is down for the duration; quorum holds at 2/3 as long as
 pve3 and pve4's control-plane members stay up, which is exactly why this
@@ -319,10 +315,12 @@ Never concurrent with pve2 or pve3.
 
 ## pve5
 
-**Guests:** devbox (111), talos-worker-05 (304), vllm-inference (500).
+**Guests:** haproxy-1 (110), devbox (111), talos-worker-05 (304), vllm-inference
+(500).
 
 **Work from:** devbox2. This is the entire reason devbox2 exists — devbox
-itself is going down as part of this procedure.
+itself is going down as part of this procedure — and it is now the lifeboat for
+the load balancer too.
 
 1. Pre-flight, run from devbox2:
    ```
@@ -393,15 +391,19 @@ itself is going down as part of this procedure.
    the platform repo's `docs/OPERATIONS.md` under "Draining a node that
    hosts a single-instance CNPG cluster".
 5. Shut down guests, GPU-passthrough first since it can't migrate and has
-   nothing left to lose by going first, then devbox, then the drained
-   worker. Note the worker takes `qm stop`, not `qm shutdown`: Talos does
-   not act on an ACPI powerdown request and the graceful call just returns
-   `VM quit/powerdown failed`. `talosctl shutdown` would be the clean route,
-   but the talosconfig on devbox is empty, so there is no authenticated
+   nothing left to lose by going first, then haproxy-1, then devbox, then the
+   drained worker. Shutting haproxy-1 down drops the cluster API endpoint at
+   `.199`, so from here until pve5 is back, `kubectl` needs
+   `--server=https://192.168.1.241:6443` (`scenarios/proxmox-host-dark.md`,
+   "Before you start"). Note the worker takes `qm stop`, not `qm shutdown`:
+   Talos does not act on an ACPI powerdown request and the graceful call just
+   returns `VM quit/powerdown failed`. `talosctl shutdown` would be the clean
+   route, but the talosconfig on devbox is empty, so there is no authenticated
    client to issue it. By this point the node is drained and its databases
    are already stopped, so the hard stop costs nothing:
    ```
    ssh root@pve5 'qm shutdown 500'
+   ssh root@pve5 'qm shutdown 110'
    ssh root@pve5 'qm shutdown 111'
    ssh root@pve5 'qm stop 304'
    ```
@@ -410,7 +412,7 @@ itself is going down as part of this procedure.
    instead. See `gpu-passthrough-wedge-recovery.md`.
 7. Post-flight, from devbox2 until devbox answers again:
    ```
-   ssh root@pve5 'qm list'                 # 304 and 500 running; 111 will NOT be
+   ssh root@pve5 'qm list'                 # 110, 304 and 500 running; 111 will NOT be
    kubectl uncordon talos-lx0-6a4
    kubectl get nodes                       # 8 Ready
    kubectl -n longhorn-system get volumes.longhorn.io   # healthy
