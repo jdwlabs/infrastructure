@@ -9,9 +9,18 @@ agent contract forbids autonomous applies, and this VM carries the Kubernetes
 API, the Talos API, and all HTTP(S) ingress. Kept here as the tested recovery
 path for the next rebuild, not as a pending TODO.
 
-**The tfvars have not caught up with that move.** They still carry
-`node_name = "pve1"` for VM 110 and point `proxmox_endpoint` at pve1, so **no
-`terraform apply` in this runbook may run** until a human corrects both.
+**The tfvars now match that move:** VM 110 has `node_name = "pve5"`, and
+`proxmox_endpoint` points at pve2. The plan updates VM 110 in place; it does
+not replace it. Before a human applies, three things still hold:
+
+- `haproxy_cloud_image_checksum` is behind Ubuntu's rolling image, so
+  creating the pve5 copy fails until it is bumped.
+- Destroying the pve1 copy of the image and snippet goes through pve1, so
+  pve1 must be up, or those two must be removed from state first.
+- Replacing the cloud-init snippet gives the guest a new instance-id at its
+  next boot. First-boot setup re-runs and regenerates the SSH host keys, so
+  refresh `known_hosts` before `talops haproxy` connects again. Schedule
+  that apply with the reboot.
 
 **The tested path assumes the VM's Proxmox host is up.** With that host offline
 it fails at the first `terraform plan` — found on 2026-10-01, when pve1 died and
@@ -622,12 +631,10 @@ on it.
 - The emergency rebuild above is unexecuted, and its `terraform state rm` step
   is unplanned as well. Until it is drilled, the tested recovery for a dead
   host is getting the host back.
-- `proxmox_endpoint` names one host, pve1, and the vaulted tfvars are now
-  stale: they place VM 110 on pve1 while it runs on pve5. No `terraform apply`
-  may run until a human updates `node_name` and, if pve1 stays the endpoint,
-  decides what happens when pve1 is the dead host. The command-line override
-  works; making the endpoint survive a single host is not done.
-  `docs/host-addressing.md` has the note.
+- `proxmox_endpoint` still names one host. It is pve2 now, not pve1, but
+  whichever host it names takes Terraform's API with it when that host goes
+  dark. The command-line override works; making the endpoint survive a single
+  host is not done. `docs/host-addressing.md` has the note.
 - VM 110's nightly backup job exists as of 2026-10-02, and nothing has been
   restored from it. The drill is described in
   [Backing up VM 110](#backing-up-vm-110).
