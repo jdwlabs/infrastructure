@@ -96,13 +96,12 @@ Any of these, usually several at once:
   ```
   Every `kubectl` in this runbook takes the same flag until `192.168.1.199`
   answers again.
-- **The Proxmox API without pve1.** `pvesh` over SSH to any surviving node
-  works as-is. Terraform does not while pve1 is down: `proxmox_endpoint` is
-  pve1. The vaulted tfvars also still place VM 110 on pve1, so no
-  `terraform apply` may run until a human corrects `node_name`. The override
-  is in `docs/host-addressing.md`.
+- **The Proxmox API without its endpoint host.** `pvesh` over SSH to any
+  surviving node works as-is. Terraform reaches Proxmox through the one host
+  `proxmox_endpoint` names (pve2), so it fails only when pve2 is the dark
+  host. The override is in `docs/host-addressing.md`.
 - **Terraform's version**, if this ends in a rebuild: the repo requires
-  `>= 1.16.3` and devbox's system binary was `1.16.0` on 2026-10-02. Find out
+  `>= 1.17.0`, and the devbox had 1.16.4 on 2026-11-10. Find out
   now, not at step 5 of a rebuild.
 
 ## Checks: confirm the scope

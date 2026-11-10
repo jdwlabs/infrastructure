@@ -20,13 +20,13 @@ full confidence over partial live state. A plan built that way can propose
 rewriting every node config while a control plane is unmapped — with 2/3 etcd
 quorum, that is the shape of an outage this cluster has already had.
 
-`terraform.tfvars` also carries `proxmox_endpoint`, pointed at pve1's address.
-If pve1's address moves, Terraform and `talops` lose the Proxmox API outright,
-not just one host's ARP.
+`terraform.tfvars` also carries `proxmox_endpoint`, pointed at pve2's address
+since 2026-11-10 (it was pve1's until then). If that host's address moves,
+Terraform and `talops` lose the Proxmox API outright, not just one host's ARP.
 
-The same is true when pve1 is simply down, which is the case that happened:
-on 2026-10-01 it was offline for 2h08m and every Terraform call failed at the
-endpoint. Any node serves the whole cluster's API, so point Terraform at a
+The same is true when that host is simply down. It happened while the endpoint
+was pve1: on 2026-10-01 pve1 was offline for 2h08m, and every Terraform call
+failed at the endpoint. Any node serves the whole cluster's API, so point Terraform at a
 surviving one for the duration — on the command line, not in tfvars, so the
 workaround cannot be sealed into the vault and outlive the outage:
 
@@ -37,8 +37,8 @@ terraform plan -var 'proxmox_endpoint=https://192.168.1.204:8006/api2/json'
 That override worked for a read-only plan during the outage. It reaches
 Terraform only. `talops` reads `proxmox_endpoint` straight out of the tfvars
 file to derive its Proxmox host, and has no flag for it, so the `talops`
-paths that use that host stay pointed at pve1 until it returns or the file is
-edited; `talops haproxy plan|apply|status` are not among them. Operations
+paths that use that host stay pointed at the dark host until it returns or the
+file is edited; `talops haproxy plan|apply|status` are not among them. Operations
 on resources that live on the dead node fail regardless of endpoint — the
 surviving node can only proxy to a host that answers. What that does to a
 load-balancer rebuild is in `scenarios/haproxy-vm-rebuild.md`, and the wider
