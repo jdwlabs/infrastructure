@@ -109,6 +109,7 @@ through haproxy-1's subnet route (step 10 takes that route down).
 export A=192.168.1.60 B=192.168.1.61 VIP=192.168.1.199
 export KEY=~/.ssh/<key>           # a key root@pve1, root@pve5 and haproxy-admin@ accept
 alias talops="$HOME/.cache/talops/talops -k $KEY"
+export ANN=$PWD/scenarios/files/arp-announce.py   # from the repo root; later steps cd into terraform/
 ```
 
 1. **#225 merged, `talops` built from the merged `main`:**
@@ -377,6 +378,8 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
    still on `haproxy-1` and keepalived must not start, or `haproxy-2` becomes
    master with `.199` on both. Step 6 trusted `A` so this cannot stop at a prompt.
    If it fails, check `ip -4 -o addr show eth0` on both before doing anything else.
+   If neither holds `.199` (the delete ran but `ssh` still returned an error, e.g. a
+   dropped session), run the second command on its own.
    `haproxy-1` stays up with the same MAC, so Tailscale and the gateway's
    MAC-keyed forward keep working. If the gateway instead forwards to the stale IP
    `.199`, packets land on `haproxy-2` and its rules DNAT them: working either way.
@@ -396,7 +399,7 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
    ```bash
    ssh haproxy-admin@$B 'sudo systemctl disable --now keepalived'
    ssh haproxy-admin@$A 'sudo ip addr add 192.168.1.199/24 dev eth0'
-   ssh haproxy-admin@$A 'sudo python3 - eth0 192.168.1.199' < scenarios/files/arp-announce.py
+   ssh haproxy-admin@$A 'sudo python3 - eth0 192.168.1.199' < $ANN
    ```
    `ip addr add` announces nothing: until the announcement, every neighbour and
    the gateway still map `.199` to haproxy-2's MAC. If haproxy-2 is up it
@@ -414,7 +417,7 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
    rebooting, and when it is back its own keepalived takes the address.
 10. **Move `haproxy-1` to its own address.** Human plan and apply:
     ```bash
-    cd terraform
+    cd "$(git rev-parse --show-toplevel)/terraform"
     terraform plan -target='proxmox_virtual_environment_vm.haproxy["haproxy-1"]' -out=tfplan-lb1
     terraform show tfplan-lb1 | less
     ```

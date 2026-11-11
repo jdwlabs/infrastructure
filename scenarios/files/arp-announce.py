@@ -3,8 +3,9 @@
 
 `ip addr add` puts an address on an interface without telling the LAN, so
 neighbours keep the previous owner's MAC for it until their cache entry
-expires. This broadcasts an unsolicited ARP reply for <ip> from <interface>'s
-own MAC, which refreshes them at once. Run it only on the host that now owns
+expires. This broadcasts a gratuitous ARP request for <ip> (sender and target
+both <ip>, the form arping -U and keepalived send) from <interface>'s own MAC,
+which refreshes them at once. Run it only on the host that now owns
 the address.
 
     python3 arp-announce.py <interface> <ip> [<count>]
@@ -23,8 +24,8 @@ def frame(mac, ip):
     addr = socket.inet_aton(ip)
     return (
         b"\xff" * 6 + mac + b"\x08\x06"
-        + struct.pack("!HHBBH", 1, 0x0800, 6, 4, 2)
-        + mac + addr + b"\xff" * 6 + addr
+        + struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1)
+        + mac + addr + b"\0" * 6 + addr
     )
 
 
