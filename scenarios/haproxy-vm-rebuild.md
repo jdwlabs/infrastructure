@@ -11,10 +11,8 @@ path for the next rebuild, not as a pending TODO.
 
 **The tfvars now match that move:** VM 110 has `node_name = "pve5"`, and
 `proxmox_endpoint` points at pve2. The plan updates VM 110 in place; it does
-not replace it. Before a human applies, three things still hold:
+not replace it. Before a human applies, two things still hold:
 
-- `haproxy_cloud_image_checksum` is behind Ubuntu's rolling image, so
-  creating the pve5 copy fails until it is bumped.
 - Destroying the pve1 copy of the image and snippet goes through pve1, so
   pve1 must be up, or those two must be removed from state first.
 - Replacing the cloud-init snippet gives the guest a new instance-id at its
