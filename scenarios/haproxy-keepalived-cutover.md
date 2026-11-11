@@ -138,7 +138,7 @@ alias talops="$HOME/.cache/talops/talops -k $KEY"
    from the repo root.
    ```bash
    P=scenarios/files/arp-dup-probe.py
-   ssh root@pve1 "python3 - vmbr0 3 192.168.1.254 $VIP" < $P ; echo "controls exit=$?"   # 1: both claimed
+   ssh root@pve1 "python3 - vmbr0 3 192.168.1.254 $VIP" < $P ; echo "controls exit=$?"   # 1, and both lines show a claimant MAC
    ssh root@pve1 "python3 - vmbr0 3 $A $B"              < $P ; echo "A,B exit=$?"       # 0: no claimant
    ping -c2 -W1 $A; ping -c2 -W1 $B                       # 100% loss
    ```
@@ -206,6 +206,12 @@ alias talops="$HOME/.cache/talops/talops -k $KEY"
     ```bash
     ssh haproxy-admin@$VIP 'sysctl net.ipv4.conf.eth0.promote_secondaries'   # expect = 1
     ```
+15. **Nothing will reconfigure `haproxy-1`'s network during the window.** Its
+    netplan still says `.199` until step 10, so a networkd restart puts `.199`
+    back on it while `haproxy-2` holds it. Check the timers and stay clear:
+    ```bash
+    ssh haproxy-admin@$VIP 'systemctl list-timers apt-daily-upgrade.timer apt-daily.timer --no-pager'
+    ```
 
 ## Stage: nothing here touches production traffic
 
@@ -251,9 +257,13 @@ alias talops="$HOME/.cache/talops/talops -k $KEY"
 3. **Human applies:** `terraform apply tfplan-lb2`. **The trap-1 window opens
    here.** The apply downloads the 600 MB image to pve5 (a minute or two). If it
    stops at the snippet with "already exists" (a hand-staged copy sits on pve5),
-   VM 110 is unaffected and still boots from that copy: read the error, do not
-   re-run blindly.
-   *Abort:* the "Roll back to a standalone load balancer" section below.
+   VM 110 is unaffected and still boots from that copy, but the old pve1 copy is
+   already deleted: read the error and re-plan. If the new plan is a lone create
+   of `haproxy-1`'s snippet on pve5 and the provider refuses to overwrite the
+   hand-staged file, move that file aside on pve5
+   (`mv /var/lib/vz/snippets/haproxy-1-cloud-init.yaml{,.staged}`; VM 110 reads it
+   only at its next cold start) and apply; keep `.staged` until step 10 is done.
+   *Abort:* "Abort before step 8" below.
 4. **Trust `haproxy-2`'s host keys.** Read the fingerprints through the guest
    agent and check the scanned keys against them before appending. The agent is
    installed by cloud-init, so the first command fails until that is far enough;
@@ -265,7 +275,7 @@ alias talops="$HOME/.cache/talops/talops -k $KEY"
    cat "$XDG_RUNTIME_DIR/haproxy-2.keys" >> ~/.ssh/known_hosts
    ssh haproxy-admin@$B '
      cloud-init status --wait
-     systemctl show keepalived -p ExecCondition | grep -c "192.168.1.61/"      # expect 1
+     systemctl show keepalived -p ExecCondition | grep -c "inet '"$B"'/"       # expect 1
      test -x /usr/local/sbin/haproxy-vip-ready && echo check-present
      ip -4 -o addr show eth0                                                    # expect .61 only, no .199
      sysctl net.ipv4.ip_nonlocal_bind net.ipv4.ip_forward                       # expect both = 1
@@ -293,21 +303,30 @@ alias talops="$HOME/.cache/talops/talops -k $KEY"
    ssh haproxy-admin@$VIP "sudo ip addr add $A/24 dev eth0"
    ping -c2 -W1 $A                                                          # now answers
 
+   # Trust A now so step 8's ssh to it cannot stop at a host-key prompt. It is the
+   # same machine as .199, so its keys must equal the ones .199 already presents.
+   ssh haproxy-admin@$VIP 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done'
+   ssh-keyscan -t rsa,ecdsa,ed25519 $A > "$XDG_RUNTIME_DIR/haproxy-1-pre.keys"
+   ssh-keygen -lf "$XDG_RUNTIME_DIR/haproxy-1-pre.keys"       # every line must match one above
+   cat "$XDG_RUNTIME_DIR/haproxy-1-pre.keys" >> ~/.ssh/known_hosts
+   ssh -o BatchMode=yes haproxy-admin@$A true && echo A-ssh-ok
+
    # A -> B
-   ssh haproxy-admin@$B "sudo timeout 8 tcpdump -ni eth0 -c1 'ip proto 112 and src $A and dst $B'" &
-   sleep 2
+   ssh -n haproxy-admin@$B "sudo timeout 8 tcpdump -ni eth0 -c1 'ip proto 112 and src $A and dst $B'" &
+   sleep 3
    ssh haproxy-admin@$VIP "sudo python3 -c 'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_RAW, 112); s.bind((\"$A\", 0)); s.sendto(bytes(8), (\"$B\", 0))'"
    wait
 
    # B -> A
-   ssh haproxy-admin@$VIP "sudo timeout 8 tcpdump -ni eth0 -c1 'ip proto 112 and src $B and dst $A'" &
-   sleep 2
+   ssh -n haproxy-admin@$VIP "sudo timeout 8 tcpdump -ni eth0 -c1 'ip proto 112 and src $B and dst $A'" &
+   sleep 3
    ssh haproxy-admin@$B "sudo python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 112).sendto(bytes(8), (\"$A\", 0))'"
    wait
    ```
-   Each `tcpdump` must print one packet. `0 packets captured` in either direction
+   Each `tcpdump` must print one packet (`-n` and the longer `sleep` keep the
+   background `ssh` from stopping on the terminal and give `sudo` time to start). `0 packets captured` in either direction
    is a hard stop: find what filters protocol 112 between pve1 and pve5 first.
-   *Abort:* `ssh haproxy-admin@$VIP "sudo ip addr del $A/24 dev eth0"`, then the standalone rollback.
+   *Abort:* `ssh haproxy-admin@$VIP "sudo ip addr del $A/24 dev eth0"`, then "Abort before step 8".
 7. **Copy the live UDP rules to `haproxy-2`** so LAN Bedrock clients follow the
    address. Copy the live file; do not regenerate it: `internal/udpnat` cannot
    render it (it emits UDP only, one target, ports to 19141; live has 86 rules
@@ -323,20 +342,9 @@ alias talops="$HOME/.cache/talops/talops -k $KEY"
    scp "$XDG_RUNTIME_DIR/udpnat.nft" haproxy-admin@$B:/tmp/udpnat.nft
    ssh haproxy-admin@$B '
      sudo install -d /etc/nftables.d && sudo install -m 0644 /tmp/udpnat.nft /etc/nftables.d/udpnat.nft && rm /tmp/udpnat.nft
-     sudo tee /etc/systemd/system/udpnat-rules.service >/dev/null <<EOF
-   [Unit]
-   Description=UDP ingress DNAT rules
-   After=network-online.target
-   Wants=network-online.target
-
-   [Service]
-   Type=oneshot
-   RemainAfterExit=yes
-   ExecStart=/usr/sbin/nft -f /etc/nftables.d/udpnat.nft
-
-   [Install]
-   WantedBy=multi-user.target
-   EOF
+     printf "%s\n" "[Unit]" "Description=UDP ingress DNAT rules" "After=network-online.target" "Wants=network-online.target" "" \
+       "[Service]" "Type=oneshot" "RemainAfterExit=yes" "ExecStart=/usr/sbin/nft -f /etc/nftables.d/udpnat.nft" "" \
+       "[Install]" "WantedBy=multi-user.target" | sudo tee /etc/systemd/system/udpnat-rules.service >/dev/null
      sudo systemctl daemon-reload && sudo systemctl enable --now udpnat-rules.service
      sudo nft list table ip udpnat | grep -c dnat           # expect 86
      sudo nft list table ip udpnat | grep -c masquerade     # expect 86
@@ -363,8 +371,12 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
    to primary when `.199` goes. `haproxy-2` starts keepalived as the next thing
    that happens.
    ```bash
-   ssh haproxy-admin@$A 'sudo ip addr del 192.168.1.199/24 dev eth0' ; ssh haproxy-admin@$B 'sudo systemctl enable --now keepalived'
+   ssh haproxy-admin@$A 'sudo ip addr del 192.168.1.199/24 dev eth0' && ssh haproxy-admin@$B 'sudo systemctl enable --now keepalived'
    ```
+   `&&`, not `;`: if the first `ssh` fails (host key, network, `sudo`), `.199` is
+   still on `haproxy-1` and keepalived must not start, or `haproxy-2` becomes
+   master with `.199` on both. Step 6 trusted `A` so this cannot stop at a prompt.
+   If it fails, check `ip -4 -o addr show eth0` on both before doing anything else.
    `haproxy-1` stays up with the same MAC, so Tailscale and the gateway's
    MAC-keyed forward keep working. If the gateway instead forwards to the stale IP
    `.199`, packets land on `haproxy-2` and its rules DNAT them: working either way.
@@ -384,13 +396,22 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
    ```bash
    ssh haproxy-admin@$B 'sudo systemctl disable --now keepalived'
    ssh haproxy-admin@$A 'sudo ip addr add 192.168.1.199/24 dev eth0'
+   ssh haproxy-admin@$A 'sudo python3 - eth0 192.168.1.199' < scenarios/files/arp-announce.py
    ```
-   Dark about 5 s. `A` is not persisted and netplan still says `.199`, so a
-   `haproxy-1` reboot also restores the original state.
+   `ip addr add` announces nothing: until the announcement, every neighbour and
+   the gateway still map `.199` to haproxy-2's MAC. If haproxy-2 is up it
+   forwards to haproxy-1 meanwhile; if its host is gone they black-hole `.199`
+   for tens of seconds (cache lifetime) without it. Dark: about 5 s plus the
+   announcement; the frame layout is unit-checked but has not been sent on this
+   LAN, so confirm with `ip neigh show $VIP` on the loop host. `A` is not
+   persisted and netplan still says `.199`, so a `haproxy-1` reboot also restores
+   the original state.
 
    **If pve1 dies mid-window** (between step 8 and the end of step 10 the address
    lives on `haproxy-2` alone, and `haproxy-1` has no keepalived yet): run the
-   rollback above at once. It restores `.199` on `haproxy-1` in seconds.
+   last two lines above at once (the first will fail, its host is gone). Only
+   before `terraform apply tfplan-lb1` starts: after that `haproxy-1` is
+   rebooting, and when it is back its own keepalived takes the address.
 10. **Move `haproxy-1` to its own address.** Human plan and apply:
     ```bash
     cd terraform
@@ -421,6 +442,7 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
     did, and drop the old one:
     ```bash
     ssh-keygen -R $VIP                                     # the address answers as whichever instance holds it
+    ssh-keygen -R $A                                       # step 6 trusted the pre-reboot keys
     ssh root@pve5 "qm guest exec 110 -- sh -c 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf \$f; done'"
     ssh-keyscan -t rsa,ecdsa,ed25519 $A > "$XDG_RUNTIME_DIR/haproxy-1.keys"
     ssh-keygen -lf "$XDG_RUNTIME_DIR/haproxy-1.keys"       # every line must match one above
@@ -539,11 +561,37 @@ while :; do printf '%s ' "$(date +%T.%N | cut -c1-12)"; curl -sk -m1 -o /dev/nul
   1) and arms a re-run on each instance's next cold start. Reboot them one at a
   time, backup first, moving the address in between.
 
+## Abort before step 8
+
+Valid from step 3 (the apply) to step 7. `haproxy-1` is untouched apart from the
+snippet replacement of trap 1; it still holds `.199` and nothing depends on
+`haproxy-2`.
+
+1. `ssh haproxy-admin@$B 'sudo systemctl disable --now keepalived'`, then
+   `ssh root@pve1 'qm shutdown 113'`.
+2. If step 6 ran: `ssh haproxy-admin@$VIP "sudo ip addr del $A/24 dev eth0"`.
+3. Vaulted tfvars: remove the `haproxy-2` entry, set `haproxy-1`'s `ip` back to
+   `192.168.1.199/24` and drop `vrrp_priority`; keep `haproxy_vrrp_auth_pass`.
+4. Plan scoped to the three load-balancer resources and read it:
+   ```bash
+   terraform plan -out=tfplan-abort \
+     -target=proxmox_virtual_environment_vm.haproxy \
+     -target=proxmox_virtual_environment_file.haproxy_cloud_init \
+     -target=proxmox_virtual_environment_download_file.haproxy_cloud_image
+   ```
+   Expect `haproxy-2`'s VM and snippet and the pve1 image destroyed, and
+   `haproxy-1`'s snippet replaced back to the standalone content. **No change to
+   VM 110.** (The pve5 image stays: `haproxy-1` imported from it.) Anything
+   touching VM 110, stop. Human applies it.
+5. `talops haproxy status` is the standalone report at `.199`. The next cold
+   start of `haproxy-1` still re-runs cloud-init (trap 3).
+
 ## Roll back to a standalone load balancer
 
 Only `haproxy-1` can be the standalone one without also moving Tailscale and the
-gateway forward. Before step 8, the abort lines in steps 1-7 are enough; between
-step 8 and step 10 use the step 9 rollback. After step 10 use this:
+gateway forward. Before step 3 the abort line in step 1 is enough; from step 3 to
+step 7 use "Abort before step 8"; between step 8 and step 10 use the step 9
+rollback. After step 10 use this:
 
 1. Make `haproxy-1` the holder (move the address by hand, above). It already is
    after step 13.
