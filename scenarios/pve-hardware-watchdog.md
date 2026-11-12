@@ -531,6 +531,12 @@ Expected:
 
 To back out inside the ten seconds: `kill -CONT "$(pidof watchdog-mux)"`.
 
+Shut the guests down first (`qm shutdown <id> --timeout 420`; see the restart
+runbook), because the reset skips any shutdown. On pve1 the worker VM takes
+minutes to stop. Guests with `onboot: 1` restart about 20 s after the host is
+back, so after test A shut them down again, or wait until they are healthy,
+before running test B.
+
 After it is back:
 
 ```bash
@@ -572,6 +578,11 @@ cat /sys/class/watchdog/watchdog0/bootstatus   # 0: the panic rebooted it, not t
 ```
 
 If `bootstatus` is non-zero here, the watchdog beat the panic's own reboot.
+
+The panic itself may not reach the receiver. On pve1 (2026-11-12) pstore saved
+the panic and the host rebooted, but netconsole over `vmbr0` delivered only
+live messages, nothing from the panic. Treat pstore as the capture for a panic
+and netconsole as the capture for what led up to it.
 Lower `kernel.panic`, or accept that the two cannot be told apart.
 
 Watch the first seconds of the next boot on both tests. A second reset during
