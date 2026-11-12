@@ -40,5 +40,14 @@
       "Bash(git *push*refs/heads/main*)",
       "Bash(talops *vllm audit*)"
     ]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Running the repository's own build, lint, test, format and package-manager commands (pnpm, nx, go, terraform fmt/validate/test, helm template, kubeconform, python3 scripts under tools/) inside the sandbox, including with inline environment variable prefixes such as NX_DAEMON=false or PATH=... and with output redirected to a log file under /tmp or the session scratchpad.",
+      "Installing the repository's declared dependencies (pnpm install --frozen-lockfile, go mod download) and downloading release artifacts from github.com, nodejs.org, registry.npmjs.org, proxy.golang.org or releases.hashicorp.com solely to verify them against checksums or pinned values already recorded in the repository.",
+      "Writing and running throwaway helper scripts or config files under /tmp or the session scratchpad that only wrap the repository's own commands, as long as nothing from them is committed.",
+      "Non-force pushes of commits to a feature branch the task names, and reading pull requests, check runs and job logs through the GitHub tools."
+    ]
   }
 }
