@@ -215,9 +215,13 @@ depends on devbox being up, same as before devbox2 existed.
    ```
 3. Shut down the guests. devbox2 first, then the now-drained worker:
    ```
-   ssh root@pve1 'qm shutdown 112'
-   ssh root@pve1 'qm shutdown 300'
+   ssh root@pve1 'qm shutdown 112 --timeout 90'
+   ssh root@pve1 'qm shutdown 300 --timeout 420'
    ```
+   The worker needs the long timeout: it takes minutes to power off, and
+   repeated short `qm shutdown` calls fail with "VM quit/powerdown failed"
+   while the first request is still in flight. Wait for `qm status 300` to say
+   `stopped` before going on.
 4. Reboot pve1.
 5. Post-flight:
    ```
