@@ -44,5 +44,5 @@ parsers:                  # ordered; first match wins
   - {modelType: granite, parser: granite}
 jira:                     # where reports are filed, under the audit's epic
   project: JDWLABS
-  parent: JDWLABS-644
+  parent: JDWLABS-779
   issueType: Task
